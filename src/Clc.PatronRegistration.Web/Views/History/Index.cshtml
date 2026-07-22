@@ -1,0 +1,49 @@
+﻿@model RegistrationHistoryIndexViewModel
+
+
+<h2>History</h2>
+@using (Html.BeginForm("Index", "History", FormMethod.Get))
+{
+    <input asp-for="SearchTerm" placeholder="search term" />
+    <button type="submit">Search</button>
+}
+<table role="main">
+    <tr>
+        <th class="timestamp-col">Date</th>
+        <th>First Name</th>
+        <th>Last Name</th>
+        <th>Address</th>
+        <th>Result</th>
+        <th></th>
+    </tr>
+
+    @foreach (var entry in Model.Entries)
+    {
+        <tr>
+            <td class="timestamp-col">@entry.Timestamp</td>
+            <td>@entry.FirstName</td>
+            <td>@entry.LastName</td>
+            <td>@entry.Address</td>
+            <td>@entry.Result</td>
+            <td>@Html.ActionLink("Details", "Details", "History", new { id = entry.Id }, null)</td>
+        </tr>
+    }
+
+</table>
+
+
+<script type="text/javascript">
+    const getCellValue = (tr, idx) => tr.children[idx].innerText || tr.children[idx].textContent;
+
+    const comparer = (idx, asc) => (a, b) => ((v1, v2) =>
+        v1 !== '' && v2 !== '' && !isNaN(v1) && !isNaN(v2) ? v1 - v2 : v1.toString().localeCompare(v2)
+    )(getCellValue(asc ? a : b, idx), getCellValue(asc ? b : a, idx));
+
+    // do the work...
+    document.querySelectorAll('th').forEach(th => th.addEventListener('click', (() => {
+        const table = th.closest('table');
+        Array.from(table.querySelectorAll('tr:nth-child(n+2)'))
+            .sort(comparer(Array.from(th.parentNode.children).indexOf(th), this.asc = !this.asc))
+            .forEach(tr => table.appendChild(tr));
+    })));
+</script>

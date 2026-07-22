@@ -1,0 +1,29 @@
+﻿@inject ISettingProvider Settings
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    @if (!@Context.IsInjectedForm())
+    {
+        <meta name="viewport" content="width=device-width, initial-scale=.9">
+    }
+    
+    <title>New Library Card Registration</title>
+</head>
+<body aria-live="polite">
+    <link rel="stylesheet" href="~/css/site.css" asp-append-version="true" />
+    <div id="regFormContainer">
+        @if (!@Context.IsInjectedForm())
+        {
+            <link rel="stylesheet" href="@this.BuildUrl(Settings.CssFile)" />
+            
+            if (!string.IsNullOrWhiteSpace(Settings?.HeaderImageUrl))
+            {
+                <img alt="header image containing the library's logo" src="@Settings.HeaderImageUrl" role="banner" />
+            }
+        }
+        @RenderBody()
+    </div>
+
+</body>
+</html>

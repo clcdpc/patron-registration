@@ -1,0 +1,115 @@
+﻿@import url('https://fonts.googleapis.com/css2?family=Red+Hat+Display:ital,wght@0,300..900;1,300..900&family=Roboto:ital,wght@0,100;0,300;0,400;0,500;0,700;0,900;1,100;1,300;1,400;1,500;1,700;1,900&display=swap');
+
+textarea, button, legend {
+    all: unset !important;
+    display: revert !important;
+    box-sizing: border-box !important;
+    font-size: 16px !important
+}
+
+button, input[type="button"], input[type="reset"], input[type="submit"] {
+    all: unset !important;
+    display: inline-block !important;
+    cursor: pointer !important;
+    font-size: 16px !important
+}
+
+textarea {
+    all: unset !important;
+    display: block !important;
+    resize: vertical !important;
+    font-size: 16px !important
+}
+
+label {
+    display: inline !important;
+    font-size: 16px !important
+}
+
+legend {
+    all: unset !important;
+    display: block !important;
+    font-size: 16px !important
+}
+
+form, textarea, button {
+    margin: 0 !important;
+    padding: 0 !important;
+    border: none !important;
+    font-size: 16px !important
+}
+
+form, textarea, button {
+    font: inherit !important;
+    color: inherit !important;
+    background: none !important;
+    font-size: 16px !important
+}
+
+input[type="date"], input[type="datetime-local"], input[type="month"], input[type="week"], input[type="time"] {
+    all: revert !important;
+    font-size: revert !important
+}
+
+label[for] {
+    all: revert !important;
+    font-size: inherit !important
+}
+
+body {
+    font-family: 'Red Hat Display','Roboto',sans-serif;
+    color: #474747
+}
+
+#regFormContainer {
+    margin: 0 auto !important;
+    max-width: 800px
+}
+
+legend {
+    font-weight: 600 !important
+}
+
+#PatronBranchIDFieldGroup:has(#PatronBranchID) label#PatronBranchIDLabel {
+    font-weight: 600 !important;
+    margin-right: 1.2em
+}
+
+label:has["Home Library"] {
+    font-weight: 600 !important
+}
+
+#PatronBranchIDLabel::before {
+    content: "Choose Your ";
+    font-weight: 600
+}
+
+#EcardFieldGroup {
+    margin-top: 1.2em
+}
+
+label[for="Birthdate"] {
+    display: none !important
+}
+
+input[type="date"]::placeholder {
+    color: #474747;
+    font-size: 14px
+}
+
+#registerButton {
+    margin-top: 1.3em !important;
+    background-color: #5B768F !important;
+    color: #ffffff !important;
+    border: none !important;
+    padding: 10px 20px !important;
+    font-size: 1em !important;
+    border-radius: 5px !important;
+    cursor: pointer !important;
+    transition: background-color .3s,color .3s !important
+}
+
+    #registerButton:hover {
+        background-color: #e9d666 !important;
+        color: #474747 !important
+    }

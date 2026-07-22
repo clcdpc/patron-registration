@@ -1,0 +1,16 @@
+﻿@model List<Clc.Polaris.Api.Models.OrganizationsGetRow>
+@{
+    Layout = "_Layout";
+}
+
+<title>Choose your library</title>
+
+
+<h2>Choose your library</h2>
+
+<div class="list-group" id="select-branch-list" role="main">
+    @foreach (var branch in Model)
+    {
+        @Html.ActionLink(branch.DisplayName, "Create", "Registration", new { orgId = branch.OrganizationID }, new { @class = "list-group-item" })
+    }
+</div>

@@ -1,0 +1,155 @@
+﻿@model Clc.PatronRegistration.Data.RegistrationHistoryEntry
+
+
+<h2>Details</h2>
+
+<div role="main">
+    <dl class="dl-horizontal">
+        <dt>
+            @Html.DisplayNameFor(model => model.Timestamp)
+        </dt>
+
+        <dd>
+            @Html.DisplayFor(model => model.Timestamp)
+        </dd>
+
+        <dt>
+            @Html.DisplayNameFor(model => model.PatronBranchId)
+        </dt>
+
+        <dd>
+            @Html.DisplayFor(model => model.PatronBranchId)
+        </dd>
+
+        <dt>
+            @Html.DisplayNameFor(model => model.FirstName)
+        </dt>
+
+        <dd>
+            @Html.DisplayFor(model => model.FirstName)
+        </dd>
+
+        <dt>
+            @Html.DisplayNameFor(model => model.LastName)
+        </dt>
+
+        <dd>
+            @Html.DisplayFor(model => model.LastName)
+        </dd>
+
+        <dt>
+            @Html.DisplayNameFor(model => model.Email)
+        </dt>
+
+        <dd>
+            @Html.DisplayFor(model => model.Email)
+        </dd>
+
+        <dt>
+            @Html.DisplayNameFor(model => model.Phone)
+        </dt>
+
+        <dd>
+            @Html.DisplayFor(model => model.Phone)
+        </dd>
+
+        <dt>
+            @Html.DisplayNameFor(model => model.StreetOne)
+        </dt>
+
+        <dd>
+            @Html.DisplayFor(model => model.StreetOne)
+        </dd>
+
+        <dt>
+            @Html.DisplayNameFor(model => model.StreetTwo)
+        </dt>
+
+        <dd>
+            @Html.DisplayFor(model => model.StreetTwo)
+        </dd>
+
+        <dt>
+            @Html.DisplayNameFor(model => model.City)
+        </dt>
+
+        <dd>
+            @Html.DisplayFor(model => model.City)
+        </dd>
+
+        <dt>
+            @Html.DisplayNameFor(model => model.State)
+        </dt>
+
+        <dd>
+            @Html.DisplayFor(model => model.State)
+        </dd>
+
+        <dt>
+            @Html.DisplayNameFor(model => model.ZIP)
+        </dt>
+
+        <dd>
+            @Html.DisplayFor(model => model.ZIP)
+        </dd>
+
+        <dt>
+            @Html.DisplayNameFor(model => model.IPAddress)
+        </dt>
+
+        <dd>
+            @Html.DisplayFor(model => model.IPAddress)
+        </dd>
+
+        <dt>
+            @Html.DisplayNameFor(model => model.Result)
+        </dt>
+
+        <dd>
+            @Html.DisplayFor(model => model.Result)
+        </dd>
+
+        <dt>
+            @Html.DisplayNameFor(model => model.RegistrationBody)
+        </dt>
+
+        <dd>
+            <pre>
+                @Html.Raw(Model.RegistrationBody)
+            </pre>
+        </dd>
+
+        <dt>
+            @Html.DisplayNameFor(model => model.PapiResponse)
+        </dt>
+
+        <dd>
+            <pre>
+                @Html.Raw(Model.PapiResponse)
+            </pre>
+        </dd>
+
+        <dt>
+            @Html.DisplayNameFor(model => model.MelissaResponse)
+        </dt>
+
+        <dd>
+            <pre>
+                @Html.Raw(Model.MelissaResponse)
+            </pre>
+        </dd>
+
+        <dt>
+            @Html.DisplayNameFor(model => model.SettingsSnapshot)
+        </dt>
+
+        <dd>
+            <pre>
+                @Html.Raw(Model.SettingsSnapshot)
+            </pre>
+        </dd>
+    </dl>
+</div>
+<p>
+    @Html.ActionLink("Back to List", "Index")
+</p>

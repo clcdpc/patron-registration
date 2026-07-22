@@ -1,0 +1,854 @@
+﻿@model Clc.PatronRegistration.Registration
+@inject ISettingProvider Settings
+
+@{
+    Layout = "_Layout";
+    //Layout = Clc.PatronRegistration.Helpers.HttpContextHelper.Current.Request.Method.Equals("get", StringComparison.OrdinalIgnoreCase) ? "_Layout" : null;
+}
+
+@if (!@Context.IsInjectedForm())
+{
+    <h1 class="@(Model.ShouldDisplayAgreement ? "hidden" : "")">Library Card Application</h1>
+}
+
+<div id="status-message" class="hidden" aria-hidden="true">
+</div>
+
+@if (Model.ShouldDisplayAgreement)
+{
+    <dialog id="agreementModal" open="true" role="alertdialog">
+        @Html.Raw(Settings.WarningText)
+        <button id="agreementAccept" class="accept">@Settings.AgreementConfirmButtonText</button>
+        <button id="agreementReject" class="reject">@Settings.AgreementCancelButtonText</button>
+    </dialog>
+
+    <script type="text/javascript">
+        document.addEventListener("DOMContentLoaded", function () {
+            q('#agreementModal').focus();
+        });
+    </script>
+}
+
+<div id="regFormWrapper" class="@(Model.ShouldDisplayAgreement ? "hidden" : "")" aria-hidden="@(Model.ShouldDisplayAgreement.ToJavascriptBool())" role="main">
+
+    @if (!string.IsNullOrWhiteSpace(Settings.RegistrationHeader))
+    {
+        <div id="registration-header">
+            @Html.Raw(Settings.RegistrationHeader)
+        </div>
+    }
+
+    @if (Model.ShowDlButton)
+    {
+        <button onclick="dl()" id="dlbutton">@Settings.DriversLicenseButtonText</button>
+    }
+
+    <form id="regform">
+        @Html.AntiForgeryToken()
+        <div asp-validation-summary="All" class="danger"></div>
+
+        @if (Model.Branches.Count() == 1 && Settings.HideBranchSelectIfOnlyOneBranch)
+        {
+            @Html.HiddenFor(m => m.PatronBranchID)
+        }
+        else
+        {
+            <div asp-for="PatronBranchID">
+                <label asp-for="PatronBranchID"></label>
+                @if (Settings.EnablePatronBranchSelectOption)
+                {
+                    @Html.DropDownListFor(m => m.PatronBranchID, Model.Branches, "Select your branch", new { @aria_required = "true" })
+                }
+                else
+                {
+                    <select asp-for="PatronBranchID" asp-items="@Model.Branches"></select>
+                }
+
+                @if (Settings.DisplayECardCheckbox && !Settings.ForceEcardRemotely)
+                {
+                    <div id="EcardFieldGroup">
+                        <input asp-for="IsECard" />
+                        <label asp-for="IsECard">@Settings.ECardCheckboxLabel</label>
+                    </div>
+                }
+            </div>
+        }
+
+        @if (!string.IsNullOrWhiteSpace(Settings.SchoolInfoFormat))
+        {
+
+            var studentOptions = new SelectList(new[]
+            {
+        new SelectListItem {Text = "Barrington ES Student", Value="Barrington Elementary School"},
+        new SelectListItem {Text = "Greensview ES Student", Value="Greensview Elementary School"},
+        new SelectListItem {Text = "Hastings MS Student", Value="Hastings Middle School"},
+        new SelectListItem {Text = "Jones MS Student", Value="Jones Middle School"},
+        new SelectListItem {Text = "Tremont ES Student", Value="Tremont Elementary School"},
+        new SelectListItem {Text = "UAHS Student", Value="UA High School"},
+        new SelectListItem {Text = "Wickliffe ES Student", Value="Wickliffe Elementary School"},
+        new SelectListItem {Text = "Windermere ES Student", Value="Windermere Elementary School"},
+        new SelectListItem {Text = "Homeschool", Value="Homeschool"}
+        }, "Value", "Text");
+
+            var teacherOptions = new SelectList(new[]
+            {
+        new SelectListItem {Text ="Barrington ES", Value="Barrington Elementary School"},
+        new SelectListItem {Text ="Greensview ES", Value="Greensview Elementary School"},
+        new SelectListItem {Text ="Hastings MS", Value="Hastings Middle School"},
+        new SelectListItem {Text ="Jones MS", Value="Jones Middle School"},
+        new SelectListItem {Text ="Tremont ES", Value="Tremont Elementary School"},
+        new SelectListItem {Text ="UAHS", Value="UA High School"},
+        new SelectListItem {Text ="Wickliffe ES", Value="Wickliffe Elementary School"},
+        new SelectListItem {Text ="Windermere ES", Value="Windermere Elementary School"},
+        new SelectListItem {Text ="Homeschool", Value="Homeschool"},
+        new SelectListItem {Text ="School Not Listed", Value="Other School"}
+        }, "Value", "Text");
+
+
+            @Html.HiddenFor(m => m.User1)
+
+            <fieldset id="schoolinfo-fieldset" class="@(Model.IsECard ? "hidden" : "")">
+                <legend>@Settings.SchoolInfoFieldLegend</legend>
+                <div id="user4-wrapper" class="form-item">
+                    <div id="schoolinfo-student" class="@(Model.IsStudent ? "hidden" : "")">
+                        <input asp-for="IsStudent" autocomplete="off" />
+                        <label asp-for="IsStudent"></label>
+                        <select id="student-school-dropdown" asp-items="studentOptions" class="hidden">
+                            <option value="null">-Select Your School-</option>
+                        </select>
+                    </div>
+
+                    <div id="schoolinfo-teacher" class="@(Model.IsTeacher ? "hidden" : "")">
+                        <input asp-for="IsTeacher" autocomplete="off" />
+                        <label asp-for="IsTeacher"></label>
+                        <select id="teacher-school-dropdown" asp-items="teacherOptions" class="hidden">
+                            <option value="null">-Select Your School-</option>
+                        </select>
+                    </div>
+
+                    <div id="other-school-name" class="hidden">
+                        <label for="otherSchoolName">Your School's Name</label>
+                        <input id="otherSchoolName" name="otherSchoolName" onChange="updateUser1(this.value)" />
+                    </div>
+
+                    <div id="deliver-to-school" class=@(Model.IsStudent || Model.IsTeacher ? "" : "hidden")>
+                        <input asp-for="DeliverCardToSchool" />
+                        <label asp-for="DeliverCardToSchool"></label>
+                    </div>
+                </div>
+            </fieldset>
+        }
+
+        <fieldset>
+            <legend class="required">Name</legend>
+            <span id="nameGroup">
+                <span asp-for="NameFirst">
+                    <label asp-for="NameFirst"></label>
+                    <input asp-for="NameFirst" />
+                </span>
+
+                <span asp-for="NameMiddle">
+                    <label asp-for="NameMiddle"></label>
+                    <input asp-for="NameMiddle" />
+                </span>
+
+                <span asp-for="NameLast">
+                    <label asp-for="NameLast"></label>
+                    <input asp-for="NameLast" />
+                </span>
+            </span>
+
+            @if (Settings.EnableLegalNameCheckbox)
+            {
+                <div id="UseLegalNameFieldGroup" class="">
+                    <input asp-for="UseLegalName" />
+                    <label asp-for="UseLegalName"></label>
+                </div>
+                <div id="legalNameGroup">
+                    <span asp-for="LegalNameFirst" class="hidden">
+                        <label asp-for="LegalNameFirst"></label>
+                        <input asp-for="LegalNameFirst" />
+                    </span>
+
+                    <span asp-for="LegalNameMiddle" class="hidden">
+                        <label asp-for="LegalNameMiddle"></label>
+                        <input asp-for="LegalNameMiddle" />
+                    </span>
+
+                    <span asp-for="LegalNameLast" class="hidden">
+                        <label asp-for="LegalNameLast"></label>
+                        <input asp-for="LegalNameLast" />
+                    </span>
+                </div>
+            }
+        </fieldset>
+
+        <fieldset>
+            <legend asp-for="Birthdate">@Html.DisplayNameFor(m => m.Birthdate)</legend>
+            <div asp-for="Birthdate">
+                <label asp-for="Birthdate" class="visually-hidden"></label>
+                <input asp-for="Birthdate" type="date" />
+            </div>
+        </fieldset>
+
+        <fieldset>
+            <legend class="required">Home Address</legend>
+            <div asp-for="StreetOne">
+                <label asp-for="StreetOne"></label>
+                <input asp-for="StreetOne" />
+            </div>
+
+            <div asp-for="StreetTwo">
+                <label asp-for="StreetTwo"></label>
+                <input asp-for="StreetTwo" />
+            </div>
+
+            <span asp-for="City">
+                <label asp-for="City"></label>
+                <input asp-for="City" />
+            </span>
+
+            <span asp-for="State">
+                <label asp-for="State"></label>
+                <input asp-for="State" readonly />
+            </span>
+
+            <span asp-for="PostalCode">
+                <label asp-for="PostalCode"></label>
+                <input asp-for="PostalCode" />
+            </span>
+        </fieldset>      
+
+        <fieldset>
+            <legend class="required">Notifications</legend>
+            <div asp-for="DeliveryOptionId">
+                <label asp-for="DeliveryOptionId"></label>
+                <select asp-for="DeliveryOptionId">
+                    <option value="2">Email</option>
+                    <option value="3">Phone</option>
+                    <option value="8">Text Message</option>
+                </select>
+            </div>
+
+            @if (Settings.DisplaySmsNoticeInformation && !string.IsNullOrWhiteSpace(Settings.SmsNoticeInformationHtml))
+            {
+                <div id="smsNoticeInfo" class="hidden" aria-hidden="true">@Html.Raw(Settings.SmsNoticeInformationHtml)</div>
+            }
+
+            <div asp-for="EmailAddress">
+                <label asp-for="EmailAddress"></label>
+                <input asp-for="EmailAddress" data-val-event="blur" />
+                @if (Settings.DisplayMailingListCheckbox)
+                {
+                    <div id="AddToMailingListGroup">
+                        <input asp-for="AddToMailingList" />
+                        <label asp-for="AddToMailingList" style="display:inline;"></label>
+                        @Html.Raw(Settings.MailingListDescriptionHtml)
+                    </div>
+                }
+            </div>
+
+            <div asp-for="PhoneVoice1">
+                <label asp-for="PhoneVoice1"></label>
+                <input asp-for="PhoneVoice1" />
+            </div>
+
+            @if (!Settings.HideEreceipt)
+            {
+                <div asp-for="ReceiveEreceipts">
+                    <label asp-for="ReceiveEreceipts"></label>
+                    <select asp-for="ReceiveEreceipts">
+                        <option value="true">Yes</option>
+                        <option value="false">No</option>
+                    </select>
+                </div>
+            }
+        </fieldset>
+
+        @if (Settings.DisplayPreferredPickupLocation)
+        {
+            <fieldset>
+                <div asp-for="RequestPickupBranchID">
+                    <label asp-for="RequestPickupBranchID"></label>
+                    <select asp-for="RequestPickupBranchID" asp-items="@Model.PickupBranches"></select>
+                </div>
+            </fieldset>
+        }
+
+        <fieldset>
+            <legend class="required">PIN - 4 Digits (0-9)</legend>
+
+            <div asp-for="Password">
+                <label asp-for="Password"></label>
+                <input asp-for="Password" type="password" />
+            </div>
+
+            <div asp-for="Password2">
+                <label asp-for="Password2"></label>
+                <input asp-for="Password2" type="password" />
+            </div>
+        </fieldset>
+
+        @if (Settings.DisplayResponsiblePersonField)
+        {
+            <fieldset>
+                <legend asp-for="User5">@Settings.GetFieldLabel(nameof(Model.User5))</legend>
+                <div asp-for="User5">
+                    <input asp-for="User5" />
+                    @Html.Raw(Settings.ResponsiblePersonDisclaimer)
+                </div>
+            </fieldset>
+        }
+
+        <button id="registerButton" type="button">Submit Registration</button>
+    </form>
+</div>
+
+
+<script type="text/javascript">
+    const q = document.querySelector.bind(document);
+    NodeList.prototype.forEach = NodeList.prototype.forEach || Array.prototype.forEach;
+
+    addScript("@this.BuildUrl("/js/aspnet-validation.js")", setupValidation)
+
+    const wrapperDiv = q('#regFormWrapper');
+    const theform = document.forms.regform;
+    const patronBranchId = q('#PatronBranchID');
+    const nameFirst = q('#NameFirst');
+    const nameMiddle = q('#NameMiddle');
+    const nameLast = q('#NameLast');
+    const birthdate = q('#Birthdate');
+    const streetOne = q('#StreetOne');
+    const city = q('#City');
+    const postalCode = q('#PostalCode');
+    const deliveryOptionId = q("#DeliveryOptionId");
+    const phoneVoice1 = q("#PhoneVoice1");
+    const emailAddress = q("#EmailAddress");
+    const registerButton = q("#registerButton");
+    const legalNameFirstFieldGroup = q("#LegalNameFirstFieldGroup");
+    const legalNameFirstLabel = q("#LegalNameFirstLabel");
+    const legalNameMiddleFieldGroup = q("#LegalNameMiddleFieldGroup");
+    const legalNameLastFieldGroup = q("#LegalNameLastFieldGroup");
+    const legalNameLastLabel = q("#LegalNameLastLabel");
+    const emailAddressLabel = q("#EmailAddressLabel");
+    const phone1Label = q("#PhoneVoice1Label");
+    const schoolInfo = q("#schoolinfo-fieldset");
+    const useLegalName = q("#UseLegalName");
+    const agreementAcceptButton = q("#agreementAccept");
+    const agreementRejectButton = q("#agreementReject");
+    const studentSchoolInfo = q('#schoolinfo-student');
+    const studentSchoolDropdown = q('#student-school-dropdown');
+    const teacherSchoolInfo = q('#schoolinfo-teacher');
+    const teacherSchoolDropdown = q('#teacher-school-dropdown');
+    const otherSchoolNameGroup = q('#other-school-name');
+    const otherSchoolName = q('#otherSchoolName');
+    const deliverCardToSchoolGroup = q('#deliver-to-school');
+    const deliverCardToSchool = q('#DeliverCardToSchool');
+    const ecardFieldGroup = q('#EcardFieldGroup');
+    const receiveEreceipts = q('#ReceiveEreceipts');
+    const user1 = q('#User1');
+    const messageDiv = q('#status-message');
+    const addToMailingListCheckbox = q('#AddToMailingList');
+    const smsNoticeInfo = q('#smsNoticeInfo');
+
+    let isTeacher = false;
+
+    registerButton.addEventListener("click", (e) => { submitReg(e); });
+    registerButton.addEventListener("keyup", event => {
+        if (event.key !== "Enter") return;
+        registerButton.click();
+        event.preventDefault();
+    });
+
+    AddEventHandler(deliveryOptionId, "change", (e) => { handleNotificationPreferenceChange(e.target.value) });
+    AddEventHandler(useLegalName, "click", (e) => handleLegalNameCheckboxClick(e));
+
+    handleNotificationPreferenceChange(deliveryOptionId.value);
+    AddEventHandler(agreementAcceptButton, "click", (e) => { q("#agreementModal").close(); show(wrapperDiv); show(q('h1')); });
+    AddEventHandler(agreementRejectButton, "click", (e) => { window.location.href = "https://catalog.clcohio.org" });
+
+    // force required asterisk to show on email field
+    dispatchEvent(deliveryOptionId, "change");
+
+    if (@Settings.EnableAgeWarning.ToJavascriptBool()) {
+        AddEventHandler(birthdate, "blur", (e) => { ageCheck(); })
+    }
+    AddEventHandler(birthdate, "blur", (e) => { dupecheck(); })
+    AddEventHandler(nameFirst, "blur", (e) => { dupecheck(); })
+    AddEventHandler(nameLast, "blur", (e) => { dupecheck(); })
+
+    document.querySelectorAll("[type=checkbox]").forEach(x => x.setAttribute("autocomplete", "off"))
+
+    function AddEventHandler(element, event, action) {
+        if (element) {
+            element.addEventListener(event, action);
+        }
+    }
+
+    function show(e) {
+        e.classList.remove('hidden');
+        e.removeAttribute("aria-hidden");
+        e.setAttribute("aria-live", "polite");
+    }
+
+    function hide(e) {
+        e.classList.add('hidden');
+        e.ariaHidden = true;
+        // e.removeAttribute("aria-live");
+    }
+
+    function toggleSmsNoticeInfo(isSmsSelected) {
+        if (!smsNoticeInfo) {
+            return;
+        }
+
+        if (isSmsSelected) {
+            show(smsNoticeInfo);
+        } else {
+            hide(smsNoticeInfo);
+        }
+    }
+
+    function updateUser1(newValue) {
+        user1.value = newValue;
+    }
+
+    function showStudentSchoolInfo() {
+        show(studentSchoolInfo);
+        show(studentSchoolDropdown);
+        hide(teacherSchoolInfo);
+        show(deliverCardToSchoolGroup);
+        hide(ecardFieldGroup);
+    }
+
+    function showTeacherSchoolInfo() {
+        show(teacherSchoolInfo);
+        show(teacherSchoolDropdown);
+        hide(studentSchoolInfo);
+        show(deliverCardToSchoolGroup);
+        hide(ecardFieldGroup);
+    }
+
+    function hideStudentSchoolInfo() {
+        show(teacherSchoolInfo);
+        hide(studentSchoolDropdown);
+        studentSchoolDropdown.selectedIndex = 0;
+        hide(deliverCardToSchoolGroup);
+        show(ecardFieldGroup);
+    }
+
+    function hideTeacherSchoolInfo() {
+        show(studentSchoolInfo);
+        hide(teacherSchoolDropdown);
+        teacherSchoolDropdown.selectedIndex = 0;
+        hide(otherSchoolNameGroup);
+        hide(deliverCardToSchoolGroup);
+        show(ecardFieldGroup);
+    }
+
+    function uaStudentCheckboxClick(e) {
+        setMailingListChecked(!e.target.checked);
+
+        studentSchoolDropdown.value = null;
+        deliverCardToSchool.checked = false;
+
+        if (e.target.checked) { showStudentSchoolInfo(); }
+        else { hideStudentSchoolInfo(); }
+    }
+
+    function setMailingListChecked(isChecked) {
+        if (addToMailingListCheckbox) {
+            addToMailingListCheckbox.checked = isChecked;
+        }
+    }
+
+    function uaTeacherCheckboxClick(e) {
+        isTeacher = e.target.checked;
+        setMailingListChecked(!e.target.checked);
+        teacherSchoolDropdown.value = null;
+        deliverCardToSchool.checked = false;
+
+        if (e.target.checked) { showTeacherSchoolInfo(); }
+        else { hideTeacherSchoolInfo(); }
+    }
+
+    function studentDropdownChange(e) {
+        // hide for 'homeschool'
+        if (e.target.selectedIndex >= e.target.length - 1) {
+            deliverCardToSchool.checked = false;
+            hide(deliverCardToSchoolGroup);
+        } else {
+            show(deliverCardToSchoolGroup);
+        }
+        updateUser1(e.target.value);
+    }
+
+    function teacherDropdownChange(e) {
+        if (e.target.selectedIndex == e.target.length - 1) {
+            show(otherSchoolNameGroup);
+        } else {
+            updateUser1(e.target.value);
+            hide(otherSchoolNameGroup);
+            otherSchoolName.value = '';
+        }
+
+        if (e.target.selectedIndex >= e.target.length - 2) {
+            deliverCardToSchool.checked = false;
+            hide(deliverCardToSchoolGroup);
+        } else {
+            show(deliverCardToSchoolGroup);
+        }
+    }
+    try {
+        document.getElementById("IsStudent").addEventListener("click", uaStudentCheckboxClick);
+        document.getElementById("IsTeacher").addEventListener("click", uaTeacherCheckboxClick);
+        document.getElementById("IsECard").addEventListener("click", isECardCheckboxClick);
+        document.getElementById("student-school-dropdown").addEventListener("change", studentDropdownChange);
+        document.getElementById("teacher-school-dropdown").addEventListener("change", teacherDropdownChange);
+    } catch { }
+
+    var v;
+
+    function setupValidation() {
+        v = new aspnetValidation.ValidationService();
+
+        v.addProvider('dbrequired', (value, element, params) => {
+            if (!value) {
+                var requiredFields = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Settings.GetRequiredFields()));
+
+                if (requiredFields.includes(element.id)) {
+                    return !!value;
+                }
+            }
+
+            return true;
+        });
+
+        v.addProvider('legalname', (value, element, params) => {
+            return UseLegalName.checked ? !!value : false;
+        });
+
+        v.addProvider('verifydeliveryoption', (value, element, params) => {
+            if (element === deliveryOptionId) {
+                return true;
+                el = (deliveryOptionId.value === "3" || deliveryOptionId.value === "8") ? phoneVoice1 : emailAddress
+            } else { el = element; }
+
+            if (el === phoneVoice1) {
+                if (deliveryOptionId.value === "3" || deliveryOptionId.value === "8") {
+                    var isValid = !!phoneVoice1.value;
+                    if (isValid) {
+                        revalidate(deliveryOptionId);
+                    }
+                    return isValid;
+                }
+                return true;
+            }
+
+            if (el === emailAddress) {
+                if (deliveryOptionId.value === "2") {
+                    var isValid = !!emailAddress.value;
+                    if (isValid) {
+                        revalidate(deliveryOptionId); revalidate(receiveEreceipts);
+                    }
+                    return isValid;
+                }
+                return true;
+            }
+            return true;
+        });
+
+        v.addProvider('verifyereceiptemail', (value, element, params) => {
+            if (value === "true") {
+                return emailAddress.value.length > 1;
+            }
+            return true;
+        });
+
+        v.bootstrap({ watch: true });
+    }
+
+    function revalidate(element) {
+        if (v && element) {
+            dispatchEvent(element, "input");
+            dispatchEvent(element, "change");
+        }
+    }
+
+    function dispatchEvent(element, eventName) {
+        var evt = document.createEvent("HTMLEvents");
+        evt.initEvent(eventName, false, true);
+        element.dispatchEvent(evt);
+    }
+
+    function isECardCheckboxClick(e) {
+        if (e.target.checked) {
+            hide(schoolInfo);
+        } else {
+            show(schoolInfo);
+        }
+    }
+
+    function showErrorMessage(text) {
+        messageDiv.classList.add('alert', 'alert-danger');
+        messageDiv.innerHTML = text;
+        show(messageDiv);
+        window.scrollTo(0, 0);
+    }
+
+    function showWarningMessage(text) {
+        messageDiv.classList.add('alert', 'alert-warning');
+        messageDiv.innerHTML = text;
+        show(messageDiv);
+        window.scrollTo(0, 0);
+    }
+
+    function showInfoMessage(text) {
+        messageDiv.className = '';
+        messageDiv.innerHTML = text;
+        show(messageDiv);
+        window.scrollTo(0, 0);
+    }
+
+    function submitReg(e) {
+        registerButton.disabled = true;
+        e.preventDefault();
+
+        if (v.isValid(document.getElementById('regform'))) {
+            console.log("valid");
+        } else {
+            console.log("invalid");
+            registerButton.disabled = false;
+            return;
+        }
+
+        var formData = new FormData(document.forms.regform);
+
+        postData("@this.BuildAction("Submit")", formData).then((data) => {
+            if (data.isSuccess) {
+                theform.reset();
+                theform.remove();
+                hide(wrapperDiv);
+                showInfoMessage(data.message);
+                if (@Model.ShouldAutoReset(ViewContext.HttpContext!.GetTrueClientIp()).ToJavascriptBool()) {
+                    setTimeout(function () { location = '@this.BuildAction("Create")'; }, @(Settings.ResetSeconds * 1000));
+                }
+            } else {
+                showWarningMessage(data.message);
+
+                if (data.errors.length > 0) {
+                    var ul = document.createElement('ul');
+                    messageDiv.appendChild(ul);
+                    data.errors.forEach((element) => {
+                        var li = document.createElement('li');
+                        li.innerHTML = element.value;
+                        ul.appendChild(li);
+                    });
+                }
+
+                registerButton.disabled = false;
+            }
+        });
+    }
+
+    function handleNotificationPreferenceChange(deliveryOptionId) {
+        const emailRequiredBySetting = @Settings.GetFieldRequired(nameof(Model.EmailAddress)).ToJavascriptBool();
+        const phoneRequiredBySetting = @Settings.GetFieldRequired(nameof(Model.PhoneVoice1)).ToJavascriptBool();
+
+        const requiresEmail = deliveryOptionId === '2' || emailRequiredBySetting;
+        const requiresPhone = deliveryOptionId === '3' || deliveryOptionId === '8' || phoneRequiredBySetting;
+        const isSmsSelected = deliveryOptionId === '8';
+
+        emailAddressLabel.classList.toggle("required", requiresEmail);
+        phone1Label.classList.toggle("required", requiresPhone);
+        toggleSmsNoticeInfo(isSmsSelected);
+
+        revalidate(phoneVoice1);
+        revalidate(emailAddress);
+    }
+
+    function handleLegalNameCheckboxClick(e) {
+        if (e.target.checked) {
+            show(legalNameFirstFieldGroup);
+            legalNameFirstLabel.classList.add("required");
+
+            show(legalNameMiddleFieldGroup);
+
+            show(legalNameLastFieldGroup);
+            legalNameLastLabel.classList.add("required");
+        } else {
+            hide(legalNameFirstFieldGroup);
+            legalNameFirstLabel.classList.remove("required");
+
+            hide(legalNameMiddleFieldGroup);
+
+            hide(legalNameLastFieldGroup);
+            legalNameLastLabel.classList.remove("required");
+        }
+    }
+
+    function dl() {
+        var dlinfo = window.prompt("@Settings.DriversLicensePromptText");
+
+        if (dlinfo.length < 20) { return; }
+
+        var formData = new FormData();
+        formData.append("dlinfo", dlinfo);
+
+        postData("@this.BuildAction("dl")", formData).then((data) => {
+            var dataJson = JSON.stringify(data);
+            nameFirst.value = data.firstName;
+            nameMiddle.value = data.middleName;
+            nameLast.value = data.lastName;
+            birthdate.value = data.birthdate.split('T')[0];
+            streetOne.value = data.address;
+            city.value = data.city;
+            postalCode.value = data.zip;
+        });
+        dupecheck();
+    }
+
+    function dupecheck() {
+        if (isTeacher) {
+            //console.log('skip for teacher');
+            return;
+        }
+
+        if (nameFirst.value && nameLast.value && birthdate.value) {
+            var formData = new FormData();
+            formData.append("patronBranchId", patronBranchId.value);
+            formData.append("nameFirst", nameFirst.value);
+            formData.append("nameLast", nameLast.value);
+            formData.append("LibraryId", @(Model.LibraryId));
+            formData.append("BirthDate", birthdate.value);
+            postData("@this.BuildAction("DupeCheck")", formData).then((data) => {
+                if (data.isDupe === true) {
+                    theform.innerHTML = data.message;
+                    window.scrollTo(0,0);
+                } 
+                //else { console.log('not dupe'); }
+            });
+        }
+        // else { console.log('not enough info yet'); }
+    }
+
+
+    var ageCheckShown = false;
+    function ageCheck() {
+        if (!ageCheckShown && getAge(birthdate.value) < 18) {
+            if (confirm(@Html.Raw(Settings.AgeWarningText.ToJavascriptString()))) {
+                ageCheckShown = true;
+            }
+            else {
+                window.location.href = "https://catalog.clcohio.org";
+            }
+        }
+    }
+
+    function getAge(dateString) {
+        var today = new Date();
+        var birthDate = new Date(dateString);
+        var age = today.getFullYear() - birthDate.getFullYear();
+        var m = today.getMonth() - birthDate.getMonth();
+        if (m < 0 || (m === 0 && today.getDate() < birthDate.getDate())) {
+            age--;
+        }
+        return age;
+    }
+
+    //function dupecheck() {
+    //    $.post("/registration/dupecheck",
+    //        {
+    //            NameFirst: $('#NameFirst').val(),
+    //            NameLast: $('#NameLast').val(),
+    //            LibraryId: @Model.LibraryId,
+    //            PatronBranchID: $('#PatronBranchID').val(),
+    //            Month: $('#Month').val(),
+    //            Day: $('#Day').val(),
+    //            Year: $('#Year').val()
+    //        }, function (data) {
+    //            console.log(data);
+    //            if (data === "True") {
+    //                $('#alert').show();
+    //                $.ajax("/registration/DuplicateMessage/" + $('#PatronBranchID').val())
+    //                    .done(function (data) {
+    //                        $("#body").html(data);
+    //                    });
+    //                window.scrollTo(0, 0);
+    //            }
+    //        });
+    //}
+    //var ageCheckShown = false;
+
+    //function agecheck() {
+    //    if (!ageCheckShown) {
+    //        $.get("/registration/agecheck",
+    //            {
+    //                LibraryId: @Model.LibraryId,
+    //                PatronBranchID: $('#PatronBranchID').val(),
+    //                Month: $('#Month').val(),
+    //                Day: $('#Day').val(),
+    //                Year: $('#Year').val()
+    //            }, function (data) {
+    //                if (data) {
+    //                    alert(data);
+    //                    ageCheckShown = true;
+    //                }
+    //            });
+    //    }
+    //}
+
+    async function postData(url = "", data = {}) {
+        // Default options are marked with *
+        const response = await fetch(url, {
+            method: "POST", // *GET, POST, PUT, DELETE, etc.
+            mode: "cors", // no-cors, *cors, same-origin
+            cache: "no-cache", // *default, no-cache, reload, force-cache, only-if-cached
+            credentials: "same-origin", // include, *same-origin, omit
+            //headers: {
+            //    "Content-Type": "application/json",
+            //    // 'Content-Type': 'application/x-www-form-urlencoded',
+            //},
+            redirect: "follow", // manual, *follow, error
+            referrerPolicy: "no-referrer", // no-referrer, *no-referrer-when-downgrade, origin, origin-when-cross-origin, same-origin, strict-origin, strict-origin-when-cross-origin, unsafe-url
+            body: data,// JSON.stringify(data), // body data type must match "Content-Type" header
+        }).then((response) => {
+            if (response.ok){                
+                return response;
+            }
+            var errorMsg = '@(string.Equals(Settings.FormCode, "kiosk", StringComparison.OrdinalIgnoreCase)
+                ? "An error has occurred. Please see library staff for assistance."
+                : "An error has occurred. Please contact the library for assistance."
+            )';
+            showErrorMessage(errorMsg);
+        });
+        return response.json(); // parses JSON response into native JavaScript objects
+    }
+
+    async function getString(url = "") {
+        // Default options are marked with *
+        const response = await fetch(url, {
+            method: "GET", // *GET, POST, PUT, DELETE, etc.
+            mode: "cors", // no-cors, *cors, same-origin
+            cache: "no-cache", // *default, no-cache, reload, force-cache, only-if-cached
+            credentials: "same-origin", // include, *same-origin, omit
+            //headers: {
+            //    "Content-Type": "application/json",
+            //    // 'Content-Type': 'application/x-www-form-urlencoded',
+            //},
+            redirect: "follow", // manual, *follow, error
+            referrerPolicy: "no-referrer", // no-referrer, *no-referrer-when-downgrade, origin, origin-when-cross-origin, same-origin, strict-origin, strict-origin-when-cross-origin, unsafe-url
+        });
+        return response.json(); // parses JSON response into native JavaScript objects
+    }
+
+    function addScript(src, onload) {
+        var script = document.createElement("script");
+        script.type = "text/javascript";
+        script.onload = onload;
+        script.src = src;
+        script.async = true;
+
+        document.getElementsByTagName("head")[0].appendChild(script);
+    }
+</script>
