@@ -64,30 +64,23 @@ namespace Clc.PatronRegistration.Web
             builder.Services.AddSingleton<ISettingsAdministrationRepository, SettingsAdministrationRepository>();
             builder.Services.AddSingleton<ISettingsCacheInvalidator, SettingsCacheInvalidator>();
             builder.Services.AddSingleton<IPreviewBranchEligibilityService, PreviewBranchEligibilityService>();
+            builder.Services.AddSingleton<IFormCodeAvailabilityService, FormCodeAvailabilityService>();
+            builder.Services.AddScoped<IPreviewRequestContextAccessor, PreviewRequestContextAccessor>();
+            builder.Services.AddScoped<IRequestSettingProviderResolver, RequestSettingProviderResolver>();
+            builder.Services.AddSingleton<IPreviewContextResolver, PreviewContextResolver>();
+            builder.Services.AddScoped<IEmailSenderFactory, EmailSenderFactory>();
+            builder.Services.AddScoped<IMelissaClientFactory, MelissaClientFactory>();
             builder.Services.AddHostedService<SettingsCacheGenerationWorker>();
 
             builder.Services
                 .AddSingleton<IActionContextAccessor, ActionContextAccessor>()
                 .AddSingleton<IHttpContextAccessor, HttpContextAccessor>()
-                .AddScoped<ISettingProvider>(s =>
-                {
-                    var actionContext = s.GetRequiredService<IActionContextAccessor>().ActionContext!;
-
-                    int id = int.TryParse(actionContext.RouteData.Values["orgId"]?.ToString(), out id) ? id : 1;
-                    var formCode = actionContext.RouteData.Values["formCode"] as string ?? "";
-
-                    if (string.IsNullOrWhiteSpace(formCode) && (actionContext.HttpContext.Request.IsFromPublicWebBrowser() || (config.ForceKioskModeLocally && actionContext.HttpContext.IsFromLocalOrOplinIp())))
-                    {
-                        formCode = "kiosk";
-                    }
-
-                    var systemOrganizationId = s.GetRequiredService<Microsoft.Extensions.Options.IOptions<SettingsAdministrationOptions>>().Value.SystemOrganizationId;
-                    return s.ResolveWith<DbSettingProvider>(id, formCode, systemOrganizationId);
-                });
+                .AddScoped<ISettingProvider>(s => s.GetRequiredService<IRequestSettingProviderResolver>()
+                    .Resolve(s.GetRequiredService<IHttpContextAccessor>().HttpContext!));
 
             builder.Services
-                .AddScoped<IEmailSender>(s => s.ResolveWith<PostmarkEmailSender>(s.GetRequiredService<ISettingProvider>().PostmarkApiKey ?? ""))
-                .AddScoped<IMelissaRestClient>(s => s.ResolveWith<MelissaRestClient>(s.GetRequiredService<ISettingProvider>().MelissaDataApiKey ?? ""));
+                .AddScoped<IEmailSender>(s => RegistrationClientProvider.CreateEmail(s.GetRequiredService<ISettingProvider>(), s.GetRequiredService<IEmailSenderFactory>()))
+                .AddScoped<IMelissaRestClient>(s => RegistrationClientProvider.CreateMelissa(s.GetRequiredService<ISettingProvider>(), s.GetRequiredService<IMelissaClientFactory>()));
 
             builder.Services.ConfigureApplicationCookie(o => { o.LogoutPath = "/"; });
 
@@ -114,6 +107,7 @@ namespace Clc.PatronRegistration.Web
             app.UseHttpsRedirection();
             app.UseStaticFiles();
             app.UseRouting();
+            app.UseMiddleware<PreviewRequestContextMiddleware>();
             app.UseAuthentication();
             app.UseAuthorization();
 

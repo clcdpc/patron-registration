@@ -7,7 +7,6 @@ using Clc.PatronRegistration.Web.Settings;
 using Clc.Polaris.Api;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Rendering;
-using Microsoft.Extensions.Options;
 
 namespace Clc.PatronRegistration.Web.Controllers;
 
@@ -15,20 +14,18 @@ namespace Clc.PatronRegistration.Web.Controllers;
 [ResponseCache(NoStore = true, Location = ResponseCacheLocation.None)]
 public sealed class PreviewController(
     ISettingsAdministrationRepository repository,
-    IPreviewTokenService tokenService,
-    IPreviewBranchEligibilityService previewBranchEligibility,
+    IPreviewRequestContextAccessor previewRequestContext,
     ICache cache,
     IDbHelper db,
     IPapiClient papi,
     IMelissaRestClient melissa,
-    IEmailSender emailSender,
-    IOptions<SettingsAdministrationOptions> options) : Controller
+    IEmailSender emailSender) : Controller
 {
     [HttpGet("{token}")]
     public IActionResult Index(string token, bool forceDl = false, bool agreementAccepted = false)
     {
         SetSecurityHeaders();
-        var context = Resolve(token);
+        var context = previewRequestContext.Current;
         if (context is null)
         {
             return NotFound("This preview link is invalid or no longer active.");
@@ -58,7 +55,7 @@ public sealed class PreviewController(
     public IActionResult Submit(string token, Registration registration)
     {
         SetSecurityHeaders();
-        var context = Resolve(token);
+        var context = previewRequestContext.Current;
         if (context is null)
         {
             return NotFound("This preview link is invalid or no longer active.");
@@ -115,7 +112,7 @@ public sealed class PreviewController(
     public IActionResult DupeCheck(string token, Registration registration)
     {
         SetSecurityHeaders();
-        var context = Resolve(token);
+        var context = previewRequestContext.Current;
         if (context is null)
         {
             return NotFound();
@@ -129,7 +126,7 @@ public sealed class PreviewController(
     public IActionResult DriverLicense(string token, string dlinfo)
     {
         SetSecurityHeaders();
-        var context = Resolve(token);
+        var context = previewRequestContext.Current;
         if (context is null)
         {
             return NotFound();
@@ -143,31 +140,7 @@ public sealed class PreviewController(
             : DriverLicenseHelper.ProcessDlMagstripe(dlinfo));
     }
 
-    private PreviewContext? Resolve(string token)
-    {
-        if (string.IsNullOrWhiteSpace(token))
-        {
-            return null;
-        }
-        var link = repository.FindPreviewLink(tokenService.Hash(token));
-        if (link is null || link.RevokedAtUtc.HasValue || link.ExpiresAtUtc < DateTime.UtcNow || link.DraftStatus != DraftStatus.Active.ToString())
-        {
-            return null;
-        }
-        var draft = repository.GetDraft(link.DraftId);
-        if (draft is not { Status: DraftStatus.Active } || draft.OrganizationId != link.OrganizationId || !draft.FormCode.Equals(link.FormCode, StringComparison.OrdinalIgnoreCase))
-        {
-            return null;
-        }
-        if (!previewBranchEligibility.IsEligible(draft.OrganizationId, link.OperationalBranchId, options.Value.SystemOrganizationId))
-        {
-            return null;
-        }
-        var settings = new PreviewSettingProvider(draft, link.OperationalBranchId, cache, options.Value.SystemOrganizationId);
-        return new PreviewContext(link, draft, settings);
-    }
-
-    private AuditContext AnonymousAudit(PreviewContext context) => new(
+    private AuditContext AnonymousAudit(PreviewRequestContext context) => new(
         null,
         "Shared preview link",
         null,
@@ -191,5 +164,4 @@ public sealed class PreviewController(
         Response.Headers.Pragma = "no-cache";
     }
 
-    private sealed record PreviewContext(PreviewLinkRecord Link, SettingDraft Draft, PreviewSettingProvider Settings);
 }

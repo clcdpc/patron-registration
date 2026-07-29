@@ -251,6 +251,8 @@ public class SettingsControllerTests
         var invalidator = new Mock<ISettingsCacheInvalidator>();
         var branchEligibility = new Mock<IPreviewBranchEligibilityService>();
         branchEligibility.Setup(service => service.GetEligibleBranches(It.IsAny<int>(), It.IsAny<int>())).Returns([]);
+        var options = Options.Create(new SettingsAdministrationOptions());
+        var formCodeAvailability = new FormCodeAvailabilityService(repository.Object, new TestCache(), options);
         var controller = new SettingsController(
             authorization.Object,
             repository.Object,
@@ -258,8 +260,9 @@ public class SettingsControllerTests
             new TestCache(),
             new PreviewTokenService(),
             branchEligibility.Object,
+            formCodeAvailability,
             invalidator.Object,
-            Options.Create(new SettingsAdministrationOptions()));
+            options);
         controller.ControllerContext = new ControllerContext
         {
             HttpContext = new DefaultHttpContext

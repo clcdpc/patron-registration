@@ -21,6 +21,7 @@ public sealed class SettingsController(
     ICache cache,
     IPreviewTokenService previewTokens,
     IPreviewBranchEligibilityService previewBranchEligibility,
+    IFormCodeAvailabilityService formCodeAvailability,
     ISettingsCacheInvalidator cacheInvalidator,
     IOptions<SettingsAdministrationOptions> options) : Controller
 {
@@ -38,7 +39,7 @@ public sealed class SettingsController(
         }
 
         var target = organizationId ?? (principal.IsGlobal ? settingsOptions.SystemOrganizationId : GetLibraryId(principal.OrganizationId!.Value));
-        if (!authorization.CanManage(User, target) || !IsAvailableFormCode(target, formCode))
+        if (!authorization.CanManage(User, target) || !formCodeAvailability.IsAvailable(target, formCode))
         {
             AuditRejected(target, formCode, "Invalid or unauthorized scope.");
             return Forbid();
@@ -75,7 +76,7 @@ public sealed class SettingsController(
             PreviewLinks = draft is null ? [] : repository.GetPreviewLinks(draft.DraftId),
             PreviewBranches = GetPreviewBranches(target),
             Scopes = GetAuthorizedScopes(principal),
-            FormCodes = GetAvailableFormCodes(libraryId),
+            FormCodes = formCodeAvailability.GetAvailable(libraryId).ToList(),
             Settings = rows
         };
         return View(model);
@@ -416,11 +417,11 @@ public sealed class SettingsController(
         SystemOrganizationId = settingsOptions.SystemOrganizationId,
         IsGlobal = isGlobal,
         Forms = repository.GetFormCodes(libraryId, settingsOptions.SystemOrganizationId),
-        LegacyForms = GetLegacyFormOptions(libraryId)
+        LegacyForms = formCodeAvailability.GetLegacy(libraryId)
     };
 
     private bool ValidateScope(int organizationId, string formCode) =>
-        RequireManager() is not null && authorization.CanManage(User, organizationId) && IsAvailableFormCode(organizationId, formCode);
+        RequireManager() is not null && authorization.CanManage(User, organizationId) && formCodeAvailability.IsAvailable(organizationId, formCode);
 
     private SettingDraft? AuthorizedActiveDraft(long draftId, int organizationId, string formCode)
     {
@@ -459,68 +460,6 @@ public sealed class SettingsController(
             ModelState.AddModelError("changes", "Submit at least one setting change.");
         }
         return result;
-    }
-
-    private bool IsAvailableFormCode(int organizationId, string formCode)
-    {
-        if (string.IsNullOrEmpty(formCode))
-        {
-            return true;
-        }
-        var libraryId = organizationId == settingsOptions.SystemOrganizationId ? settingsOptions.SystemOrganizationId : GetLibraryId(organizationId);
-        return repository.GetFormCodes(libraryId, settingsOptions.SystemOrganizationId)
-            .Any(metadata => metadata.FormCode.Equals(formCode, StringComparison.OrdinalIgnoreCase));
-    }
-
-    private List<FormCodeOption> GetAvailableFormCodes(int libraryId)
-    {
-        var result = new List<FormCodeOption> { new(string.Empty, "Default form", null, settingsOptions.SystemOrganizationId) };
-        foreach (var group in repository.GetFormCodes(libraryId, settingsOptions.SystemOrganizationId).GroupBy(form => form.FormCode, StringComparer.OrdinalIgnoreCase))
-        {
-            var preferred = group.FirstOrDefault(form => form.OrganizationId == libraryId) ?? group.First();
-            result.Add(new(preferred.FormCode, preferred.DisplayName, preferred.Description, preferred.OrganizationId));
-        }
-        foreach (var legacy in GetLegacyFormOptions(libraryId).Where(legacy => result.All(form => !form.FormCode.Equals(legacy.FormCode, StringComparison.OrdinalIgnoreCase))))
-        {
-            result.Add(legacy);
-        }
-        return result.OrderBy(form => form.DisplayName).ToList();
-    }
-
-    private IReadOnlyList<FormCodeOption> GetLegacyFormOptions(int libraryId)
-    {
-        var metadata = repository.GetFormCodes(libraryId, settingsOptions.SystemOrganizationId);
-        var result = new List<FormCodeOption>();
-        foreach (var row in repository.GetLegacyFormCodes())
-        {
-            int ownerOrganizationId;
-            if (row.OrganizationId == settingsOptions.SystemOrganizationId)
-            {
-                ownerOrganizationId = settingsOptions.SystemOrganizationId;
-            }
-            else
-            {
-                try
-                {
-                    ownerOrganizationId = GetLibraryId(row.OrganizationId);
-                }
-                catch (InvalidOperationException)
-                {
-                    continue;
-                }
-            }
-            if (ownerOrganizationId != settingsOptions.SystemOrganizationId && ownerOrganizationId != libraryId)
-            {
-                continue;
-            }
-            if (metadata.Any(item => item.OrganizationId == ownerOrganizationId && item.FormCode.Equals(row.FormCode, StringComparison.OrdinalIgnoreCase)) ||
-                result.Any(item => item.OwnerOrganizationId == ownerOrganizationId && item.FormCode.Equals(row.FormCode, StringComparison.OrdinalIgnoreCase)))
-            {
-                continue;
-            }
-            result.Add(new(row.FormCode, $"{row.FormCode} (legacy/unregistered)", "Existing settings without metadata.", ownerOrganizationId, false));
-        }
-        return result.OrderBy(item => item.FormCode).ToList();
     }
 
     private List<ScopeOption> GetAuthorizedScopes(SettingsPrincipal principal)
