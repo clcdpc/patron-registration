@@ -13,3 +13,13 @@ public static class SensitiveDraftPolicy
         IReadOnlyDictionary<string, SettingDefinition> catalog) =>
         !ContainsSensitiveChange(previousKeys, catalog) && ContainsSensitiveChange(currentKeys, catalog);
 }
+
+public static class DraftChangeAuditClassification
+{
+    public static SettingDefinition RequireDefinition(
+        string settingKey,
+        IReadOnlyDictionary<string, SettingDefinition> catalog) =>
+        catalog.TryGetValue(settingKey, out var definition)
+            ? definition
+            : throw new InvalidOperationException("The staged setting is not recognized.");
+}

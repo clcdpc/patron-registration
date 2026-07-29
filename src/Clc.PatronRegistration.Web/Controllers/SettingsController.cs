@@ -259,6 +259,7 @@ public sealed class SettingsController(
 
     [HttpPost("drafts/{draftId:long}/preview-links")]
     [ValidateAntiForgeryToken]
+    [ResponseCache(NoStore = true, Location = ResponseCacheLocation.None)]
     public IActionResult CreatePreviewLink(long draftId, PreviewLinkRequest request)
     {
         var draft = AuthorizedActiveDraft(draftId, request.OrganizationId, request.FormCode);
@@ -294,6 +295,7 @@ public sealed class SettingsController(
             return Conflict(exception.Message);
         }
         var previewUrl = Url.Action("Index", "Preview", new { token = token.Plaintext }, Request.Scheme)!;
+        SetPreviewTokenResponseHeaders();
         return View("PreviewLinkCreated", model: previewUrl);
     }
 
@@ -506,6 +508,13 @@ public sealed class SettingsController(
     {
         var principal = authorization.Describe(User);
         return principal.HasRole && principal.OrganizationId.HasValue ? principal : null;
+    }
+
+    private void SetPreviewTokenResponseHeaders()
+    {
+        Response.Headers.CacheControl = "no-store, no-cache, max-age=0";
+        Response.Headers.Pragma = "no-cache";
+        Response.Headers.ReferrerPolicy = "no-referrer";
     }
 
     private FormsViewModel BuildFormsViewModel(int libraryId, bool isGlobal) => new()

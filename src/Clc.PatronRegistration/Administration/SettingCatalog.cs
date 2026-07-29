@@ -33,6 +33,26 @@ public sealed record SettingDefinition(string Key, string DisplayName, string De
     SettingGroup Group = SettingGroup.Ordinary, bool IsSensitive = false, bool AllowEmpty = true,
     IReadOnlyList<string>? AllowedValues = null, int SortOrder = 0)
 {
+    private static readonly HashSet<string> PositiveIdentifierKeys = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "add_to_record_set_id",
+        "registration_logon_user_id",
+        "ecard_patron_code_id",
+        "teacher_patron_code_id",
+        "student_patron_code_id",
+        "valid_address_patron_code_id",
+        "valid_address_plus_name_patron_code_id",
+        "patron_code_id"
+    };
+
+    private static readonly HashSet<string> NonNegativeIdentifierKeys = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "mailing_list_record_set_id",
+        "valid_address_record_set_id",
+        "valid_address_plus_name_record_set_id",
+        "invalid_address_record_set_id"
+    };
+
     public string? Validate(string? value)
     {
         if (value is null)
@@ -48,7 +68,12 @@ public sealed record SettingDefinition(string Key, string DisplayName, string De
             SettingValueType.Boolean when !bool.TryParse(value, out _) => "Enter true or false.",
             SettingValueType.Integer when !int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out _) => "Enter a whole number.",
             SettingValueType.NullableInteger when value.Length > 0 && !int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out _) => "Enter a whole number or leave empty.",
-            SettingValueType.NullableInteger when Key == "add_to_record_set_id" && int.Parse(value, CultureInfo.InvariantCulture) <= 0 => "Record-set ID must be a positive whole number or empty.",
+            SettingValueType.Integer or SettingValueType.NullableInteger
+                when PositiveIdentifierKeys.Contains(Key) && int.Parse(value, CultureInfo.InvariantCulture) <= 0 =>
+                "Configured identifier must be a positive whole number.",
+            SettingValueType.Integer
+                when NonNegativeIdentifierKeys.Contains(Key) && int.Parse(value, CultureInfo.InvariantCulture) < 0 =>
+                "Record-set ID cannot be negative; use zero to disable it.",
             SettingValueType.Decimal when !decimal.TryParse(value, NumberStyles.Number, CultureInfo.InvariantCulture, out _) => "Enter a decimal number.",
             SettingValueType.Date or SettingValueType.NullableDate when value.Length > 0 && !DateTime.TryParseExact(value, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out _) => "Enter a date as yyyy-MM-dd.",
             SettingValueType.EmailAddress when !MailAddress.TryCreate(value, out _) => "Enter a valid email address.",

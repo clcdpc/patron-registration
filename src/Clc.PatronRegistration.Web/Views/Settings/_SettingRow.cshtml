@@ -9,7 +9,7 @@
     var editorValue = Model.DraftOperation == DraftOperation.Upsert
         ? Model.DraftValue
         : resolution.OwnsOverride ? resolution.CurrentOverrideValue : resolution.EffectiveValue;
-    editorValue ??= string.Empty;
+    editorValue = Clc.PatronRegistration.Web.Models.SettingEditorDefaults.ValueFor(definition, editorValue);
     var safeEffective = definition.IsSensitive ? string.Empty : resolution.EffectiveValue;
     var searchText = $"{definition.DisplayName} {definition.Key} {definition.Description} {safeEffective}".ToLowerInvariant();
 }

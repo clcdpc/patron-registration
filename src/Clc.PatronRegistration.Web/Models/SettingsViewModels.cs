@@ -7,6 +7,12 @@ namespace Clc.PatronRegistration.Web.Models;
 public sealed record ScopeOption(int OrganizationId, string DisplayName);
 public sealed record FormCodeOption(string FormCode, string DisplayName, string? Description, int OwnerOrganizationId, bool IsRegistered = true);
 
+public static class SettingEditorDefaults
+{
+    public static string ValueFor(SettingDefinition definition, string? value) =>
+        definition.ValueType == SettingValueType.Boolean && string.IsNullOrEmpty(value) ? "false" : value ?? string.Empty;
+}
+
 public sealed class SettingsIndexViewModel
 {
     public int OrganizationId { get; set; }

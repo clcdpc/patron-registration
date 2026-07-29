@@ -16,6 +16,8 @@ The code-defined catalog is the write allowlist. It defines editor type, validat
 
 `add_to_record_set_id` is a nullable positive integer: missing and explicitly empty values disable the post-registration record-set action, positive values select the record set, and zero or negative values fail catalog validation. Legacy malformed nullable values are converted to `null` rather than throwing after patron creation.
 
+Configured patron-code and registration-logon identifiers must be positive. Record-set settings whose existing runtime contract uses zero as “disabled” accept zero but reject negative values; positive values select the Polaris record set. This prevents an administratively supplied negative identifier from reaching a post-creation PAPI call.
+
 ## Direct save and drafts
 
 Direct save submits only browser-edited rows using ASP.NET Core `Changes.Index` tokens, displays an exact confirmation, validates every key and value again, locks the scope version, applies all operations in one transaction, writes audit events, increments scope and cache generations, and immediately rebuilds local live settings.
@@ -30,7 +32,7 @@ These lifecycle checks are repeated inside each serializable Dapper transaction 
 
 An active draft can issue an unauthenticated bearer URL. Every link persists an operational branch: a branch draft uses itself, a library draft requires one of that library's branches, and a system draft requires an explicitly selected valid branch. Eligible branches come from the same `GetSelfRegistrationOrganizations` source used by normal registration. The branch binding and current eligibility are revalidated on every preview request and control form construction, duplicate checks, and live submission. The rendered home branch is locked to this one branch. The plaintext token is returned once; the database receives only its SHA-256 hash. Tokens contain 256 cryptographically random bits and use URL-safe encoding. Preview lookup rejects revoked, expired, committed, discarded, invalidated, ineligible, and invalid-branch links. Responses use `no-store` and `Referrer-Policy: no-referrer`.
 
-Token resolution reads one immutable link-and-draft snapshot in a short serializable transaction. It identifies the draft, locks the draft before its link, rechecks link revocation/expiration and active draft state, and reads every mutation before releasing the locks. This prevents a request from combining a pre-revocation link read with the restricted draft that caused its revocation.
+Token resolution reads one immutable link-and-draft snapshot. The initial candidate draft-ID lookup occurs before the serializable transaction and is not trusted. The transaction then locks and validates the draft, authoritatively re-reads and locks the link, and reads every mutation in that order before releasing the locks. Preview mutation, revocation, toggle, commit, discard, and deletion paths use the same draft-before-link order. This prevents both deadlocks and a request combining a pre-revocation link read with the restricted draft that caused its revocation.
 
 Preview rendering uses the real registration view and a `PreviewSettingProvider`. Draft mutations are overlaid only at the draft scope, while effective values are resolved at the operational branch through the normal branch, library, and system hierarchy. Consequently, lower-scope overrides correctly mask a library or system draft change. Safe preview performs rendering, client validation, read-only duplicate checks, and driver-license parsing, but its final POST returns a blocked result without calling patron creation, sending email, writing normal success history, or performing other registration side effects. When the database link's `AllowLiveSubmission` flag is enabled, POST revalidates the token and active draft and runs the existing real workflow. The page prominently identifies live mode. No browser Boolean controls this decision.
 
@@ -41,6 +43,8 @@ After endpoint routing and before MVC controller activation, `PreviewRequestCont
 Treat every preview URL as a credential. Revoke it immediately if shared incorrectly. Enabling live mode permits real PAPI, Melissa, Postmark, record-set, note, and registration-history effects.
 
 The application replaces the preview request path and raw target with `/preview/[redacted]` immediately after routing, before preview resolution and MVC execution, so downstream application diagnostics do not retain the bearer token. The shared URL still contains the bearer token as a path segment and may be observed by IIS, a reverse proxy, an APM agent that records requests before ASP.NET middleware, or browser history. Production operators **must** disable path capture or configure explicit `/preview/*` path redaction in every upstream access log, proxy, WAF, tracing, and monitoring layer. This upstream configuration is required for the no-plaintext-token logging guarantee; the application cannot retroactively redact logs written before its middleware executes.
+
+The one-time token-display response sets `Cache-Control: no-store, no-cache, max-age=0`, `Pragma: no-cache`, and `Referrer-Policy: no-referrer`. The plaintext URL is returned only as that response model and is never placed in TempData, session, audit metadata, logs, or exception text.
 
 ## Form codes
 

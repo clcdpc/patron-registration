@@ -1,12 +1,85 @@
 using Clc.PatronRegistration.Administration;
 using Clc.PatronRegistration.Configuration;
 using Clc.PatronRegistration.Web.Settings;
+using Clc.PatronRegistration.Web.Models;
 
 namespace Clc.PatronRegistration.Tests;
 
 [TestClass]
 public class SettingsAdministrationTests
 {
+    [TestMethod]
+    public void PreviewRepositoryLockOrder_IsCandidateThenDraftThenLinkThenChanges()
+    {
+        CollectionAssert.AreEqual(
+            new[]
+            {
+                PreviewLockStep.CandidateLookupOutsideTransaction,
+                PreviewLockStep.Draft,
+                PreviewLockStep.PreviewLink,
+                PreviewLockStep.DraftChanges
+            },
+            PreviewLockOrder.Required.ToArray());
+    }
+
+    [DataTestMethod]
+    [DataRow("postmark_api_key", true)]
+    [DataRow("melissa_data_api_key", true)]
+    [DataRow("registration_text", false)]
+    public void DraftChangeRemovalAudit_UsesCatalogSensitivity(string key, bool expectedSensitive)
+    {
+        var catalog = new SettingCatalog().All.ToDictionary(definition => definition.Key, StringComparer.OrdinalIgnoreCase);
+
+        var definition = DraftChangeAuditClassification.RequireDefinition(key, catalog);
+
+        Assert.AreEqual(expectedSensitive, definition.IsSensitive);
+    }
+
+    [DataTestMethod]
+    [DataRow(null, "false")]
+    [DataRow("", "false")]
+    [DataRow("true", "true")]
+    [DataRow("false", "false")]
+    public void BooleanEditor_DefaultMatchesEffectiveRuntimeBehavior(string? configuredValue, string expected)
+    {
+        var definition = new SettingDefinition("require.NameFirst", "Name", "", SettingValueType.Boolean);
+
+        Assert.AreEqual(expected, SettingEditorDefaults.ValueFor(definition, configuredValue));
+    }
+
+    [DataTestMethod]
+    [DataRow("registration_logon_user_id")]
+    [DataRow("ecard_patron_code_id")]
+    [DataRow("teacher_patron_code_id")]
+    [DataRow("student_patron_code_id")]
+    [DataRow("valid_address_patron_code_id")]
+    [DataRow("valid_address_plus_name_patron_code_id")]
+    [DataRow("patron_code_id")]
+    public void ConfiguredPolarisIdentifiers_MustBePositive(string key)
+    {
+        var catalog = new SettingCatalog();
+        Assert.IsTrue(catalog.TryGet(key, out var definition));
+
+        Assert.IsNotNull(definition.Validate("0"));
+        Assert.IsNotNull(definition.Validate("-1"));
+        Assert.IsNull(definition.Validate("1"));
+    }
+
+    [DataTestMethod]
+    [DataRow("mailing_list_record_set_id")]
+    [DataRow("valid_address_record_set_id")]
+    [DataRow("valid_address_plus_name_record_set_id")]
+    [DataRow("invalid_address_record_set_id")]
+    public void OptionalRecordSetIdentifiers_AllowZeroButRejectNegative(string key)
+    {
+        var catalog = new SettingCatalog();
+        Assert.IsTrue(catalog.TryGet(key, out var definition));
+
+        Assert.IsNull(definition.Validate("0"));
+        Assert.IsNotNull(definition.Validate("-1"));
+        Assert.IsNull(definition.Validate("1"));
+    }
+
     [TestMethod]
     public void FirstSensitiveDraftMutation_IsARevocationTransitionOnlyOnce()
     {
@@ -26,11 +99,21 @@ public class SettingsAdministrationTests
     public void SensitiveAuditRows_AreOmittedForLibraryButVisibleToGlobalAdministrator(string settingKey)
     {
         var row = new SettingsAuditRow(
-            1, DateTime.UtcNow, "OverrideUpdated", 2, 2, string.Empty, settingKey,
-            "masked", "masked", true, true, "global@example.org", null, null, null);
+            1, DateTime.UtcNow, "DraftChangeRemoved", 2, 2, string.Empty, settingKey,
+            null, null, true, true, "global@example.org", null, null, null);
 
         Assert.AreEqual(0, SettingsAuditVisibility.ForAdministrator([row], false).Count());
         Assert.AreSame(row, SettingsAuditVisibility.ForAdministrator([row], true).Single());
+    }
+
+    [TestMethod]
+    public void OrdinaryDraftChangeRemovalAudit_RemainsVisibleToLibraryAdministrator()
+    {
+        var row = new SettingsAuditRow(
+            1, DateTime.UtcNow, "DraftChangeRemoved", 2, 2, string.Empty, "registration_text",
+            null, null, false, true, "library@example.org", null, null, null);
+
+        Assert.AreSame(row, SettingsAuditVisibility.ForAdministrator([row], false).Single());
     }
 
     [TestMethod]

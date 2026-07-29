@@ -132,6 +132,34 @@ public class SettingsControllerTests
             It.IsAny<long>(), It.IsAny<byte[]>(), It.IsAny<bool>(), It.IsAny<int>(), It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), It.IsAny<bool>(), It.IsAny<AuditContext>()), Times.Never);
     }
 
+    [TestMethod]
+    public void PreviewTokenDisplayResponse_DisablesCachingAndReferrers()
+    {
+        var repository = new Mock<ISettingsAdministrationRepository>();
+        repository.Setup(service => service.GetDraft(10))
+            .Returns(new SettingDraft(10, 3, string.Empty, 0, DraftStatus.Active, []));
+        var authorization = new Mock<ISettingsAuthorizationService>();
+        authorization.Setup(service => service.Describe(It.IsAny<ClaimsPrincipal>()))
+            .Returns(new SettingsPrincipal(true, -1, true));
+        authorization.Setup(service => service.CanManage(It.IsAny<ClaimsPrincipal>(), 3, It.IsAny<bool>())).Returns(true);
+        var controller = CreateController(repository, authorization);
+        var url = new Mock<IUrlHelper>();
+        url.Setup(helper => helper.Action(It.IsAny<UrlActionContext>())).Returns("https://example.test/preview/one-time-token");
+        controller.Url = url.Object;
+
+        var result = controller.CreatePreviewLink(10,
+            new PreviewLinkRequest { OrganizationId = 3, OperationalBranchId = 3 });
+
+        Assert.IsInstanceOfType<ViewResult>(result);
+        Assert.AreEqual("no-store, no-cache, max-age=0", controller.Response.Headers.CacheControl.ToString());
+        Assert.AreEqual("no-cache", controller.Response.Headers.Pragma.ToString());
+        Assert.AreEqual("no-referrer", controller.Response.Headers.ReferrerPolicy.ToString());
+        Assert.IsNotNull(typeof(SettingsController).GetMethod(nameof(SettingsController.CreatePreviewLink))!
+            .GetCustomAttributes(typeof(ResponseCacheAttribute), true)
+            .Cast<ResponseCacheAttribute>()
+            .Single(attribute => attribute.NoStore && attribute.Location == ResponseCacheLocation.None));
+    }
+
     [DataTestMethod]
     [DataRow(1, true)]
     [DataRow(2, false)]

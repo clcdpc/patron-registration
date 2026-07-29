@@ -40,6 +40,25 @@ public sealed record PreviewLinkRecord(
 
 public sealed record PreviewContextSnapshot(PreviewLinkRecord Link, SettingDraft Draft);
 
+public enum PreviewLockStep
+{
+    CandidateLookupOutsideTransaction,
+    Draft,
+    PreviewLink,
+    DraftChanges
+}
+
+public static class PreviewLockOrder
+{
+    public static IReadOnlyList<PreviewLockStep> Required { get; } =
+    [
+        PreviewLockStep.CandidateLookupOutsideTransaction,
+        PreviewLockStep.Draft,
+        PreviewLockStep.PreviewLink,
+        PreviewLockStep.DraftChanges
+    ];
+}
+
 public sealed record FormCodeImpact(int MetadataRows, int OverrideRows, int Drafts, int PreviewLinks);
 public sealed record LegacyFormCodeRow(int OrganizationId, string FormCode);
 
@@ -216,7 +235,8 @@ if @@ROWCOUNT=0
         using var connection = Open();
         using var transaction = connection.BeginTransaction(IsolationLevel.Serializable);
         EnsureActiveDraft(connection, transaction, draftId);
-        if (!canManageSensitive && catalog.TryGetValue(settingKey, out var definition) && definition.IsSensitive)
+        var definition = DraftChangeAuditClassification.RequireDefinition(settingKey, catalog);
+        if (!canManageSensitive && definition.IsSensitive)
         {
             throw RestrictedDraftException();
         }
@@ -227,7 +247,8 @@ if @@ROWCOUNT=0
         {
             throw new DBConcurrencyException("The staged draft mutation no longer exists.");
         }
-        InsertAudit(connection, transaction, "DraftChangeRemoved", true, audit, draftId: draftId, settingKey: settingKey);
+        InsertAudit(connection, transaction, "DraftChangeRemoved", true, audit, draftId: draftId,
+            settingKey: settingKey, isSensitive: definition.IsSensitive);
         transaction.Commit();
     }
 
@@ -309,22 +330,21 @@ output inserted.PreviewLinkId values(@draftId,@tokenHash,@allowLiveSubmission,@o
     public PreviewContextSnapshot? ResolvePreviewContext(byte[] tokenHash, DateTime nowUtc)
     {
         using var connection = Open();
-        using var transaction = connection.BeginTransaction(IsolationLevel.Serializable);
-
-        // Token lookup identifies the draft without taking the link lock first. All writers
-        // lock draft then link, so take those locks in the same order before trusting either row.
-        var draftId = connection.QuerySingleOrDefault<long?>(
+        // This lookup is deliberately outside the serializable transaction. It is only a
+        // candidate; the locked re-read below is authoritative.
+        var candidateDraftId = connection.QuerySingleOrDefault<long?>(
             "select DraftId from dbo.RegistrationSettingPreviewLinks where TokenHash=@tokenHash",
-            new { tokenHash }, transaction);
-        if (!draftId.HasValue)
+            new { tokenHash });
+        if (!candidateDraftId.HasValue)
         {
-            transaction.Commit();
             return null;
         }
 
+        using var transaction = connection.BeginTransaction(IsolationLevel.Serializable);
+
         var status = connection.QuerySingleOrDefault<string>(
             "select Status from dbo.RegistrationSettingDrafts with(updlock,holdlock) where DraftId=@draftId",
-            new { draftId = draftId.Value }, transaction);
+            new { draftId = candidateDraftId.Value }, transaction);
         if (status != DraftStatus.Active.ToString())
         {
             transaction.Commit();
@@ -338,14 +358,14 @@ from dbo.RegistrationSettingPreviewLinks p with(updlock,holdlock)
 join dbo.RegistrationSettingDrafts d on d.DraftId=p.DraftId
 where p.TokenHash=@tokenHash and p.DraftId=@draftId and p.RevokedAtUtc is null
  and (p.ExpiresAtUtc is null or p.ExpiresAtUtc>@nowUtc) and d.Status='Active'",
-            new { tokenHash, draftId = draftId.Value, nowUtc }, transaction);
+            new { tokenHash, draftId = candidateDraftId.Value, nowUtc }, transaction);
         if (link is null)
         {
             transaction.Commit();
             return null;
         }
 
-        var draft = ReadDraft(connection, draftId.Value, transaction);
+        var draft = ReadDraft(connection, candidateDraftId.Value, transaction);
         if (draft is null || draft.OrganizationId != link.OrganizationId ||
             !draft.FormCode.Equals(link.FormCode, StringComparison.OrdinalIgnoreCase))
         {
@@ -378,8 +398,9 @@ where p.DraftId=@draftId order by p.PreviewLinkId desc", new { draftId }).ToList
     public void RevokePreviewLink(long previewLinkId, IReadOnlyDictionary<string, SettingDefinition> catalog, bool canManageSensitive, AuditContext audit)
     {
         using var connection = Open();
+        var candidateDraftId = FindPreviewLinkDraftCandidate(connection, previewLinkId);
         using var transaction = connection.BeginTransaction(IsolationLevel.Serializable);
-        var draftId = LockPreviewLinkDraft(connection, transaction, previewLinkId);
+        var draftId = LockPreviewLinkDraft(connection, transaction, previewLinkId, candidateDraftId, DateTime.UtcNow);
         EnsureCanManageRestrictedDraft(connection, transaction, draftId, catalog, canManageSensitive);
         var updated = connection.Execute(@"
 update dbo.RegistrationSettingPreviewLinks
@@ -399,8 +420,9 @@ where PreviewLinkId=@previewLinkId and RevokedAtUtc is null
     public void TogglePreviewLiveSubmission(long previewLinkId, bool allowLiveSubmission, IReadOnlyDictionary<string, SettingDefinition> catalog, bool canManageSensitive, AuditContext audit)
     {
         using var connection = Open();
+        var candidateDraftId = FindPreviewLinkDraftCandidate(connection, previewLinkId);
         using var transaction = connection.BeginTransaction(IsolationLevel.Serializable);
-        var draftId = LockPreviewLinkDraft(connection, transaction, previewLinkId);
+        var draftId = LockPreviewLinkDraft(connection, transaction, previewLinkId, candidateDraftId, DateTime.UtcNow);
         EnsureCanManageRestrictedDraft(connection, transaction, draftId, catalog, canManageSensitive);
         var updated = connection.Execute(@"
 update dbo.RegistrationSettingPreviewLinks set AllowLiveSubmission=@allowLiveSubmission,ModifiedAtUtc=SYSUTCDATETIME(),ModifiedBy=@actor
@@ -494,6 +516,10 @@ select
         }
         using var connection = Open();
         using var transaction = connection.BeginTransaction(IsolationLevel.Serializable);
+        _ = connection.Query<long>(@"
+select DraftId from dbo.RegistrationSettingDrafts with(updlock,holdlock)
+where OrganizationId in @affectedOrganizations and FormCode=@formCode
+order by DraftId", new { formCode, affectedOrganizations }, transaction).ToList();
         connection.Execute(@"
 delete p from dbo.RegistrationSettingPreviewLinks p join dbo.RegistrationSettingDrafts d on d.DraftId=p.DraftId where d.OrganizationId in @affectedOrganizations and d.FormCode=@formCode;
 delete from dbo.RegistrationSettingDrafts where OrganizationId in @affectedOrganizations and FormCode=@formCode;
@@ -616,30 +642,42 @@ if @@ROWCOUNT=0 insert dbo.RegistrationFormSettings(OrganizationID,Setting,FormC
     private static UnauthorizedAccessException RestrictedDraftException() =>
         new("This draft contains restricted changes that require a global administrator.");
 
-    private static long LockPreviewLinkDraft(SqlConnection connection, IDbTransaction transaction, long previewLinkId)
+    private static long FindPreviewLinkDraftCandidate(SqlConnection connection, long previewLinkId)
     {
         var draftId = connection.QuerySingleOrDefault<long?>(
             "select DraftId from dbo.RegistrationSettingPreviewLinks where PreviewLinkId=@previewLinkId",
-            new { previewLinkId }, transaction);
+            new { previewLinkId });
         if (!draftId.HasValue)
         {
             throw new DBConcurrencyException("The preview link was already revoked or invalidated.");
         }
 
-        // All draft operations lock the draft before its links. Keeping that order avoids
-        // deadlocks with the transaction that revokes links when a draft becomes restricted.
-        EnsureActiveDraft(connection, transaction, draftId.Value);
+        return draftId.Value;
+    }
+
+    private static long LockPreviewLinkDraft(
+        SqlConnection connection,
+        IDbTransaction transaction,
+        long previewLinkId,
+        long candidateDraftId,
+        DateTime nowUtc)
+    {
+        // The candidate was read before this transaction and is untrusted. The draft lock is
+        // always acquired before the authoritative preview-link lock.
+        EnsureActiveDraft(connection, transaction, candidateDraftId);
         var activeLink = connection.QuerySingleOrDefault<long?>(@"
-select PreviewLinkId
-from dbo.RegistrationSettingPreviewLinks with(updlock,holdlock)
-where PreviewLinkId=@previewLinkId and DraftId=@draftId and RevokedAtUtc is null",
-            new { previewLinkId, draftId = draftId.Value }, transaction);
+select p.PreviewLinkId
+from dbo.RegistrationSettingPreviewLinks p with(updlock,holdlock)
+join dbo.RegistrationSettingDrafts d on d.DraftId=p.DraftId
+where p.PreviewLinkId=@previewLinkId and p.DraftId=@candidateDraftId and p.RevokedAtUtc is null
+ and (p.ExpiresAtUtc is null or p.ExpiresAtUtc>@nowUtc) and d.Status='Active'",
+            new { previewLinkId, candidateDraftId, nowUtc }, transaction);
         if (!activeLink.HasValue)
         {
             throw new DBConcurrencyException("The preview link was already revoked or invalidated.");
         }
 
-        return draftId.Value;
+        return candidateDraftId;
     }
 
     private static void RevokeDraftPreviewLinks(
