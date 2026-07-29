@@ -112,7 +112,12 @@ namespace Clc.PatronRegistration
 
         public void SetPatronCode()
         {
-            PatronCode = Settings.PatronCodeId;
+            var configuredId = Settings.PatronCodeId;
+            PatronCode = configuredId is > 0 ? configuredId : null;
+            if (configuredId is < 0)
+            {
+                logger.Error("Skipping invalid negative patron_code_id configuration.");
+            }
         }
 
         public void HandleSmsSettings()
@@ -319,7 +324,7 @@ namespace Clc.PatronRegistration
             if (Settings.DisplayECardCheckbox && IsECard)
             {
                 Barcode = $"{Settings.EcardBarcodePrefix}{DateTimeOffset.Now.ToUnixTimeSeconds()}";
-                PatronCode = Settings.EcardPatronCodeId;
+                PatronCode = PositivePatronCodeOrCurrent(Settings.EcardPatronCodeId, "ecard_patron_code_id");
             }
         }
 
@@ -334,11 +339,11 @@ namespace Clc.PatronRegistration
             {
                 if (IsTeacher)
                 {
-                    PatronCode = Settings.TeacherPatronCodeId;
+                    PatronCode = PositivePatronCodeOrCurrent(Settings.TeacherPatronCodeId, "teacher_patron_code_id");
                 }
                 if (IsStudent)
                 {
-                    PatronCode = Settings.StudentPatronCodeId;
+                    PatronCode = PositivePatronCodeOrCurrent(Settings.StudentPatronCodeId, "student_patron_code_id");
                 }
             }
         }
@@ -352,8 +357,26 @@ namespace Clc.PatronRegistration
             }
             else
             {
-                LogonUserID = Settings.RegistrationLogonUserId;
+                var configuredId = Settings.RegistrationLogonUserId;
+                LogonUserID = configuredId > 0 ? configuredId : 0;
+                if (configuredId < 0)
+                {
+                    logger.Error("Skipping invalid negative registration_logon_user_id configuration.");
+                }
             }
+        }
+
+        private int? PositivePatronCodeOrCurrent(int configuredId, string settingKey)
+        {
+            if (configuredId > 0)
+            {
+                return configuredId;
+            }
+            if (configuredId < 0)
+            {
+                logger.Error($"Skipping invalid negative {settingKey} configuration.");
+            }
+            return PatronCode;
         }
 
         public void HandleExpirationDate(PatronRegistrationParams registrationParams)
@@ -595,18 +618,27 @@ namespace Clc.PatronRegistration
 
         public void HandleAddToMailingList(IPapiClient papi, int patronId)
         {
-            if (AddToMailingList && Settings.MailingListRecordSetId > 0)
+            var recordSetId = Settings.MailingListRecordSetId;
+            if (AddToMailingList && patronId > 0 && recordSetId > 0)
             {
-                papi.RecordSetContentAdd(Settings.MailingListRecordSetId, patronId);
+                papi.RecordSetContentAdd(recordSetId, patronId);
+            }
+            else if (AddToMailingList && (patronId <= 0 || recordSetId < 0))
+            {
+                logger.Error("Skipping mailing-list record-set update because a required identifier is invalid.");
             }
         }
 
         public void AddToRecordSet(IPapiClient papi, int patronId)
         {
             var recordSetId = Settings.AddToRecordSetId;
-            if (recordSetId is > 0)
+            if (patronId > 0 && recordSetId is > 0)
             {
                 papi.RecordSetContentAdd(recordSetId.Value, patronId);
+            }
+            else if (patronId <= 0 || recordSetId is < 0)
+            {
+                logger.Error("Skipping configured record-set update because a required identifier is invalid.");
             }
         }
 
@@ -658,7 +690,14 @@ namespace Clc.PatronRegistration
         }
         public void AddPatronToRecordSet(int patronId, int recordSetId, IPapiClient papi)
         {
-            if (patronId == 0 || recordSetId == 0) return;
+            if (patronId <= 0 || recordSetId <= 0)
+            {
+                if (patronId < 0 || recordSetId < 0)
+                {
+                    logger.Error("Skipping address-validation record-set update because a required identifier is invalid.");
+                }
+                return;
+            }
 
             var response = papi.RecordSetContentAdd(recordSetId, patronId);
             if (response.Data.PAPIErrorCode < 0)

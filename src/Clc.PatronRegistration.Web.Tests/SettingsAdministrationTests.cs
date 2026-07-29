@@ -2,12 +2,77 @@ using Clc.PatronRegistration.Administration;
 using Clc.PatronRegistration.Configuration;
 using Clc.PatronRegistration.Web.Settings;
 using Clc.PatronRegistration.Web.Models;
+using Clc.PatronRegistration.Validators;
+using System.ComponentModel.DataAnnotations;
 
 namespace Clc.PatronRegistration.Tests;
 
 [TestClass]
 public class SettingsAdministrationTests
 {
+    [TestMethod]
+    public void RequireCatalog_ExactlyMatchesDbConfiguredRequiredMetadata()
+    {
+        var metadataFields = typeof(RegistrationMetadata).GetProperties()
+            .Where(property => property.GetCustomAttributes(typeof(DbConfiguredRequired), true).Any())
+            .Select(property => property.Name)
+            .OrderBy(name => name)
+            .ToArray();
+        var catalog = new SettingCatalog();
+        var catalogFields = catalog.All.Where(definition => definition.Group == SettingGroup.Require)
+            .Select(definition => definition.Key["require.".Length..])
+            .OrderBy(name => name)
+            .ToArray();
+
+        CollectionAssert.AreEqual(new[] { "EmailAddress", "PhoneVoice1", "ReceiveEreceipts", "User5" }, metadataFields);
+        CollectionAssert.AreEqual(metadataFields, catalogFields);
+    }
+
+    [TestMethod]
+    public void GloballyRequiredFields_AreNotExposedAsDynamicRequirements()
+    {
+        var requiredFields = typeof(RegistrationMetadata).GetProperties()
+            .Where(property => property.GetCustomAttributes(typeof(RequiredAttribute), true).Any())
+            .Select(property => property.Name)
+            .ToList();
+        var catalog = new SettingCatalog();
+
+        CollectionAssert.AreEquivalent(new[] { "NameFirst", "NameLast", "Birthdate", "Password" }, requiredFields);
+        foreach (var field in requiredFields)
+        {
+            Assert.IsFalse(catalog.TryGet($"require.{field}", out _));
+            Assert.IsTrue(catalog.TryGet($"label.{field}", out _));
+            Assert.IsTrue(catalog.TryGet($"alert.{field}", out _));
+        }
+    }
+
+    [TestMethod]
+    public void FormCodeDeletionOwnership_DoesNotInferSystemOwnershipFromOtherLibraries()
+    {
+        Assert.IsNull(FormCodeDeletionOwnership.Classify(1, "shared", 1, false, false, false));
+        Assert.AreEqual(FormCodeDeletionKind.LibraryDefinition,
+            FormCodeDeletionOwnership.Classify(2, "shared", 1, true, false, true)!.Kind);
+        Assert.AreEqual(FormCodeDeletionKind.LibraryDefinition,
+            FormCodeDeletionOwnership.Classify(9, "shared", 1, true, false, true)!.Kind);
+    }
+
+    [TestMethod]
+    public void FormCodeDeletionOwnership_DistinguishesSystemDefinitionsAndLibraryCustomizations()
+    {
+        Assert.AreEqual(FormCodeDeletionKind.SystemDefinition,
+            FormCodeDeletionOwnership.Classify(1, "shared", 1, true, true, true)!.Kind);
+        Assert.AreEqual(FormCodeDeletionKind.LibraryCustomization,
+            FormCodeDeletionOwnership.Classify(2, "shared", 1, true, true, true)!.Kind);
+    }
+
+    [TestMethod]
+    public void FormCodeDeletionLockOrder_IsDraftThenPreviewThenSettingsMetadata()
+    {
+        CollectionAssert.AreEqual(
+            new[] { FormCodeDeletionLockStep.Drafts, FormCodeDeletionLockStep.PreviewLinks, FormCodeDeletionLockStep.SettingsAndMetadata },
+            FormCodeDeletionLockOrder.Required.ToArray());
+    }
+
     [TestMethod]
     public void PreviewRepositoryLockOrder_IsCandidateThenDraftThenLinkThenChanges()
     {
@@ -186,7 +251,8 @@ public class SettingsAdministrationTests
         Assert.AreEqual(
             catalog.All.Count,
             catalog.All.Select(setting => setting.Key.ToLowerInvariant()).Distinct().Count());
-        Assert.IsTrue(catalog.TryGet("require.NameFirst", out _));
+        Assert.IsTrue(catalog.TryGet("require.PhoneVoice1", out _));
+        Assert.IsFalse(catalog.TryGet("require.NameFirst", out _));
         Assert.IsFalse(catalog.TryGet("require.DropTable", out _));
     }
 
@@ -205,7 +271,6 @@ public class SettingsAdministrationTests
             CollectionAssert.Contains(catalog.DynamicFieldSuffixes.ToList(), field);
             Assert.IsTrue(catalog.TryGet($"alert.{field}", out _));
             Assert.IsTrue(catalog.TryGet($"label.{field}", out _));
-            Assert.IsTrue(catalog.TryGet($"require.{field}", out _));
         }
     }
 

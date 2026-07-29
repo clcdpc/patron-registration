@@ -14,9 +14,13 @@ The single configured system organization, `SettingsAdministration:SystemOrganiz
 
 The code-defined catalog is the write allowlist. It defines editor type, validation, sensitivity, empty-value behavior, and recognized dynamic suffixes. String-like values can be explicitly empty. Boolean and non-null numeric/date values cannot. Nullable integer/date settings store an empty string and `DbSettingProvider` consistently converts that representation to `null`. Removing an override is always a distinct operation.
 
+Fields decorated with ASP.NET `[Required]` are globally required for every organization and form and are never exposed through `require.*`. Dynamic `require.*` administration is limited to the properties that actually use `[DbConfiguredRequired]`: `PhoneVoice1`, `ReceiveEreceipts`, `EmailAddress`, and `User5`. Configurable `label.*` entries remain available for supported display-name fields. `alert.*` values remain stored and administrable for future use, but applying them to validation messages is deferred and is not part of the current runtime behavior.
+
 `add_to_record_set_id` is a nullable positive integer: missing and explicitly empty values disable the post-registration record-set action, positive values select the record set, and zero or negative values fail catalog validation. Legacy malformed nullable values are converted to `null` rather than throwing after patron creation.
 
 Configured patron-code and registration-logon identifiers must be positive. Record-set settings whose existing runtime contract uses zero as “disabled” accept zero but reject negative values; positive values select the Polaris record set. This prevents an administratively supplied negative identifier from reaching a post-creation PAPI call.
+
+Runtime side-effect guards are independent of catalog validation for legacy rows: every record-set operation requires both a positive patron ID and a positive record-set ID. Missing, malformed, zero, or negative optional identifiers are skipped, and negative legacy configuration produces only a safe key-level configuration log without credentials or secret values.
 
 ## Direct save and drafts
 
@@ -38,7 +42,7 @@ Preview rendering uses the real registration view and a `PreviewSettingProvider`
 
 MVC `ModelState` is authoritative for normal and live-preview submissions before Melissa, PAPI, Postmark, history, notes, record sets, or patron mutations can run. Safe preview returns the same keyed MVC errors to the browser but never continues into the final workflow; a valid safe submission reports that MVC validation passed while final submission remained blocked.
 
-After endpoint routing and before MVC controller activation, `PreviewRequestContextMiddleware` resolves the bearer token, active draft, operational branch, eligibility, revocation, and expiration into one scoped preview context. The scoped `ISettingProvider` returns that context's `PreviewSettingProvider`; an invalid preview never falls back to live system defaults. This means registration construction, MVC model binding, `label.*` metadata, `require.*` validation, `alert.*` messages, Razor tag helpers, duplicate checks, and final submission all see the same draft overlay. Scoped Melissa and Postmark client factories select credentials from this same provider, so staged credential changes apply only to the validated preview request.
+After endpoint routing and before MVC controller activation, `PreviewRequestContextMiddleware` resolves the bearer token, active draft, operational branch, eligibility, revocation, and expiration into one scoped preview context. The scoped `ISettingProvider` returns that context's `PreviewSettingProvider`; an invalid preview never falls back to live system defaults. This means registration construction, MVC model binding, `label.*` metadata, supported `require.*` validation, Razor tag helpers, duplicate checks, and final submission all see the same draft overlay. Scoped Melissa and Postmark client factories select credentials from this same provider, so staged credential changes apply only to the validated preview request.
 
 Treat every preview URL as a credential. Revoke it immediately if shared incorrectly. Enabling live mode permits real PAPI, Melissa, Postmark, record-set, note, and registration-history effects.
 
@@ -52,7 +56,7 @@ The empty default code is implicit and cannot be created, renamed, or deleted. N
 
 Distinct nonblank codes already present in `RegistrationFormSettings` are included even when metadata has never been deployed, including `kiosk`. One centralized availability service supplies both selectors and server authorization, so displayed legacy codes can be inspected and edited before adoption because they already affect production. They appear as legacy/unregistered and can be explicitly adopted into authorized system or library metadata. Branch-owned rows are mapped to their library with the existing organization cache, and codes from another library remain unavailable. Adoption creates metadata only and never copies inherited settings.
 
-Deletion requires an impact page showing metadata, override, draft, and preview-link counts. The transaction removes affected metadata, library/branch or global overrides, drafts, and links. Removing a library customization therefore resumes system metadata inheritance. Creating metadata never copies inherited setting rows.
+Deletion requires an impact page showing the owner, definition/customization type, legacy status, affected organizations, and metadata/override/draft/link counts. The serializable transaction locks drafts, then preview links, then revalidates ownership from settings and metadata before deleting anything. A system deletion is rejected unless a system metadata or system-owned legacy definition exists, so it cannot erase independently owned library codes with the same string. Library deletion is restricted to that library and its branches; removing a library customization resumes system inheritance. Creating metadata never copies inherited setting rows.
 
 ## Audit and cache consistency
 

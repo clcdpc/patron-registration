@@ -17,7 +17,7 @@ public class SettingsControllerTests
 {
     [DataTestMethod]
     [DataRow("force_ecard_remotely")]
-    [DataRow("require.AddToMailingList")]
+    [DataRow("require.User5")]
     public void DirectSave_WithOnlyLateOrDynamicMutation_PersistsExactlyThatMutation(string key)
     {
         var repository = new Mock<ISettingsAdministrationRepository>();
@@ -278,6 +278,78 @@ public class SettingsControllerTests
         repository.Verify(service => service.DirectSave(
             It.IsAny<int>(), It.IsAny<string>(), It.IsAny<long>(), It.IsAny<IReadOnlyList<SettingMutation>>(),
             It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), It.IsAny<AuditContext>()), Times.Never);
+    }
+
+    [TestMethod]
+    public void ConfirmDeleteForm_NonexistentOrUnownedCodeReturnsNotFound()
+    {
+        var repository = new Mock<ISettingsAdministrationRepository>();
+        repository.Setup(service => service.GetFormCodeDeletionTarget(1, "library-only", 1, It.IsAny<IReadOnlyCollection<int>>()))
+            .Returns((FormCodeDeletionTarget?)null);
+        var authorization = new Mock<ISettingsAuthorizationService>();
+        authorization.Setup(service => service.Describe(It.IsAny<ClaimsPrincipal>()))
+            .Returns(new SettingsPrincipal(true, -1, true));
+        var controller = CreateController(repository, authorization);
+
+        var result = controller.ConfirmDeleteForm("library-only", 1);
+
+        Assert.IsInstanceOfType<NotFoundObjectResult>(result);
+    }
+
+    [TestMethod]
+    public void DeleteForm_OwnershipChangingAfterConfirmationReturnsConflict()
+    {
+        var repository = new Mock<ISettingsAdministrationRepository>();
+        repository.Setup(service => service.DeleteFormCode(
+                It.IsAny<FormCodeDeletionTarget>(), 1, It.IsAny<IReadOnlyCollection<int>>(), It.IsAny<AuditContext>()))
+            .Throws(new System.Data.DBConcurrencyException("ownership changed"));
+        var authorization = new Mock<ISettingsAuthorizationService>();
+        authorization.Setup(service => service.Describe(It.IsAny<ClaimsPrincipal>()))
+            .Returns(new SettingsPrincipal(true, -1, true));
+        var controller = CreateController(repository, authorization);
+
+        var result = controller.DeleteForm("shared", 1, FormCodeDeletionKind.SystemDefinition, false);
+
+        Assert.IsInstanceOfType<ConflictObjectResult>(result);
+    }
+
+    [TestMethod]
+    public void DeleteLibraryForm_TargetsOnlyOwningLibraryAndBranches()
+    {
+        var repository = new Mock<ISettingsAdministrationRepository>();
+        var authorization = new Mock<ISettingsAuthorizationService>();
+        authorization.Setup(service => service.Describe(It.IsAny<ClaimsPrincipal>()))
+            .Returns(new SettingsPrincipal(true, 2, false));
+        authorization.Setup(service => service.CanManage(It.IsAny<ClaimsPrincipal>(), 2, It.IsAny<bool>())).Returns(true);
+        var controller = CreateController(repository, authorization);
+
+        var result = controller.DeleteForm("shared", 2, FormCodeDeletionKind.LibraryDefinition, false);
+
+        Assert.IsInstanceOfType<RedirectToActionResult>(result);
+        repository.Verify(service => service.DeleteFormCode(
+            It.Is<FormCodeDeletionTarget>(target => target.OwnerOrganizationId == 2 && target.FormCode == "shared"),
+            1,
+            It.Is<IReadOnlyCollection<int>>(organizations => organizations.Contains(2) && organizations.Contains(3) && !organizations.Contains(1) && !organizations.Contains(9)),
+            It.IsAny<AuditContext>()), Times.Once);
+    }
+
+    [TestMethod]
+    public void DeleteGenuineSystemForm_TargetsAllSystemLibraryAndBranchScopes()
+    {
+        var repository = new Mock<ISettingsAdministrationRepository>();
+        var authorization = new Mock<ISettingsAuthorizationService>();
+        authorization.Setup(service => service.Describe(It.IsAny<ClaimsPrincipal>()))
+            .Returns(new SettingsPrincipal(true, -1, true));
+        var controller = CreateController(repository, authorization);
+
+        var result = controller.DeleteForm("shared", 1, FormCodeDeletionKind.SystemDefinition, false);
+
+        Assert.IsInstanceOfType<RedirectToActionResult>(result);
+        repository.Verify(service => service.DeleteFormCode(
+            It.Is<FormCodeDeletionTarget>(target => target.Kind == FormCodeDeletionKind.SystemDefinition),
+            1,
+            It.Is<IReadOnlyCollection<int>>(organizations => organizations.Contains(1) && organizations.Contains(2) && organizations.Contains(3)),
+            It.IsAny<AuditContext>()), Times.Once);
     }
 
     [TestMethod]

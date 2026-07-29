@@ -40,7 +40,7 @@ public class PreviewRequestContextTests
     {
         var draft = ActiveDraft(
             new("label.NameFirst", DraftOperation.Upsert, "Preview first name"),
-            new("require.NameFirst", DraftOperation.Upsert, "true"),
+            new("require.PhoneVoice1", DraftOperation.Upsert, "true"),
             new("alert.NameFirst", DraftOperation.Upsert, "Preview name required"),
             new("melissa_data_api_key", DraftOperation.Upsert, "preview-melissa-key"),
             new("postmark_api_key", DraftOperation.Upsert, "preview-postmark-key"));
@@ -48,7 +48,7 @@ public class PreviewRequestContextTests
 
         Assert.IsNotNull(context);
         Assert.AreEqual("Preview first name", context.Settings.GetFieldLabel("NameFirst"));
-        Assert.IsTrue(context.Settings.GetFieldRequired("NameFirst"));
+        Assert.IsTrue(context.Settings.GetFieldRequired("PhoneVoice1"));
         Assert.AreEqual("Preview name required", context.Settings.GetFieldErrorMessage("NameFirst"));
 
         var emailFactory = new Mock<IEmailSenderFactory>();
@@ -226,7 +226,7 @@ public class PreviewRequestContextTests
     {
         var context = CreateResolver(draft: ActiveDraft(
             new("label.NameFirst", DraftOperation.Upsert, "Preview first name"),
-            new("require.NameFirst", DraftOperation.Upsert, "true"),
+            new("require.PhoneVoice1", DraftOperation.Upsert, "true"),
             new("alert.NameFirst", DraftOperation.Upsert, "Preview alert"))).Resolve("token")!;
         var services = new ServiceCollection().AddSingleton<ISettingProvider>(context.Settings).BuildServiceProvider();
         var httpContext = new DefaultHttpContext { RequestServices = services };
@@ -236,7 +236,7 @@ public class PreviewRequestContextTests
         var displayName = new DbConfiguredDisplayNameAttribute(nameof(Registration.NameFirst)).DisplayName;
         var validation = new DbConfiguredRequired().GetValidationResult(
             string.Empty,
-            new ValidationContext(registration, services, null) { MemberName = nameof(Registration.NameFirst) });
+            new ValidationContext(registration, services, null) { MemberName = nameof(Registration.PhoneVoice1) });
 
         Assert.AreSame(context.Settings, registration.Settings);
         Assert.AreEqual("Preview first name", displayName);

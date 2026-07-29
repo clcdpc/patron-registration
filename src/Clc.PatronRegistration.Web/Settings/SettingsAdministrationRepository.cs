@@ -61,6 +61,34 @@ public static class PreviewLockOrder
 
 public sealed record FormCodeImpact(int MetadataRows, int OverrideRows, int Drafts, int PreviewLinks);
 public sealed record LegacyFormCodeRow(int OrganizationId, string FormCode);
+public enum FormCodeDeletionKind { SystemDefinition, LibraryDefinition, LibraryCustomization }
+public sealed record FormCodeDeletionTarget(int OwnerOrganizationId, string FormCode, FormCodeDeletionKind Kind, bool IsLegacy);
+public static class FormCodeDeletionOwnership
+{
+    public static FormCodeDeletionTarget? Classify(int ownerOrganizationId, string formCode, int systemOrganizationId,
+        bool ownerMetadata, bool systemMetadata, bool ownedSettings)
+    {
+        if (!ownerMetadata && !ownedSettings)
+        {
+            return null;
+        }
+
+        var kind = ownerOrganizationId == systemOrganizationId
+            ? FormCodeDeletionKind.SystemDefinition
+            : systemMetadata ? FormCodeDeletionKind.LibraryCustomization : FormCodeDeletionKind.LibraryDefinition;
+        return new FormCodeDeletionTarget(ownerOrganizationId, formCode, kind, !ownerMetadata);
+    }
+}
+public enum FormCodeDeletionLockStep { Drafts, PreviewLinks, SettingsAndMetadata }
+public static class FormCodeDeletionLockOrder
+{
+    public static IReadOnlyList<FormCodeDeletionLockStep> Required { get; } =
+    [
+        FormCodeDeletionLockStep.Drafts,
+        FormCodeDeletionLockStep.PreviewLinks,
+        FormCodeDeletionLockStep.SettingsAndMetadata
+    ];
+}
 
 public sealed record SettingsAuditRow(
     long AuditEventId,
@@ -109,7 +137,8 @@ public interface ISettingsAdministrationRepository
     IReadOnlyList<LegacyFormCodeRow> GetLegacyFormCodes();
     void SaveFormCode(FormCodeMetadata metadata, bool isCreate, AuditContext audit);
     FormCodeImpact GetFormCodeImpact(int ownerOrganizationId, string formCode, IReadOnlyCollection<int> affectedOrganizations);
-    void DeleteFormCode(int ownerOrganizationId, string formCode, IReadOnlyCollection<int> affectedOrganizations, AuditContext audit);
+    FormCodeDeletionTarget? GetFormCodeDeletionTarget(int ownerOrganizationId, string formCode, int systemOrganizationId, IReadOnlyCollection<int> affectedOrganizations);
+    void DeleteFormCode(FormCodeDeletionTarget expectedTarget, int systemOrganizationId, IReadOnlyCollection<int> affectedOrganizations, AuditContext audit);
     IEnumerable<SettingsAuditRow> SearchAudit(int? libraryId, bool includeSensitive, string? term);
     void WriteAudit(string eventType, bool succeeded, AuditContext audit, string? failureReason = null, long? draftId = null, long? previewLinkId = null, string? metadataJson = null);
 }
@@ -508,9 +537,15 @@ select
             new { ownerOrganizationId, formCode, affectedOrganizations });
     }
 
-    public void DeleteFormCode(int ownerOrganizationId, string formCode, IReadOnlyCollection<int> affectedOrganizations, AuditContext audit)
+    public FormCodeDeletionTarget? GetFormCodeDeletionTarget(int ownerOrganizationId, string formCode, int systemOrganizationId, IReadOnlyCollection<int> affectedOrganizations)
     {
-        if (string.IsNullOrWhiteSpace(formCode))
+        using var connection = Open();
+        return ReadFormCodeDeletionTarget(connection, null, ownerOrganizationId, formCode, systemOrganizationId, affectedOrganizations, false);
+    }
+
+    public void DeleteFormCode(FormCodeDeletionTarget expectedTarget, int systemOrganizationId, IReadOnlyCollection<int> affectedOrganizations, AuditContext audit)
+    {
+        if (string.IsNullOrWhiteSpace(expectedTarget.FormCode))
         {
             throw new ArgumentException("The default form code cannot be deleted.");
         }
@@ -519,25 +554,58 @@ select
         _ = connection.Query<long>(@"
 select DraftId from dbo.RegistrationSettingDrafts with(updlock,holdlock)
 where OrganizationId in @affectedOrganizations and FormCode=@formCode
-order by DraftId", new { formCode, affectedOrganizations }, transaction).ToList();
+order by DraftId", new { formCode = expectedTarget.FormCode, affectedOrganizations }, transaction).ToList();
+        _ = connection.Query<long>(@"
+select p.PreviewLinkId from dbo.RegistrationSettingPreviewLinks p with(updlock,holdlock)
+join dbo.RegistrationSettingDrafts d on d.DraftId=p.DraftId
+where d.OrganizationId in @affectedOrganizations and d.FormCode=@formCode
+order by p.PreviewLinkId", new { formCode = expectedTarget.FormCode, affectedOrganizations }, transaction).ToList();
+
+        var actualTarget = ReadFormCodeDeletionTarget(connection, transaction, expectedTarget.OwnerOrganizationId,
+            expectedTarget.FormCode, systemOrganizationId, affectedOrganizations, true);
+        if (actualTarget is null || actualTarget.Kind != expectedTarget.Kind || actualTarget.IsLegacy != expectedTarget.IsLegacy)
+        {
+            throw new DBConcurrencyException("The form-code ownership changed or no longer exists. Reload the form-code page.");
+        }
         connection.Execute(@"
 delete p from dbo.RegistrationSettingPreviewLinks p join dbo.RegistrationSettingDrafts d on d.DraftId=p.DraftId where d.OrganizationId in @affectedOrganizations and d.FormCode=@formCode;
 delete from dbo.RegistrationSettingDrafts where OrganizationId in @affectedOrganizations and FormCode=@formCode;
 delete from dbo.RegistrationFormSettings where OrganizationID in @affectedOrganizations and FormCode=@formCode;
 delete from dbo.RegistrationFormCodeMetadata where OrganizationId in @affectedOrganizations and FormCode=@formCode;",
-            new { ownerOrganizationId, formCode, affectedOrganizations }, transaction);
+            new { ownerOrganizationId = expectedTarget.OwnerOrganizationId, formCode = expectedTarget.FormCode, affectedOrganizations }, transaction);
         foreach (var organizationId in AffectedVersionScopes(affectedOrganizations))
         {
-            EnsureVersionRow(connection, transaction, organizationId, formCode);
+            EnsureVersionRow(connection, transaction, organizationId, expectedTarget.FormCode);
             connection.Execute(
                 "update dbo.RegistrationSettingScopeVersions set Version=Version+1,ModifiedAtUtc=SYSUTCDATETIME() where OrganizationId=@organizationId and FormCode=@formCode",
-                new { organizationId, formCode }, transaction);
+                new { organizationId, formCode = expectedTarget.FormCode }, transaction);
         }
         connection.Execute(
             "update dbo.RegistrationSettingsCacheGeneration set Generation=Generation+1,ModifiedAtUtc=SYSUTCDATETIME() where Id=1",
             transaction: transaction);
         InsertAudit(connection, transaction, "FormCodeDeleted", true, audit);
         transaction.Commit();
+    }
+
+    private static FormCodeDeletionTarget? ReadFormCodeDeletionTarget(SqlConnection connection, IDbTransaction? transaction,
+        int ownerOrganizationId, string formCode, int systemOrganizationId,
+        IReadOnlyCollection<int> affectedOrganizations, bool lockRows)
+    {
+        var hint = lockRows ? " with(updlock,holdlock)" : string.Empty;
+        var ownerMetadata = connection.QuerySingle<int>(
+            $"select count(*) from dbo.RegistrationFormCodeMetadata{hint} where OrganizationId=@ownerOrganizationId and FormCode=@formCode",
+            new { ownerOrganizationId, formCode }, transaction) > 0;
+        var systemMetadata = ownerOrganizationId == systemOrganizationId || connection.QuerySingle<int>(
+            $"select count(*) from dbo.RegistrationFormCodeMetadata{hint} where OrganizationId=@systemOrganizationId and FormCode=@formCode",
+            new { systemOrganizationId, formCode }, transaction) > 0;
+        IReadOnlyCollection<int> legacyOrganizations = ownerOrganizationId == systemOrganizationId
+            ? [systemOrganizationId]
+            : affectedOrganizations;
+        var hasOwnedSettings = connection.QuerySingle<int>(
+            $"select count(*) from dbo.RegistrationFormSettings{hint} where OrganizationID in @legacyOrganizations and FormCode=@formCode",
+            new { legacyOrganizations, formCode }, transaction) > 0;
+        return FormCodeDeletionOwnership.Classify(ownerOrganizationId, formCode, systemOrganizationId,
+            ownerMetadata, systemMetadata, hasOwnedSettings);
     }
 
     public static IReadOnlyList<int> AffectedVersionScopes(IEnumerable<int> affectedOrganizations) =>

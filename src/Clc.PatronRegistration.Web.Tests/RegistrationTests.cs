@@ -270,6 +270,21 @@ namespace Clc.PatronRegistration.Tests
             _mockPapiClient.Verify(p => p.RecordSetContentAdd(It.IsAny<int>(), It.IsAny<int>(), It.IsAny<int>(), It.IsAny<int>()), Times.Never);
         }
 
+        [DataTestMethod]
+        [DataRow(-1, 123)]
+        [DataRow(1, 0)]
+        [DataRow(1, -1)]
+        public void HandleAddToMailingList_InvalidLegacyIdentifiersDoNotCallPapi(int recordSetId, int patronId)
+        {
+            _mockSettings.Setup(s => s.MailingListRecordSetId).Returns(recordSetId);
+            var registration = new Registration(_mockSettings.Object) { AddToMailingList = true };
+
+            registration.HandleAddToMailingList(_mockPapiClient.Object, patronId);
+
+            _mockPapiClient.Verify(p => p.RecordSetContentAdd(
+                It.IsAny<int>(), It.IsAny<int>(), It.IsAny<int>(), It.IsAny<int>()), Times.Never);
+        }
+
         [TestMethod]
         public void AddToRecordSet_SettingsHasValue_CallsRecordSetContentAdd()
         {
@@ -292,6 +307,38 @@ namespace Clc.PatronRegistration.Tests
             registration.AddToRecordSet(_mockPapiClient.Object, 123);
 
             _mockPapiClient.Verify(p => p.RecordSetContentAdd(It.IsAny<int>(), It.IsAny<int>(), It.IsAny<int>(), It.IsAny<int>()), Times.Never);
+        }
+
+        [DataTestMethod]
+        [DataRow(0, 123)]
+        [DataRow(-1, 123)]
+        [DataRow(1, 0)]
+        [DataRow(1, -1)]
+        public void AddPatronToRecordSet_RequiresPositiveIdentifiers(int recordSetId, int patronId)
+        {
+            var registration = new Registration(_mockSettings.Object);
+
+            registration.AddPatronToRecordSet(patronId, recordSetId, _mockPapiClient.Object);
+
+            _mockPapiClient.Verify(p => p.RecordSetContentAdd(
+                It.IsAny<int>(), It.IsAny<int>(), It.IsAny<int>(), It.IsAny<int>()), Times.Never);
+        }
+
+        [TestMethod]
+        public void NegativeLegacyPatronCodeAndLogonUserAreNotApplied()
+        {
+            _mockSettings.Setup(s => s.PatronCodeId).Returns(-10);
+            _mockSettings.Setup(s => s.RegistrationLogonUserId).Returns(-20);
+            var registration = new Registration(_mockSettings.Object)
+            {
+                AddressVerificationStatus = AddressVerificationStatus.Invalid
+            };
+
+            registration.SetPatronCode();
+            registration.SetLogonUserID();
+
+            Assert.IsNull(registration.PatronCode);
+            Assert.AreEqual(0, registration.LogonUserID);
         }
 
         [TestMethod]

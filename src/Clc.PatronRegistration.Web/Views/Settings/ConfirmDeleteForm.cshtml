@@ -3,6 +3,21 @@
     ViewData["Title"] = "Delete form code";
 }
 <h1>Delete form code @Model.FormCode</h1>
+<dl>
+    <dt>Owner organization</dt>
+    <dd>@Model.OwnerOrganizationName (@Model.OrganizationId)</dd>
+    <dt>Definition type</dt>
+    <dd>@Model.KindDisplayName</dd>
+    <dt>Registration status</dt>
+    <dd>@(Model.IsLegacy ? "Legacy/unregistered" : "Metadata registered")</dd>
+</dl>
+<h2>Affected libraries and branches</h2>
+<ul>
+    @foreach (var organizationName in Model.AffectedOrganizationNames)
+    {
+        <li>@organizationName</li>
+    }
+</ul>
 <p>This operation is transactional and cannot be undone. It will remove:</p>
 <ul>
     <li>@Model.Impact.MetadataRows metadata rows</li>
@@ -13,6 +28,8 @@
 <form asp-action="DeleteForm" asp-route-formCode="@Model.FormCode" method="post">
     @Html.AntiForgeryToken()
     <input type="hidden" name="organizationId" value="@Model.OrganizationId" />
+    <input type="hidden" name="kind" value="@Model.Kind" />
+    <input type="hidden" name="isLegacy" value="@Model.IsLegacy" />
     <button type="submit" class="danger-button">Delete form code and related data</button>
     <a asp-action="Forms" asp-route-libraryId="@Model.OrganizationId">Cancel</a>
 </form>

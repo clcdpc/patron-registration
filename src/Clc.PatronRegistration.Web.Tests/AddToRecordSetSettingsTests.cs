@@ -32,6 +32,26 @@ public class AddToRecordSetSettingsTests
         Assert.IsNull(provider.AddToRecordSetId);
     }
 
+    [DataTestMethod]
+    [DataRow("mailing_list_record_set_id")]
+    [DataRow("valid_address_record_set_id")]
+    [DataRow("valid_address_plus_name_record_set_id")]
+    [DataRow("invalid_address_record_set_id")]
+    public void LegacyMalformedNonNullableRecordSetIds_AreSafelyDisabled(string key)
+    {
+        var cache = new TestCache { SettingsCache = [Setting(3, "not-an-id", key)] };
+        var provider = new DbSettingProvider(3, cache);
+
+        var value = key switch
+        {
+            "mailing_list_record_set_id" => provider.MailingListRecordSetId,
+            "valid_address_record_set_id" => provider.ValidAddressRecordSetId,
+            "valid_address_plus_name_record_set_id" => provider.ValidAddressPlusNameRecordSetId,
+            _ => provider.InvalidAddressRecordSetId
+        };
+        Assert.AreEqual(0, value);
+    }
+
     [TestMethod]
     public void PositiveOverride_ReturnsConfiguredId()
     {
@@ -117,11 +137,11 @@ public class AddToRecordSetSettingsTests
         return new DbSettingProvider(3, cache);
     }
 
-    private static RegistrationFormSetting Setting(int organizationId, string value) => new()
+    private static RegistrationFormSetting Setting(int organizationId, string value, string key = "add_to_record_set_id") => new()
     {
         OrganizationID = organizationId,
         FormCode = string.Empty,
-        Setting = "add_to_record_set_id",
+        Setting = key,
         Value = value
     };
 }

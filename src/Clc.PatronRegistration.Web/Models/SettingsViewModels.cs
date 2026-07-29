@@ -89,6 +89,17 @@ public sealed class FormCodeRequest
 public sealed class DeleteFormCodeViewModel
 {
     public int OrganizationId { get; set; }
+    public string OwnerOrganizationName { get; set; } = string.Empty;
     public string FormCode { get; set; } = string.Empty;
+    public FormCodeDeletionKind Kind { get; set; }
+    public string KindDisplayName => Kind switch
+    {
+        FormCodeDeletionKind.SystemDefinition => "System definition",
+        FormCodeDeletionKind.LibraryDefinition => "Library definition",
+        FormCodeDeletionKind.LibraryCustomization => "Library customization",
+        _ => Kind.ToString()
+    };
+    public bool IsLegacy { get; set; }
+    public IReadOnlyList<string> AffectedOrganizationNames { get; set; } = [];
     public FormCodeImpact Impact { get; set; } = new(0, 0, 0, 0);
 }

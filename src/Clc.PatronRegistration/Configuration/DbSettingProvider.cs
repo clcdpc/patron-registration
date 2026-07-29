@@ -35,6 +35,12 @@ namespace Clc.PatronRegistration.Configuration
             return ConvertToType(dbValue, defaultValue);
         }
 
+        private int GetLegacySafeInteger(string name)
+        {
+            var value = GetSetting<string>(name);
+            return int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) ? parsed : 0;
+        }
+
         public static T ConvertToType<T>(string? value, T defaultValue = default!)
         {
             var t = typeof(T);
@@ -146,11 +152,11 @@ namespace Clc.PatronRegistration.Configuration
         public string MailingListDescriptionHtml => GetSetting<string>("mailing_list_description_html");
         public bool DisplayMailingListCheckbox => GetSetting<bool>("display_mailing_list_checkbox");
         public string MailingListCheckboxLabel => GetSetting<string>("mailing_list_checkbox_label");
-        public int MailingListRecordSetId => GetSetting<int>("mailing_list_record_set_id");
-        public int RegistrationLogonUserId => GetSetting<int>("registration_logon_user_id");
-        public int EcardPatronCodeId => GetSetting<int>("ecard_patron_code_id");
-        public int TeacherPatronCodeId => GetSetting<int>("teacher_patron_code_id");
-        public int StudentPatronCodeId => GetSetting<int>("student_patron_code_id");
+        public int MailingListRecordSetId => GetLegacySafeInteger("mailing_list_record_set_id");
+        public int RegistrationLogonUserId => GetLegacySafeInteger("registration_logon_user_id");
+        public int EcardPatronCodeId => GetLegacySafeInteger("ecard_patron_code_id");
+        public int TeacherPatronCodeId => GetLegacySafeInteger("teacher_patron_code_id");
+        public int StudentPatronCodeId => GetLegacySafeInteger("student_patron_code_id");
         public string SchoolInfoFormat => GetSetting<string>("school_info_format");
         public string ResponsiblePersonDisclaimer => GetSetting<string>("responsible_person_disclaimer");
         public string EcardRegistrationText => GetSetting<string>("ecard_registration_text");
@@ -179,11 +185,11 @@ namespace Clc.PatronRegistration.Configuration
         public string ValidAddressPlusNameRegistrationText => GetSetting<string>("valid_address_plus_name_registration_text");
         public string OutOfStateBlockMessage => GetSetting<string>("out_of_state_block_message");
         public string EcardBarcodePrefix => GetSetting<string>("ecard_barcode_prefix");
-        public int ValidAddressPatronCodeId => GetSetting<int>("valid_address_patron_code_id");
-        public int ValidAddressPlusNamePatronCodeId => GetSetting<int>("valid_address_plus_name_patron_code_id");
-        public int ValidAddressRecordSetId => GetSetting<int>("valid_address_record_set_id");
-        public int ValidAddressPlusNameRecordSetId => GetSetting<int>("valid_address_plus_name_record_set_id");
-        public int InvalidAddressRecordSetId => GetSetting<int>("invalid_address_record_set_id");
+        public int ValidAddressPatronCodeId => GetLegacySafeInteger("valid_address_patron_code_id");
+        public int ValidAddressPlusNamePatronCodeId => GetLegacySafeInteger("valid_address_plus_name_patron_code_id");
+        public int ValidAddressRecordSetId => GetLegacySafeInteger("valid_address_record_set_id");
+        public int ValidAddressPlusNameRecordSetId => GetLegacySafeInteger("valid_address_plus_name_record_set_id");
+        public int InvalidAddressRecordSetId => GetLegacySafeInteger("invalid_address_record_set_id");
         public int? AddToRecordSetId => GetSetting<int?>("add_to_record_set_id");
         public string PostRegistrationNoteText => GetSetting<string>("post_registration_note_text");
         public DateTime? ExpirationDate => GetSetting<DateTime?>("expiration_date");

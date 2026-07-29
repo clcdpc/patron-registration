@@ -90,6 +90,7 @@ public interface ISettingCatalog
     IReadOnlyList<SettingDefinition> All { get; }
     bool TryGet(string key, out SettingDefinition definition);
     IReadOnlyList<string> DynamicFieldSuffixes { get; }
+    IReadOnlyList<string> RequiredFieldSuffixes { get; }
 }
 
 public sealed class SettingCatalog : ISettingCatalog
@@ -251,6 +252,10 @@ public sealed class SettingCatalog : ISettingCatalog
         "RequestPickupBranchID", "User1", "User5", "DeliverCardToSchool", "IsStudent",
         "IsTeacher", "IsECard", "AddToMailingList"
     ];
+    public IReadOnlyList<string> RequiredFieldSuffixes { get; } =
+    [
+        "PhoneVoice1", "ReceiveEreceipts", "EmailAddress", "User5"
+    ];
     public IReadOnlyList<SettingDefinition> All { get; }
     private readonly Dictionary<string, SettingDefinition> byKey;
 
@@ -270,9 +275,12 @@ public sealed class SettingCatalog : ISettingCatalog
         }).ToList();
         foreach (var suffix in DynamicFieldSuffixes)
         {
-            list.Add(new($"alert.{suffix}", $"{Friendly(suffix)} alert", "Validation message shown for this field.", SettingValueType.LongString, SettingGroup.Alert));
+            list.Add(new($"alert.{suffix}", $"{Friendly(suffix)} alert", "Stored alert text reserved for future validation-message integration.", SettingValueType.LongString, SettingGroup.Alert));
             list.Add(new($"label.{suffix}", $"{Friendly(suffix)} label", "Label shown for this field.", SettingValueType.ShortString, SettingGroup.Label));
-            list.Add(new($"require.{suffix}", $"Require {Friendly(suffix)}", "Whether this field is required.", SettingValueType.Boolean, SettingGroup.Require, AllowEmpty: false));
+        }
+        foreach (var suffix in RequiredFieldSuffixes)
+        {
+            list.Add(new($"require.{suffix}", $"Require {Friendly(suffix)}", "Whether this dynamically validated field is required.", SettingValueType.Boolean, SettingGroup.Require, AllowEmpty: false));
         }
         All = list;
         byKey = list.ToDictionary(x => x.Key, StringComparer.OrdinalIgnoreCase);

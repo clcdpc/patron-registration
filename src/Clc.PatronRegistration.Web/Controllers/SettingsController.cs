@@ -482,24 +482,42 @@ public sealed class SettingsController(
             return Forbid();
         }
         var organizations = AffectedOrganizations(organizationId);
+        var target = repository.GetFormCodeDeletionTarget(
+            organizationId, formCode, settingsOptions.SystemOrganizationId, organizations);
+        if (target is null)
+        {
+            return NotFound("The selected form code is not owned by this scope.");
+        }
         return View(new DeleteFormCodeViewModel
         {
             OrganizationId = organizationId,
+            OwnerOrganizationName = cache.GetOrg(organizationId).Name,
             FormCode = formCode,
+            Kind = target.Kind,
+            IsLegacy = target.IsLegacy,
+            AffectedOrganizationNames = organizations.Select(id => cache.GetOrg(id).Name).ToList(),
             Impact = repository.GetFormCodeImpact(organizationId, formCode, organizations)
         });
     }
 
     [HttpPost("forms/{formCode}/delete")]
     [ValidateAntiForgeryToken]
-    public IActionResult DeleteForm(string formCode, int organizationId)
+    public IActionResult DeleteForm(string formCode, int organizationId, FormCodeDeletionKind kind, bool isLegacy)
     {
         var principal = RequireManager();
         if (principal is null || !CanDeleteFormCode(principal, organizationId, formCode))
         {
             return Forbid();
         }
-        repository.DeleteFormCode(organizationId, formCode, AffectedOrganizations(organizationId), CreateAudit(organizationId, formCode));
+        try
+        {
+            repository.DeleteFormCode(new FormCodeDeletionTarget(organizationId, formCode, kind, isLegacy),
+                settingsOptions.SystemOrganizationId, AffectedOrganizations(organizationId), CreateAudit(organizationId, formCode));
+        }
+        catch (DBConcurrencyException exception)
+        {
+            return Conflict(exception.Message);
+        }
         cacheInvalidator.LiveSettingsChanged();
         return RedirectToAction(nameof(Forms), new { libraryId = organizationId });
     }
