@@ -98,6 +98,60 @@ public class PreviewRequestContextTests
         var result = controller.Submit("ignored", new Registration(context.Settings));
 
         Assert.IsInstanceOfType<JsonResult>(result);
+        var attempt = ((JsonResult)result).Value as RegistrationAttempt;
+        Assert.IsNotNull(attempt);
+        Assert.AreEqual(0, attempt.Errors.Count);
+        StringAssert.Contains(attempt.Message, "MVC validation passed");
+        Assert.AreEqual(0, papi.Invocations.Count);
+        Assert.AreEqual(0, melissa.Invocations.Count);
+        Assert.AreEqual(0, email.Invocations.Count);
+    }
+
+    [DataTestMethod]
+    [DataRow("NameFirst", "Preview first name is required.")]
+    [DataRow("EmailAddress", "The email address is invalid.")]
+    public void SafePreview_ReturnsActualMvcErrorsWithoutExternalCalls(string field, string message)
+    {
+        var context = CreateResolver(link: Link("Active", allowLiveSubmission: false)).Resolve("token")!;
+        var repository = new Mock<ISettingsAdministrationRepository>();
+        var papi = new Mock<IPapiClient>();
+        var melissa = new Mock<IMelissaRestClient>();
+        var email = new Mock<IEmailSender>();
+        var controller = new PreviewController(repository.Object, new PreviewRequestContextAccessor { IsPreviewRequest = true, Current = context }, new TestCache(), Mock.Of<IDbHelper>(), papi.Object, melissa.Object, email.Object)
+        {
+            ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() }
+        };
+        controller.ModelState.AddModelError(field, message);
+
+        var result = (JsonResult)controller.Submit("ignored", new Registration(context.Settings));
+        var attempt = (RegistrationAttempt)result.Value!;
+
+        Assert.AreEqual(new KeyValuePair<string, string>(field, message), attempt.Errors.Single());
+        Assert.AreEqual(0, papi.Invocations.Count);
+        Assert.AreEqual(0, melissa.Invocations.Count);
+        Assert.AreEqual(0, email.Invocations.Count);
+    }
+
+    [TestMethod]
+    public void LivePreview_StagedRequiredFieldModelStateBlocksAllExternalCalls()
+    {
+        var draft = ActiveDraft(new("require.PhoneVoice1", DraftOperation.Upsert, "true"));
+        var context = CreateResolver(draft: draft, link: Link("Active", allowLiveSubmission: true)).Resolve("token")!;
+        var repository = new Mock<ISettingsAdministrationRepository>();
+        var papi = new Mock<IPapiClient>();
+        var melissa = new Mock<IMelissaRestClient>();
+        var email = new Mock<IEmailSender>();
+        var controller = new PreviewController(repository.Object, new PreviewRequestContextAccessor { IsPreviewRequest = true, Current = context }, new TestCache(), Mock.Of<IDbHelper>(), papi.Object, melissa.Object, email.Object)
+        {
+            ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() }
+        };
+        controller.ModelState.AddModelError("PhoneVoice1", "Phone is required by this preview draft.");
+
+        var result = (JsonResult)controller.Submit("ignored", new Registration(context.Settings));
+        var attempt = (RegistrationAttempt)result.Value!;
+
+        Assert.IsFalse(attempt.IsSuccess);
+        Assert.AreEqual("PhoneVoice1", attempt.Errors.Single().Key);
         Assert.AreEqual(0, papi.Invocations.Count);
         Assert.AreEqual(0, melissa.Invocations.Count);
         Assert.AreEqual(0, email.Invocations.Count);

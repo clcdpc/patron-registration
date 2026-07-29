@@ -155,6 +155,16 @@ namespace Clc.PatronRegistration
         public RegistrationAttempt CreateRegistration(string ip, ModelStateDictionary modelState, ISettingProvider settings, IDbHelper db, IPapiClient papi, IMelissaRestClient melissa, IEmailSender emailSender)
         {
             Settings = settings;
+            if (!modelState.IsValid)
+            {
+                ModelErrors = RegistrationAttempt.ErrorsFromModelState(modelState);
+                return new RegistrationAttempt
+                {
+                    Status = RegistrationStatus.Error,
+                    Message = "Please correct the validation errors and try again.",
+                    Errors = ModelErrors
+                };
+            }
             HandleSmsSettings(); // might need to go back above ValidateRegistration
 
             ApplyForceEcardSetting(ip);
@@ -183,7 +193,7 @@ namespace Clc.PatronRegistration
                 return new RegistrationAttempt { Status = RegistrationStatus.Error, Errors = ModelErrors };
             }
 
-            logger.Trace(this.ToJson());
+            logger.Trace("Submitting validated patron registration for branch {0}.", PatronBranchID);
             var registrationParams = ConvertToPatronRegistrationParams();
             HandleExpirationDate(registrationParams);
 

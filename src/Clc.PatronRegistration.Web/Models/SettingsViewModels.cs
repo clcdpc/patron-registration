@@ -15,6 +15,8 @@ public sealed class SettingsIndexViewModel
     public string FormCode { get; set; } = string.Empty;
     public long ScopeVersion { get; set; }
     public SettingDraft? ActiveDraft { get; set; }
+    public bool HasRestrictedDraftChanges { get; set; }
+    public bool CanManageRestrictedDraft { get; set; }
     public IReadOnlyList<PreviewLinkRecord> PreviewLinks { get; set; } = [];
     public IReadOnlyList<ScopeOption> PreviewBranches { get; set; } = [];
     public bool IsGlobal { get; set; }

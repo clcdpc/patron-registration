@@ -73,7 +73,13 @@
         else
         {
             <p><strong>Active shared draft #@Model.ActiveDraft.DraftId</strong>, based on live version @Model.ActiveDraft.BaselineVersion.</p>
+            @if (Model.HasRestrictedDraftChanges && !Model.CanManageRestrictedDraft)
+            {
+                <p class="validation-summary" role="status">Restricted changes exist. A global administrator must commit, discard, preview, or remove those restricted changes.</p>
+            }
             <div class="button-row">
+            @if (!Model.HasRestrictedDraftChanges || Model.CanManageRestrictedDraft)
+            {
                 <form asp-action="CommitDraft" asp-route-draftId="@Model.ActiveDraft.DraftId" method="post">
                     @Html.AntiForgeryToken()
                     <input type="hidden" name="organizationId" value="@Model.OrganizationId" />
@@ -104,6 +110,7 @@
                     <label class="inline-check"><input type="checkbox" name="AllowLiveSubmission" value="true" /> Allow real live submission</label>
                     <button type="submit">Create preview link</button>
                 </form>
+            }
             </div>
             @if (Model.PreviewLinks.Count > 0)
             {
@@ -114,7 +121,7 @@
                         var operationalBranch = Model.PreviewBranches.FirstOrDefault(branch => branch.OrganizationId == link.OperationalBranchId);
                         <li>
                             Link #@link.PreviewLinkId — @(operationalBranch?.DisplayName ?? $"branch {link.OperationalBranchId}") — @(link.RevokedAtUtc.HasValue ? "Revoked" : link.AllowLiveSubmission ? "Active live preview" : "Active safe preview")
-                            @if (!link.RevokedAtUtc.HasValue)
+                            @if (!link.RevokedAtUtc.HasValue && (!Model.HasRestrictedDraftChanges || Model.CanManageRestrictedDraft))
                             {
                                 <form asp-action="ToggleLiveSubmission" asp-route-previewLinkId="@link.PreviewLinkId" method="post">
                                     @Html.AntiForgeryToken()

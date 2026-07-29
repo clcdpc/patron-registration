@@ -73,6 +73,8 @@ public sealed class SettingsController(
             IsGlobal = principal.IsGlobal,
             ScopeVersion = repository.GetVersion(target, formCode),
             ActiveDraft = draft,
+            HasRestrictedDraftChanges = draft is not null && DraftContainsSensitiveChanges(draft),
+            CanManageRestrictedDraft = principal.IsGlobal,
             PreviewLinks = draft is null ? [] : repository.GetPreviewLinks(draft.DraftId),
             PreviewBranches = GetPreviewBranches(target),
             Scopes = GetAuthorizedScopes(principal),
@@ -156,11 +158,21 @@ public sealed class SettingsController(
     [ValidateAntiForgeryToken]
     public IActionResult RemoveDraftChange(long draftId, int organizationId, string formCode, string settingKey)
     {
-        if (AuthorizedActiveDraft(draftId, organizationId, formCode) is null || !catalog.TryGet(settingKey, out _))
+        if (AuthorizedActiveDraft(draftId, organizationId, formCode) is null ||
+            !catalog.TryGet(settingKey, out var definition) ||
+            !authorization.CanManage(User, organizationId, definition.IsSensitive))
         {
+            AuditRestrictedDraftRejection(organizationId, formCode, "Draft mutation removal was rejected.");
             return Forbid();
         }
-        repository.RemoveDraftChange(draftId, settingKey, CreateAudit(organizationId, formCode));
+        try
+        {
+            repository.RemoveDraftChange(draftId, settingKey, CreateAudit(organizationId, formCode));
+        }
+        catch (DBConcurrencyException exception)
+        {
+            return Conflict(exception.Message);
+        }
         return RedirectToAction(nameof(Index), new { organizationId, formCode });
     }
 
@@ -168,13 +180,15 @@ public sealed class SettingsController(
     [ValidateAntiForgeryToken]
     public IActionResult CommitDraft(long draftId, int organizationId, string formCode = "")
     {
-        if (AuthorizedActiveDraft(draftId, organizationId, formCode) is null)
+        var draft = AuthorizedActiveDraft(draftId, organizationId, formCode);
+        if (draft is null || !CanManageDraftLifecycle(draft))
         {
+            AuditRestrictedDraftRejection(organizationId, formCode, "Draft commit was rejected.");
             return Forbid();
         }
         try
         {
-            repository.CommitDraft(draftId, CatalogByKey, CreateAudit(organizationId, formCode));
+            repository.CommitDraft(draftId, CatalogByKey, authorization.Describe(User).IsGlobal, CreateAudit(organizationId, formCode));
             cacheInvalidator.LiveSettingsChanged();
         }
         catch (DBConcurrencyException exception)
@@ -193,8 +207,10 @@ public sealed class SettingsController(
     [ValidateAntiForgeryToken]
     public IActionResult DiscardDraft(long draftId, int organizationId, string formCode = "")
     {
-        if (AuthorizedActiveDraft(draftId, organizationId, formCode) is null)
+        var draft = AuthorizedActiveDraft(draftId, organizationId, formCode);
+        if (draft is null || !CanManageDraftLifecycle(draft))
         {
+            AuditRestrictedDraftRejection(organizationId, formCode, "Draft discard was rejected.");
             return Forbid();
         }
         repository.DiscardDraft(draftId, CreateAudit(organizationId, formCode));
@@ -205,8 +221,10 @@ public sealed class SettingsController(
     [ValidateAntiForgeryToken]
     public IActionResult CreatePreviewLink(long draftId, PreviewLinkRequest request)
     {
-        if (AuthorizedActiveDraft(draftId, request.OrganizationId, request.FormCode) is null)
+        var draft = AuthorizedActiveDraft(draftId, request.OrganizationId, request.FormCode);
+        if (draft is null || !CanManageDraftLifecycle(draft))
         {
+            AuditRestrictedDraftRejection(request.OrganizationId, request.FormCode, "Preview-link creation was rejected.");
             return Forbid();
         }
         var token = previewTokens.Create();
@@ -227,8 +245,9 @@ public sealed class SettingsController(
     public IActionResult RevokePreviewLink(long previewLinkId)
     {
         var link = repository.GetPreviewLink(previewLinkId);
-        if (link is null || !ValidateScope(link.OrganizationId, link.FormCode))
+        if (link is null || !ValidateScope(link.OrganizationId, link.FormCode) || !CanManagePreviewLink(link))
         {
+            if (link is not null) AuditRestrictedDraftRejection(link.OrganizationId, link.FormCode, "Preview-link revocation was rejected.");
             return Forbid();
         }
         try
@@ -247,8 +266,9 @@ public sealed class SettingsController(
     public IActionResult ToggleLiveSubmission(long previewLinkId, bool allowLiveSubmission)
     {
         var link = repository.GetPreviewLink(previewLinkId);
-        if (link is null || !ValidateScope(link.OrganizationId, link.FormCode))
+        if (link is null || !ValidateScope(link.OrganizationId, link.FormCode) || !CanManagePreviewLink(link))
         {
+            if (link is not null) AuditRestrictedDraftRejection(link.OrganizationId, link.FormCode, "Preview live-submission change was rejected.");
             return Forbid();
         }
         try
@@ -431,6 +451,30 @@ public sealed class SettingsController(
         }
         var draft = repository.GetDraft(draftId);
         return draft is { Status: DraftStatus.Active } && draft.OrganizationId == organizationId && draft.FormCode.Equals(formCode, StringComparison.OrdinalIgnoreCase) ? draft : null;
+    }
+
+    private bool DraftContainsSensitiveChanges(SettingDraft draft) => draft.Changes.Any(change =>
+        catalog.TryGet(change.Key, out var definition) && definition.IsSensitive);
+
+    private bool CanManageDraftLifecycle(SettingDraft draft) =>
+        !DraftContainsSensitiveChanges(draft) || authorization.Describe(User).IsGlobal;
+
+    private bool CanManagePreviewLink(PreviewLinkRecord link)
+    {
+        var draft = repository.GetDraft(link.DraftId);
+        return draft is not null && CanManageDraftLifecycle(draft);
+    }
+
+    private void AuditRestrictedDraftRejection(int organizationId, string formCode, string reason)
+    {
+        try
+        {
+            repository.WriteAudit("RestrictedDraftOperationRejected", false, CreateAudit(organizationId, formCode), reason);
+        }
+        catch
+        {
+            // Authorization rejection must not fail open if its target cannot be audited.
+        }
     }
 
     private List<SettingMutation> ValidateMutations(IEnumerable<SettingMutationInput> inputs, int organizationId)

@@ -6,6 +6,7 @@ using Clc.PatronRegistration.Web.Models;
 using Clc.PatronRegistration.Web.Settings;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc.Routing;
 using Microsoft.Extensions.Options;
 using Moq;
 
@@ -243,6 +244,110 @@ public class SettingsControllerTests
         Assert.AreEqual(2, registration.LibraryId);
     }
 
+    [TestMethod]
+    public void LibraryAdministrator_CannotManageSensitiveSharedDraftLifecycleOrCraftedRemoval()
+    {
+        var repository = new Mock<ISettingsAdministrationRepository>();
+        var draft = SensitiveDraft();
+        repository.Setup(service => service.GetDraft(draft.DraftId)).Returns(draft);
+        repository.Setup(service => service.GetPreviewLink(12)).Returns(PreviewLink(draft));
+        var authorization = LibraryAuthorization();
+        var controller = CreateController(repository, authorization);
+
+        Assert.IsInstanceOfType<ForbidResult>(controller.CommitDraft(draft.DraftId, 3));
+        Assert.IsInstanceOfType<ForbidResult>(controller.DiscardDraft(draft.DraftId, 3));
+        Assert.IsInstanceOfType<ForbidResult>(controller.CreatePreviewLink(draft.DraftId, new PreviewLinkRequest { OrganizationId = 3, OperationalBranchId = 3 }));
+        Assert.IsInstanceOfType<ForbidResult>(controller.ToggleLiveSubmission(12, true));
+        Assert.IsInstanceOfType<ForbidResult>(controller.RevokePreviewLink(12));
+        Assert.IsInstanceOfType<ForbidResult>(controller.RemoveDraftChange(draft.DraftId, 3, string.Empty, "postmark_api_key"));
+
+        repository.Verify(service => service.CommitDraft(It.IsAny<long>(), It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), It.IsAny<bool>(), It.IsAny<AuditContext>()), Times.Never);
+        repository.Verify(service => service.RemoveDraftChange(It.IsAny<long>(), It.IsAny<string>(), It.IsAny<AuditContext>()), Times.Never);
+    }
+
+    [TestMethod]
+    public void LibraryAdministrator_SeesOnlyGenericRestrictedDraftIndicatorNotSensitiveMutation()
+    {
+        var repository = new Mock<ISettingsAdministrationRepository>();
+        repository.Setup(service => service.GetActiveDraft(3, string.Empty)).Returns(SensitiveDraft());
+        var controller = CreateController(repository, LibraryAuthorization());
+
+        var result = (ViewResult)controller.Index(3, string.Empty);
+        var model = (SettingsIndexViewModel)result.Model!;
+
+        Assert.IsTrue(model.HasRestrictedDraftChanges);
+        Assert.IsFalse(model.CanManageRestrictedDraft);
+        Assert.IsFalse(model.Settings.Any(row => row.Definition.IsSensitive));
+        Assert.IsFalse(model.Settings.Any(row => row.Definition.Key.Contains("postmark", StringComparison.OrdinalIgnoreCase)));
+    }
+
+    [TestMethod]
+    public void GlobalAdministrator_CanManageSensitiveSharedDraftOperations()
+    {
+        var repository = new Mock<ISettingsAdministrationRepository>();
+        var draft = SensitiveDraft();
+        repository.Setup(service => service.GetDraft(draft.DraftId)).Returns(draft);
+        repository.Setup(service => service.GetPreviewLink(12)).Returns(PreviewLink(draft));
+        var authorization = new Mock<ISettingsAuthorizationService>();
+        authorization.Setup(service => service.Describe(It.IsAny<ClaimsPrincipal>())).Returns(new SettingsPrincipal(true, -1, true));
+        authorization.Setup(service => service.CanManage(It.IsAny<ClaimsPrincipal>(), It.IsAny<int>(), It.IsAny<bool>())).Returns(true);
+        var controller = CreateController(repository, authorization);
+        var url = new Mock<IUrlHelper>();
+        url.Setup(helper => helper.Action(It.IsAny<UrlActionContext>())).Returns("https://example.test/preview/token");
+        controller.Url = url.Object;
+
+        Assert.IsInstanceOfType<RedirectToActionResult>(controller.CommitDraft(draft.DraftId, 3));
+        Assert.IsInstanceOfType<RedirectToActionResult>(controller.DiscardDraft(draft.DraftId, 3));
+        Assert.IsInstanceOfType<ViewResult>(controller.CreatePreviewLink(draft.DraftId, new PreviewLinkRequest { OrganizationId = 3, OperationalBranchId = 3 }));
+        Assert.IsInstanceOfType<RedirectToActionResult>(controller.ToggleLiveSubmission(12, true));
+        Assert.IsInstanceOfType<RedirectToActionResult>(controller.RevokePreviewLink(12));
+        Assert.IsInstanceOfType<RedirectToActionResult>(controller.RemoveDraftChange(draft.DraftId, 3, string.Empty, "postmark_api_key"));
+    }
+
+    [TestMethod]
+    public void LibraryAdministrator_CanManageNonSensitiveSharedDraft()
+    {
+        var repository = new Mock<ISettingsAdministrationRepository>();
+        var draft = new SettingDraft(22, 3, string.Empty, 0, DraftStatus.Active,
+            [new SettingMutation("registration_text", DraftOperation.Upsert, "draft")]);
+        repository.Setup(service => service.GetDraft(draft.DraftId)).Returns(draft);
+        var controller = CreateController(repository, LibraryAuthorization());
+
+        Assert.IsInstanceOfType<RedirectToActionResult>(controller.CommitDraft(draft.DraftId, 3));
+        Assert.IsInstanceOfType<RedirectToActionResult>(controller.DiscardDraft(draft.DraftId, 3));
+    }
+
+    [TestMethod]
+    public void RemoveDraftChange_ConcurrencyReturnsConflictInsteadOfUnhandledError()
+    {
+        var repository = new Mock<ISettingsAdministrationRepository>();
+        var draft = new SettingDraft(23, 3, string.Empty, 0, DraftStatus.Active,
+            [new SettingMutation("registration_text", DraftOperation.Upsert, "draft")]);
+        repository.Setup(service => service.GetDraft(draft.DraftId)).Returns(draft);
+        repository.Setup(service => service.RemoveDraftChange(draft.DraftId, "registration_text", It.IsAny<AuditContext>()))
+            .Throws(new System.Data.DBConcurrencyException("The staged draft mutation no longer exists."));
+        var controller = CreateController(repository, LibraryAuthorization());
+
+        var result = controller.RemoveDraftChange(draft.DraftId, 3, string.Empty, "registration_text");
+
+        Assert.IsInstanceOfType<ConflictObjectResult>(result);
+    }
+
+    private static SettingDraft SensitiveDraft() => new(21, 3, string.Empty, 0, DraftStatus.Active,
+        [new SettingMutation("postmark_api_key", DraftOperation.Upsert, new string('s', 32))]);
+
+    private static PreviewLinkRecord PreviewLink(SettingDraft draft) =>
+        new(12, draft.DraftId, new byte[32], false, null, null, draft.OrganizationId, draft.FormCode, "Active", 3);
+
+    private static Mock<ISettingsAuthorizationService> LibraryAuthorization()
+    {
+        var authorization = new Mock<ISettingsAuthorizationService>();
+        authorization.Setup(service => service.Describe(It.IsAny<ClaimsPrincipal>())).Returns(new SettingsPrincipal(true, 2, false));
+        authorization.Setup(service => service.CanManage(It.IsAny<ClaimsPrincipal>(), 3, It.IsAny<bool>()))
+            .Returns((ClaimsPrincipal user, int organizationId, bool sensitive) => !sensitive);
+        return authorization;
+    }
+
     private static SettingsController CreateController(
         Mock<ISettingsAdministrationRepository> repository,
         Mock<ISettingsAuthorizationService> authorization)
@@ -251,6 +356,8 @@ public class SettingsControllerTests
         var invalidator = new Mock<ISettingsCacheInvalidator>();
         var branchEligibility = new Mock<IPreviewBranchEligibilityService>();
         branchEligibility.Setup(service => service.GetEligibleBranches(It.IsAny<int>(), It.IsAny<int>())).Returns([]);
+        branchEligibility.Setup(service => service.IsEligible(It.IsAny<int>(), It.IsAny<int>(), It.IsAny<int>()))
+            .Returns((int scopeId, int branchId, int systemId) => branchId == 3);
         var options = Options.Create(new SettingsAdministrationOptions());
         var formCodeAvailability = new FormCodeAvailabilityService(repository.Object, new TestCache(), options);
         var controller = new SettingsController(

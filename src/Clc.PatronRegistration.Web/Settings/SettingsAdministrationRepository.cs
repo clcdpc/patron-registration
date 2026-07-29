@@ -66,7 +66,7 @@ public interface ISettingsAdministrationRepository
     long CreateDraft(int organizationId, string formCode, AuditContext audit);
     void SaveDraftChanges(long draftId, IReadOnlyList<SettingMutation> changes, AuditContext audit);
     void RemoveDraftChange(long draftId, string settingKey, AuditContext audit);
-    void CommitDraft(long draftId, IReadOnlyDictionary<string, SettingDefinition> catalog, AuditContext audit);
+    void CommitDraft(long draftId, IReadOnlyDictionary<string, SettingDefinition> catalog, bool canManageSensitive, AuditContext audit);
     void DiscardDraft(long draftId, AuditContext audit);
     void DirectSave(int organizationId, string formCode, long expectedVersion, IReadOnlyList<SettingMutation> changes, IReadOnlyDictionary<string, SettingDefinition> catalog, AuditContext audit);
     long CreatePreviewLink(long draftId, byte[] tokenHash, bool allowLiveSubmission, int operationalBranchId, AuditContext audit);
@@ -229,7 +229,7 @@ if @@ROWCOUNT=0
         transaction.Commit();
     }
 
-    public void CommitDraft(long draftId, IReadOnlyDictionary<string, SettingDefinition> catalog, AuditContext audit)
+    public void CommitDraft(long draftId, IReadOnlyDictionary<string, SettingDefinition> catalog, bool canManageSensitive, AuditContext audit)
     {
         using var connection = Open();
         using var transaction = connection.BeginTransaction(IsolationLevel.Serializable);
@@ -237,6 +237,10 @@ if @@ROWCOUNT=0
         if (draft.Status != DraftStatus.Active)
         {
             throw new InvalidOperationException("Only an active draft can be committed.");
+        }
+        if (!canManageSensitive && draft.Changes.Any(change => catalog.TryGetValue(change.Key, out var definition) && definition.IsSensitive))
+        {
+            throw new UnauthorizedAccessException("This draft contains restricted changes that require a global administrator.");
         }
 
         EnsureVersionRow(connection, transaction, draft.OrganizationId, draft.FormCode);

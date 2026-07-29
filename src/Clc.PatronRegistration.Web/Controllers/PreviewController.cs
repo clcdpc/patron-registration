@@ -63,12 +63,19 @@ public sealed class PreviewController(
 
         if (!context.Link.AllowLiveSubmission)
         {
-            repository.WriteAudit("SafePreviewSubmissionBlocked", false, AnonymousAudit(context), "Safe preview never performs registration side effects.");
-            return Json(new
+            var errors = RegistrationAttempt.ErrorsFromModelState(ModelState);
+            repository.WriteAudit(
+                "SafePreviewSubmissionBlocked",
+                errors.Count == 0,
+                AnonymousAudit(context),
+                errors.Count == 0 ? null : $"MVC validation failed with {errors.Count} error(s).");
+            return Json(new RegistrationAttempt
             {
-                isSuccess = false,
-                message = "Safe preview validation completed. Patron creation and all side effects were blocked.",
-                errors = Array.Empty<object>()
+                Status = RegistrationStatus.Error,
+                Message = errors.Count == 0
+                    ? "MVC validation passed. Final submission and all registration side effects were blocked by safe preview."
+                    : "Please correct the validation errors. Final submission and all registration side effects were blocked.",
+                Errors = errors
             });
         }
 
