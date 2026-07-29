@@ -82,12 +82,100 @@ public class SettingsControllerTests
         Assert.IsTrue(method.GetCustomAttributes(typeof(ValidateAntiForgeryTokenAttribute), true).Any());
     }
 
+    [DataTestMethod]
+    [DataRow(1, null)]
+    [DataRow(1, 999)]
+    [DataRow(2, null)]
+    [DataRow(2, 999)]
+    public void PreviewCreation_RejectsMissingOrUnauthorizedOperationalBranch(int scopeOrganizationId, int? operationalBranchId)
+    {
+        var repository = new Mock<ISettingsAdministrationRepository>();
+        repository.Setup(service => service.GetDraft(10))
+            .Returns(new SettingDraft(10, scopeOrganizationId, string.Empty, 0, DraftStatus.Active, []));
+        var authorization = new Mock<ISettingsAuthorizationService>();
+        authorization.Setup(service => service.Describe(It.IsAny<ClaimsPrincipal>()))
+            .Returns(new SettingsPrincipal(true, -1, true));
+        authorization.Setup(service => service.CanManage(It.IsAny<ClaimsPrincipal>(), scopeOrganizationId, It.IsAny<bool>()))
+            .Returns(true);
+        var controller = CreateController(repository, authorization);
+
+        var result = controller.CreatePreviewLink(10, new PreviewLinkRequest
+        {
+            OrganizationId = scopeOrganizationId,
+            OperationalBranchId = operationalBranchId
+        });
+
+        Assert.IsInstanceOfType<RedirectToActionResult>(result);
+        repository.Verify(service => service.CreatePreviewLink(
+            It.IsAny<long>(), It.IsAny<byte[]>(), It.IsAny<bool>(), It.IsAny<int>(), It.IsAny<AuditContext>()), Times.Never);
+    }
+
+    [DataTestMethod]
+    [DataRow(1, true)]
+    [DataRow(2, false)]
+    public void EditForm_UpdatesSystemOrLibraryMetadataWithoutChangingCode(int ownerOrganizationId, bool global)
+    {
+        var repository = new Mock<ISettingsAdministrationRepository>();
+        var authorization = new Mock<ISettingsAuthorizationService>();
+        authorization.Setup(service => service.Describe(It.IsAny<ClaimsPrincipal>()))
+            .Returns(new SettingsPrincipal(true, global ? -1 : 2, global));
+        authorization.Setup(service => service.CanManage(It.IsAny<ClaimsPrincipal>(), ownerOrganizationId, It.IsAny<bool>()))
+            .Returns(true);
+        var controller = CreateController(repository, authorization);
+        var request = new FormCodeRequest
+        {
+            OrganizationId = ownerOrganizationId,
+            FormCode = "kids",
+            DisplayName = "Updated kids form",
+            Description = "Updated description"
+        };
+
+        var result = controller.EditForm("kids", request);
+
+        Assert.IsInstanceOfType<RedirectToActionResult>(result);
+        repository.Verify(service => service.SaveFormCode(
+            It.Is<FormCodeMetadata>(metadata =>
+                metadata.OrganizationId == ownerOrganizationId &&
+                metadata.FormCode == "kids" &&
+                metadata.DisplayName == "Updated kids form"),
+            false,
+            It.IsAny<AuditContext>()), Times.Once);
+    }
+
+    [TestMethod]
+    public void CustomizeForm_UpdatesAnExistingLocalCustomization()
+    {
+        var repository = new Mock<ISettingsAdministrationRepository>();
+        repository.Setup(service => service.GetFormCodes(2, 1)).Returns(
+        [
+            new FormCodeMetadata(1, "kids", "System name", null, DateTime.UtcNow, "a", DateTime.UtcNow, "a"),
+            new FormCodeMetadata(2, "kids", "Local name", "Local description", DateTime.UtcNow, "a", DateTime.UtcNow, "a")
+        ]);
+        var authorization = new Mock<ISettingsAuthorizationService>();
+        authorization.Setup(service => service.Describe(It.IsAny<ClaimsPrincipal>()))
+            .Returns(new SettingsPrincipal(true, 2, false));
+        authorization.Setup(service => service.CanManage(It.IsAny<ClaimsPrincipal>(), 2, It.IsAny<bool>())).Returns(true);
+        var controller = CreateController(repository, authorization);
+
+        var result = controller.CustomizeForm("kids", new FormCodeRequest
+        {
+            OrganizationId = 2,
+            FormCode = "kids",
+            DisplayName = "Changed local name",
+            Description = "Changed locally"
+        });
+
+        Assert.IsInstanceOfType<RedirectToActionResult>(result);
+        repository.Verify(service => service.SaveFormCode(
+            It.Is<FormCodeMetadata>(metadata => metadata.DisplayName == "Changed local name"),
+            false,
+            It.IsAny<AuditContext>()), Times.Once);
+    }
+
     private static SettingsController CreateController(
         Mock<ISettingsAdministrationRepository> repository,
         Mock<ISettingsAuthorizationService> authorization)
     {
-        repository.Setup(service => service.GetFormCodes(It.IsAny<int>(), It.IsAny<int>()))
-            .Returns([]);
         repository.Setup(service => service.GetCacheGeneration()).Returns(1);
         var invalidator = new Mock<ISettingsCacheInvalidator>();
         var controller = new SettingsController(

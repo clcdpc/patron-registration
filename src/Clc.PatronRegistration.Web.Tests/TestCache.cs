@@ -6,6 +6,7 @@ namespace Clc.PatronRegistration.Tests
 {
     public class TestCache : ICache
     {
+        public bool IsInitialized { get; set; } = true;
         public List<RegistrationFormSetting> SettingsCache { get; set; } = [];
         public List<OrganizationsGetRow> OrganizationCache
         {

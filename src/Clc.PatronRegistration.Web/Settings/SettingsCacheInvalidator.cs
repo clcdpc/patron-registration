@@ -21,8 +21,7 @@ public sealed class SettingsCacheInvalidator(
         gate.Wait();
         try
         {
-            cache.RebuildCache();
-            observedGeneration = repository.GetCacheGeneration();
+            RebuildUntilStable();
         }
         finally
         {
@@ -36,16 +35,47 @@ public sealed class SettingsCacheInvalidator(
         try
         {
             var current = repository.GetCacheGeneration();
-            if (observedGeneration.HasValue && current != observedGeneration.Value)
+            if (!observedGeneration.HasValue)
             {
-                cache.RebuildCache();
+                if (cache.IsInitialized)
+                {
+                    RebuildUntilStable(current);
+                }
+                else
+                {
+                    observedGeneration = current;
+                }
+                return;
             }
-            observedGeneration = current;
+            if (current != observedGeneration.Value)
+            {
+                RebuildUntilStable(current);
+            }
         }
         finally
         {
             gate.Release();
         }
+    }
+
+    private void RebuildUntilStable(long? generationBefore = null)
+    {
+        const int maximumRebuilds = 3;
+        var before = generationBefore ?? repository.GetCacheGeneration();
+        for (var attempt = 0; attempt < maximumRebuilds; attempt++)
+        {
+            cache.RebuildCache();
+            var after = repository.GetCacheGeneration();
+            if (after == before)
+            {
+                observedGeneration = after;
+                return;
+            }
+            before = after;
+        }
+
+        // Keep the pre-rebuild value so the next scheduled check detects the mismatch and retries.
+        observedGeneration = before - 1;
     }
 }
 

@@ -16,6 +16,7 @@ public sealed class SettingsIndexViewModel
     public long ScopeVersion { get; set; }
     public SettingDraft? ActiveDraft { get; set; }
     public IReadOnlyList<PreviewLinkRecord> PreviewLinks { get; set; } = [];
+    public IReadOnlyList<ScopeOption> PreviewBranches { get; set; } = [];
     public bool IsGlobal { get; set; }
     public List<ScopeOption> Scopes { get; set; } = [];
     public List<FormCodeOption> FormCodes { get; set; } = [];
@@ -56,6 +57,7 @@ public sealed class PreviewLinkRequest
     public int OrganizationId { get; set; }
     public string FormCode { get; set; } = string.Empty;
     public bool AllowLiveSubmission { get; set; }
+    public int? OperationalBranchId { get; set; }
 }
 
 public sealed class FormsViewModel

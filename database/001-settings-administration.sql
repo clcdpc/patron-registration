@@ -92,6 +92,7 @@ BEGIN
         PreviewLinkId bigint IDENTITY(1,1) NOT NULL CONSTRAINT PK_RegistrationSettingPreviewLinks PRIMARY KEY,
         DraftId bigint NOT NULL,
         TokenHash binary(32) NOT NULL,
+        OperationalBranchId int NOT NULL,
         AllowLiveSubmission bit NOT NULL CONSTRAINT DF_RSPL_Live DEFAULT 0,
         CreatedAtUtc datetime2(7) NOT NULL CONSTRAINT DF_RSPL_Created DEFAULT SYSUTCDATETIME(),
         CreatedBy nvarchar(256) NOT NULL,

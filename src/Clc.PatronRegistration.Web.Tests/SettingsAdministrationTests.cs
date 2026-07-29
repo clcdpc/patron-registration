@@ -1,5 +1,6 @@
 using Clc.PatronRegistration.Administration;
 using Clc.PatronRegistration.Configuration;
+using Clc.PatronRegistration.Web.Settings;
 
 namespace Clc.PatronRegistration.Tests;
 
@@ -183,6 +184,56 @@ public class SettingsAdministrationTests
 
         Assert.AreEqual("draft", provider.RegistrationText);
         Assert.AreEqual(string.Empty, provider.WarningText);
+    }
+
+    [TestMethod]
+    public void NonDefaultSystemOrganization_IsUsedByLiveAdministrationAndPreviewResolution()
+    {
+        const int systemOrganizationId = 42;
+        var cache = new TestCache
+        {
+            SettingsCache = [Setting(systemOrganizationId, "registration_text", "configured system")]
+        };
+
+        var live = new DbSettingProvider(3, cache, string.Empty, systemOrganizationId);
+        var administration = new SettingsResolver().Resolve(
+            cache.SettingsCache, "registration_text", 3, 2, string.Empty, systemOrganizationId);
+        var draft = new SettingDraft(8, 3, string.Empty, 0, DraftStatus.Active, []);
+        var preview = new PreviewSettingProvider(draft, cache, systemOrganizationId);
+
+        Assert.AreEqual("configured system", live.RegistrationText);
+        Assert.AreEqual("configured system", administration.EffectiveValue);
+        Assert.AreEqual("configured system", preview.RegistrationText);
+    }
+
+    [TestMethod]
+    public void LibraryCustomizationDeletion_InvalidatesLibraryAndEveryBranchScope()
+    {
+        var affectedScopes = SettingsAdministrationRepository.AffectedVersionScopes(new[] { 2, 3, 4, 3 });
+
+        CollectionAssert.AreEquivalent(new[] { 2, 3, 4 }, affectedScopes.ToList());
+    }
+
+    [TestMethod]
+    public void StagedRemoveOverride_IsSelectedAndValueRemainsDisabledWhenEditorOpens()
+    {
+        var root = FindRepositoryRoot();
+        var partial = File.ReadAllText(Path.Combine(root, "src/Clc.PatronRegistration.Web/Views/Settings/_SettingRow.cshtml"));
+        var script = File.ReadAllText(Path.Combine(root, "src/Clc.PatronRegistration.Web/wwwroot/js/settings.js"));
+
+        StringAssert.Contains(partial, "Model.DraftOperation == DraftOperation.RemoveOverride");
+        StringAssert.Contains(script, "operation?.value === \"RemoveOverride\"");
+        StringAssert.Contains(script, "value.disabled = true");
+    }
+
+    private static string FindRepositoryRoot()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null && !Directory.Exists(Path.Combine(directory.FullName, "src/Clc.PatronRegistration.Web")))
+        {
+            directory = directory.Parent;
+        }
+        return directory?.FullName ?? throw new DirectoryNotFoundException("Could not locate the repository root.");
     }
 
     private static RegistrationFormSetting Setting(int organizationId, string key, string value, string formCode = "") => new()

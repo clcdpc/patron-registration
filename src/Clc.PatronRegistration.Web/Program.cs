@@ -27,8 +27,6 @@ namespace Clc.PatronRegistration.Web
             builder.AddClcConfigFolder();
 
             IRegistrationConfiguration config = builder.Configuration.Get<RegistrationConfiguration>()!;
-            config.SettingsSystemOrganizationId = builder.Configuration.GetValue<int?>("SettingsAdministration:SystemOrganizationId")
-                ?? config.SettingsSystemOrganizationId;
             builder.Services.AddSingleton(config);
 
             builder.Services.AddControllersWithViews();
@@ -82,7 +80,8 @@ namespace Clc.PatronRegistration.Web
                         formCode = "kiosk";
                     }
 
-                    return s.ResolveWith<DbSettingProvider>(id, formCode, config.SettingsSystemOrganizationId);
+                    var systemOrganizationId = s.GetRequiredService<Microsoft.Extensions.Options.IOptions<SettingsAdministrationOptions>>().Value.SystemOrganizationId;
+                    return s.ResolveWith<DbSettingProvider>(id, formCode, systemOrganizationId);
                 });
 
             builder.Services

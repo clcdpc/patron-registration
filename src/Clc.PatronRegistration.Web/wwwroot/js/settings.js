@@ -13,7 +13,12 @@
                 control.disabled = !enabled;
             });
         if (enabled) {
-            row.querySelector(".setting-value")?.focus();
+            const operation = row.querySelector(".operation");
+            const value = row.querySelector(".setting-value");
+            if (operation?.value === "RemoveOverride" && value) {
+                value.disabled = true;
+            }
+            (operation?.value === "RemoveOverride" ? operation : value)?.focus();
             row.closest("details")?.setAttribute("open", "");
         }
     }
@@ -23,6 +28,17 @@
         row.querySelector(".operation")?.addEventListener("change", (event) => {
             const value = row.querySelector(".setting-value");
             value.disabled = event.target.value === "RemoveOverride";
+        });
+    });
+
+    document.querySelectorAll(".reveal-secret").forEach((button) => {
+        button.addEventListener("click", () => {
+            const input = document.getElementById(button.getAttribute("aria-controls"));
+            const revealing = input.type === "password";
+            input.type = revealing ? "text" : "password";
+            button.setAttribute("aria-expanded", revealing.toString());
+            button.textContent = revealing ? "Hide secret" : "Reveal secret";
+            button.setAttribute("aria-label", `${revealing ? "Hide" : "Reveal"} ${button.closest(".setting-row").dataset.displayName}`);
         });
     });
 

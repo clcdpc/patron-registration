@@ -46,14 +46,17 @@ public class SettingsAuthorizationAndCacheTests
     public async Task GenerationChecker_RebuildsOnlyAfterRemoteGenerationChanges()
     {
         var cache = new Mock<ICache>();
+        cache.SetupGet(service => service.IsInitialized).Returns(true);
         var repository = new Mock<ISettingsAdministrationRepository>();
-        repository.SetupSequence(service => service.GetCacheGeneration()).Returns(4).Returns(5);
+        repository.SetupSequence(service => service.GetCacheGeneration())
+            .Returns(4).Returns(4)
+            .Returns(5).Returns(5);
         var invalidator = new SettingsCacheInvalidator(cache.Object, repository.Object);
 
         await invalidator.CheckForRemoteChangesAsync();
         await invalidator.CheckForRemoteChangesAsync();
 
-        cache.Verify(service => service.RebuildCache(), Times.Once);
+        cache.Verify(service => service.RebuildCache(), Times.Exactly(2));
     }
 
     [TestMethod]
@@ -67,7 +70,38 @@ public class SettingsAuthorizationAndCacheTests
         invalidator.LiveSettingsChanged();
 
         cache.Verify(service => service.RebuildCache(), Times.Once);
-        repository.Verify(service => service.GetCacheGeneration(), Times.Once);
+        repository.Verify(service => service.GetCacheGeneration(), Times.Exactly(2));
+    }
+
+    [TestMethod]
+    public async Task FirstPoll_RebuildsAnAlreadyLoadedCacheBeforeRecordingGeneration()
+    {
+        var cache = new Mock<ICache>();
+        cache.SetupGet(service => service.IsInitialized).Returns(true);
+        var repository = new Mock<ISettingsAdministrationRepository>();
+        repository.SetupSequence(service => service.GetCacheGeneration()).Returns(12).Returns(12);
+        var invalidator = new SettingsCacheInvalidator(cache.Object, repository.Object);
+
+        await invalidator.CheckForRemoteChangesAsync();
+
+        cache.Verify(service => service.RebuildCache(), Times.Once);
+    }
+
+    [TestMethod]
+    public async Task ChangeDuringRebuild_TriggersAnotherRebuild()
+    {
+        var cache = new Mock<ICache>();
+        cache.SetupGet(service => service.IsInitialized).Returns(true);
+        var repository = new Mock<ISettingsAdministrationRepository>();
+        repository.SetupSequence(service => service.GetCacheGeneration())
+            .Returns(20)
+            .Returns(21)
+            .Returns(21);
+        var invalidator = new SettingsCacheInvalidator(cache.Object, repository.Object);
+
+        await invalidator.CheckForRemoteChangesAsync();
+
+        cache.Verify(service => service.RebuildCache(), Times.Exactly(2));
     }
 
     private static ClaimsPrincipal Principal(int organizationId, bool includeRole)

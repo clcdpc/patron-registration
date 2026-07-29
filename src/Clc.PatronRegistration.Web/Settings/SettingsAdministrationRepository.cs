@@ -35,7 +35,8 @@ public sealed record PreviewLinkRecord(
     DateTime? ExpiresAtUtc,
     int OrganizationId,
     string FormCode,
-    string DraftStatus);
+    string DraftStatus,
+    int OperationalBranchId);
 
 public sealed record FormCodeImpact(int MetadataRows, int OverrideRows, int Drafts, int PreviewLinks);
 
@@ -66,7 +67,7 @@ public interface ISettingsAdministrationRepository
     void CommitDraft(long draftId, IReadOnlyDictionary<string, SettingDefinition> catalog, AuditContext audit);
     void DiscardDraft(long draftId, AuditContext audit);
     void DirectSave(int organizationId, string formCode, long expectedVersion, IReadOnlyList<SettingMutation> changes, IReadOnlyDictionary<string, SettingDefinition> catalog, AuditContext audit);
-    long CreatePreviewLink(long draftId, byte[] tokenHash, bool allowLiveSubmission, AuditContext audit);
+    long CreatePreviewLink(long draftId, byte[] tokenHash, bool allowLiveSubmission, int operationalBranchId, AuditContext audit);
     PreviewLinkRecord? FindPreviewLink(byte[] tokenHash);
     PreviewLinkRecord? GetPreviewLink(long previewLinkId);
     IReadOnlyList<PreviewLinkRecord> GetPreviewLinks(long draftId);
@@ -250,15 +251,15 @@ update dbo.RegistrationSettingPreviewLinks set RevokedAtUtc=coalesce(RevokedAtUt
         transaction.Commit();
     }
 
-    public long CreatePreviewLink(long draftId, byte[] tokenHash, bool allowLiveSubmission, AuditContext audit)
+    public long CreatePreviewLink(long draftId, byte[] tokenHash, bool allowLiveSubmission, int operationalBranchId, AuditContext audit)
     {
         using var connection = Open();
         using var transaction = connection.BeginTransaction(IsolationLevel.Serializable);
         EnsureActiveDraft(connection, transaction, draftId);
         var previewLinkId = connection.QuerySingle<long>(@"
-insert dbo.RegistrationSettingPreviewLinks(DraftId,TokenHash,AllowLiveSubmission,CreatedBy,ModifiedBy)
-output inserted.PreviewLinkId values(@draftId,@tokenHash,@allowLiveSubmission,@actor,@actor)",
-            new { draftId, tokenHash, allowLiveSubmission, actor = audit.ActorName ?? "unknown" }, transaction);
+insert dbo.RegistrationSettingPreviewLinks(DraftId,TokenHash,AllowLiveSubmission,OperationalBranchId,CreatedBy,ModifiedBy)
+output inserted.PreviewLinkId values(@draftId,@tokenHash,@allowLiveSubmission,@operationalBranchId,@actor,@actor)",
+            new { draftId, tokenHash, allowLiveSubmission, operationalBranchId, actor = audit.ActorName ?? "unknown" }, transaction);
         InsertAudit(connection, transaction, "PreviewLinkCreated", true, audit, draftId: draftId, previewLinkId: previewLinkId);
         transaction.Commit();
         return previewLinkId;
@@ -268,7 +269,7 @@ output inserted.PreviewLinkId values(@draftId,@tokenHash,@allowLiveSubmission,@a
     {
         using var connection = Open();
         return connection.QuerySingleOrDefault<PreviewLinkRecord>(@"
-select p.PreviewLinkId,p.DraftId,p.TokenHash,p.AllowLiveSubmission,p.RevokedAtUtc,p.ExpiresAtUtc,d.OrganizationId,d.FormCode,d.Status DraftStatus
+select p.PreviewLinkId,p.DraftId,p.TokenHash,p.AllowLiveSubmission,p.RevokedAtUtc,p.ExpiresAtUtc,d.OrganizationId,d.FormCode,d.Status DraftStatus,p.OperationalBranchId
 from dbo.RegistrationSettingPreviewLinks p join dbo.RegistrationSettingDrafts d on d.DraftId=p.DraftId
 where p.TokenHash=@tokenHash", new { tokenHash });
     }
@@ -277,7 +278,7 @@ where p.TokenHash=@tokenHash", new { tokenHash });
     {
         using var connection = Open();
         return connection.QuerySingleOrDefault<PreviewLinkRecord>(@"
-select p.PreviewLinkId,p.DraftId,p.TokenHash,p.AllowLiveSubmission,p.RevokedAtUtc,p.ExpiresAtUtc,d.OrganizationId,d.FormCode,d.Status DraftStatus
+select p.PreviewLinkId,p.DraftId,p.TokenHash,p.AllowLiveSubmission,p.RevokedAtUtc,p.ExpiresAtUtc,d.OrganizationId,d.FormCode,d.Status DraftStatus,p.OperationalBranchId
 from dbo.RegistrationSettingPreviewLinks p join dbo.RegistrationSettingDrafts d on d.DraftId=p.DraftId
 where p.PreviewLinkId=@previewLinkId", new { previewLinkId });
     }
@@ -286,7 +287,7 @@ where p.PreviewLinkId=@previewLinkId", new { previewLinkId });
     {
         using var connection = Open();
         return connection.Query<PreviewLinkRecord>(@"
-select p.PreviewLinkId,p.DraftId,p.TokenHash,p.AllowLiveSubmission,p.RevokedAtUtc,p.ExpiresAtUtc,d.OrganizationId,d.FormCode,d.Status DraftStatus
+select p.PreviewLinkId,p.DraftId,p.TokenHash,p.AllowLiveSubmission,p.RevokedAtUtc,p.ExpiresAtUtc,d.OrganizationId,d.FormCode,d.Status DraftStatus,p.OperationalBranchId
 from dbo.RegistrationSettingPreviewLinks p join dbo.RegistrationSettingDrafts d on d.DraftId=p.DraftId
 where p.DraftId=@draftId order by p.PreviewLinkId desc", new { draftId }).ToList();
     }
@@ -335,15 +336,26 @@ order by FormCode,case when OrganizationId=@libraryId then 0 else 1 end",
         using var transaction = connection.BeginTransaction(IsolationLevel.Serializable);
         if (isCreate)
         {
+            var exists = connection.QuerySingle<int>(
+                "select count(*) from dbo.RegistrationFormCodeMetadata with(updlock,holdlock) where OrganizationId=@OrganizationId and FormCode=@FormCode",
+                metadata, transaction) > 0;
+            if (exists)
+            {
+                throw new InvalidOperationException("That form code already exists at the selected owning scope.");
+            }
             connection.Execute(@"
 insert dbo.RegistrationFormCodeMetadata(OrganizationId,FormCode,DisplayName,Description,CreatedBy,ModifiedBy)
 values(@OrganizationId,@FormCode,@DisplayName,@Description,@CreatedBy,@ModifiedBy)", metadata, transaction);
         }
         else
         {
-            connection.Execute(@"
+            var updated = connection.Execute(@"
 update dbo.RegistrationFormCodeMetadata set DisplayName=@DisplayName,Description=@Description,ModifiedAtUtc=SYSUTCDATETIME(),ModifiedBy=@ModifiedBy
 where OrganizationId=@OrganizationId and FormCode=@FormCode", metadata, transaction);
+            if (updated == 0)
+            {
+                throw new InvalidOperationException("The form-code metadata no longer exists. Reload the page and try again.");
+            }
         }
         EnsureVersionRow(connection, transaction, metadata.OrganizationId, metadata.FormCode);
         IncrementVersions(connection, transaction, metadata.OrganizationId, metadata.FormCode);
@@ -377,11 +389,22 @@ delete from dbo.RegistrationSettingDrafts where OrganizationId in @affectedOrgan
 delete from dbo.RegistrationFormSettings where OrganizationID in @affectedOrganizations and FormCode=@formCode;
 delete from dbo.RegistrationFormCodeMetadata where OrganizationId in @affectedOrganizations and FormCode=@formCode;",
             new { ownerOrganizationId, formCode, affectedOrganizations }, transaction);
-        EnsureVersionRow(connection, transaction, ownerOrganizationId, formCode);
-        IncrementVersions(connection, transaction, ownerOrganizationId, formCode);
+        foreach (var organizationId in AffectedVersionScopes(affectedOrganizations))
+        {
+            EnsureVersionRow(connection, transaction, organizationId, formCode);
+            connection.Execute(
+                "update dbo.RegistrationSettingScopeVersions set Version=Version+1,ModifiedAtUtc=SYSUTCDATETIME() where OrganizationId=@organizationId and FormCode=@formCode",
+                new { organizationId, formCode }, transaction);
+        }
+        connection.Execute(
+            "update dbo.RegistrationSettingsCacheGeneration set Generation=Generation+1,ModifiedAtUtc=SYSUTCDATETIME() where Id=1",
+            transaction: transaction);
         InsertAudit(connection, transaction, "FormCodeDeleted", true, audit);
         transaction.Commit();
     }
+
+    public static IReadOnlyList<int> AffectedVersionScopes(IEnumerable<int> affectedOrganizations) =>
+        affectedOrganizations.Distinct().ToList();
 
     public IEnumerable<SettingsAuditRow> SearchAudit(int? libraryId, string? term)
     {

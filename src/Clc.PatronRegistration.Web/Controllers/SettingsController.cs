@@ -71,6 +71,7 @@ public sealed class SettingsController(
             ScopeVersion = repository.GetVersion(target, formCode),
             ActiveDraft = draft,
             PreviewLinks = draft is null ? [] : repository.GetPreviewLinks(draft.DraftId),
+            PreviewBranches = GetPreviewBranches(target),
             Scopes = GetAuthorizedScopes(principal),
             FormCodes = GetAvailableFormCodes(libraryId),
             Settings = rows
@@ -92,7 +93,9 @@ public sealed class SettingsController(
         if (!ModelState.IsValid)
         {
             repository.WriteAudit("ValidationFailed", false, CreateAudit(request.OrganizationId, request.FormCode), "One or more setting values were invalid.");
-            return ValidationProblem(ModelState);
+            TempData["SettingsError"] = string.Join(" ", ModelState.Values.SelectMany(value => value.Errors).Select(error => error.ErrorMessage));
+            TempData["SettingsErrorGroup"] = request.Changes.FirstOrDefault(change => ModelState.ContainsKey(change.Key))?.Key.Split('.')[0];
+            return RedirectToAction(nameof(Index), new { organizationId = request.OrganizationId, formCode = request.FormCode });
         }
 
         try
@@ -138,7 +141,9 @@ public sealed class SettingsController(
         if (!ModelState.IsValid)
         {
             repository.WriteAudit("ValidationFailed", false, CreateAudit(request.OrganizationId, request.FormCode), "Draft changes were invalid.", draftId);
-            return ValidationProblem(ModelState);
+            TempData["SettingsError"] = string.Join(" ", ModelState.Values.SelectMany(value => value.Errors).Select(error => error.ErrorMessage));
+            TempData["SettingsErrorGroup"] = request.Changes.FirstOrDefault(change => ModelState.ContainsKey(change.Key))?.Key.Split('.')[0];
+            return RedirectToAction(nameof(Index), new { organizationId = request.OrganizationId, formCode = request.FormCode });
         }
         repository.SaveDraftChanges(draftId, mutations, CreateAudit(request.OrganizationId, request.FormCode));
         return RedirectToAction(nameof(Index), new { organizationId = request.OrganizationId, formCode = request.FormCode });
@@ -190,7 +195,13 @@ public sealed class SettingsController(
             return Forbid();
         }
         var token = previewTokens.Create();
-        repository.CreatePreviewLink(draftId, token.Hash, request.AllowLiveSubmission, CreateAudit(request.OrganizationId, request.FormCode));
+        var operationalBranchId = ResolveOperationalBranch(request.OrganizationId, request.OperationalBranchId);
+        if (!operationalBranchId.HasValue)
+        {
+            ModelState.AddModelError(nameof(request.OperationalBranchId), "Select an operational branch authorized for this preview scope.");
+            return RedirectToAction(nameof(Index), new { organizationId = request.OrganizationId, formCode = request.FormCode, error = "Select a valid operational branch." });
+        }
+        repository.CreatePreviewLink(draftId, token.Hash, request.AllowLiveSubmission, operationalBranchId.Value, CreateAudit(request.OrganizationId, request.FormCode));
         var previewUrl = Url.Action("Index", "Preview", new { token = token.Plaintext }, Request.Scheme)!;
         return View("PreviewLinkCreated", model: previewUrl);
     }
@@ -246,13 +257,7 @@ public sealed class SettingsController(
         {
             return Forbid();
         }
-        return View(new FormsViewModel
-        {
-            LibraryId = targetLibrary,
-            SystemOrganizationId = settingsOptions.SystemOrganizationId,
-            IsGlobal = principal.IsGlobal,
-            Forms = repository.GetFormCodes(targetLibrary, settingsOptions.SystemOrganizationId)
-        });
+        return View(BuildFormsViewModel(targetLibrary, principal.IsGlobal));
     }
 
     [HttpPost("forms")]
@@ -260,13 +265,25 @@ public sealed class SettingsController(
     public IActionResult CreateForm(FormCodeRequest request)
     {
         var principal = RequireManager();
-        if (principal is null || !CanOwnFormCode(principal, request.OrganizationId) || !ValidateFormCodeText(request))
+        if (principal is null || !CanOwnFormCode(principal, request.OrganizationId))
         {
             return Forbid();
         }
+        if (!ValidateFormCodeText(request))
+        {
+            return View("Forms", BuildFormsViewModel(request.OrganizationId, principal.IsGlobal));
+        }
         var actor = User.Identity?.Name ?? "unknown";
         var metadata = new FormCodeMetadata(request.OrganizationId, request.FormCode, request.DisplayName, request.Description, DateTime.UtcNow, actor, DateTime.UtcNow, actor);
-        repository.SaveFormCode(metadata, true, CreateAudit(request.OrganizationId, request.FormCode));
+        try
+        {
+            repository.SaveFormCode(metadata, true, CreateAudit(request.OrganizationId, request.FormCode));
+        }
+        catch (InvalidOperationException exception)
+        {
+            ModelState.AddModelError(nameof(request.FormCode), exception.Message);
+            return View("Forms", BuildFormsViewModel(request.OrganizationId, principal.IsGlobal));
+        }
         cacheInvalidator.LiveSettingsChanged();
         return RedirectToAction(nameof(Forms), new { libraryId = request.OrganizationId });
     }
@@ -276,14 +293,53 @@ public sealed class SettingsController(
     public IActionResult CustomizeForm(string formCode, FormCodeRequest request)
     {
         var principal = RequireManager();
-        if (principal is null || formCode != request.FormCode || !CanOwnFormCode(principal, request.OrganizationId) || !ValidateFormCodeText(request))
+        if (principal is null || formCode != request.FormCode || !CanOwnFormCode(principal, request.OrganizationId))
         {
             return Forbid();
+        }
+        if (!ValidateFormCodeText(request))
+        {
+            return View("Forms", BuildFormsViewModel(request.OrganizationId, principal.IsGlobal));
         }
         var actor = User.Identity?.Name ?? "unknown";
         var existing = repository.GetFormCodes(request.OrganizationId, settingsOptions.SystemOrganizationId)
             .Any(form => form.OrganizationId == request.OrganizationId && form.FormCode.Equals(formCode, StringComparison.OrdinalIgnoreCase));
-        repository.SaveFormCode(new(request.OrganizationId, formCode, request.DisplayName, request.Description, DateTime.UtcNow, actor, DateTime.UtcNow, actor), !existing, CreateAudit(request.OrganizationId, formCode));
+        try
+        {
+            repository.SaveFormCode(new(request.OrganizationId, formCode, request.DisplayName, request.Description, DateTime.UtcNow, actor, DateTime.UtcNow, actor), !existing, CreateAudit(request.OrganizationId, formCode));
+        }
+        catch (InvalidOperationException exception)
+        {
+            ModelState.AddModelError(nameof(request.FormCode), exception.Message);
+            return View("Forms", BuildFormsViewModel(request.OrganizationId, principal.IsGlobal));
+        }
+        cacheInvalidator.LiveSettingsChanged();
+        return RedirectToAction(nameof(Forms), new { libraryId = request.OrganizationId });
+    }
+
+    [HttpPost("forms/{formCode}/edit")]
+    [ValidateAntiForgeryToken]
+    public IActionResult EditForm(string formCode, FormCodeRequest request)
+    {
+        var principal = RequireManager();
+        if (principal is null || formCode != request.FormCode || !CanOwnFormCode(principal, request.OrganizationId))
+        {
+            return Forbid();
+        }
+        if (!ValidateFormCodeText(request))
+        {
+            return View("Forms", BuildFormsViewModel(request.OrganizationId, principal.IsGlobal));
+        }
+        var actor = User.Identity?.Name ?? "unknown";
+        try
+        {
+            repository.SaveFormCode(new(request.OrganizationId, formCode, request.DisplayName, request.Description, DateTime.UtcNow, actor, DateTime.UtcNow, actor), false, CreateAudit(request.OrganizationId, formCode));
+        }
+        catch (InvalidOperationException exception)
+        {
+            ModelState.AddModelError(nameof(request.FormCode), exception.Message);
+            return View("Forms", BuildFormsViewModel(request.OrganizationId, principal.IsGlobal));
+        }
         cacheInvalidator.LiveSettingsChanged();
         return RedirectToAction(nameof(Forms), new { libraryId = request.OrganizationId });
     }
@@ -324,6 +380,14 @@ public sealed class SettingsController(
         var principal = authorization.Describe(User);
         return principal.HasRole && principal.OrganizationId.HasValue ? principal : null;
     }
+
+    private FormsViewModel BuildFormsViewModel(int libraryId, bool isGlobal) => new()
+    {
+        LibraryId = libraryId,
+        SystemOrganizationId = settingsOptions.SystemOrganizationId,
+        IsGlobal = isGlobal,
+        Forms = repository.GetFormCodes(libraryId, settingsOptions.SystemOrganizationId)
+    };
 
     private bool ValidateScope(int organizationId, string formCode) =>
         RequireManager() is not null && authorization.CanManage(User, organizationId) && IsAvailableFormCode(organizationId, formCode);
@@ -404,6 +468,41 @@ public sealed class SettingsController(
         var result = new List<ScopeOption> { new(libraryId, GetOrganizationName(libraryId)) };
         result.AddRange(cache.GetBranches(libraryId).Select(branch => new ScopeOption(branch.OrganizationID, branch.DisplayName)));
         return result;
+    }
+
+    private IReadOnlyList<ScopeOption> GetPreviewBranches(int scopeOrganizationId)
+    {
+        if (scopeOrganizationId == settingsOptions.SystemOrganizationId)
+        {
+            return cache.OrganizationCache
+                .Where(organization => organization.OrganizationCodeID == 3)
+                .Select(branch => new ScopeOption(branch.OrganizationID, branch.DisplayName))
+                .OrderBy(branch => branch.DisplayName)
+                .ToList();
+        }
+        if (cache.GetOrg(scopeOrganizationId).OrganizationCodeID == 3)
+        {
+            return [new ScopeOption(scopeOrganizationId, GetOrganizationName(scopeOrganizationId))];
+        }
+        return cache.GetBranches(scopeOrganizationId)
+            .Select(branch => new ScopeOption(branch.OrganizationID, branch.DisplayName))
+            .OrderBy(branch => branch.DisplayName)
+            .ToList();
+    }
+
+    private int? ResolveOperationalBranch(int scopeOrganizationId, int? requestedBranchId)
+    {
+        if (scopeOrganizationId != settingsOptions.SystemOrganizationId && cache.GetOrg(scopeOrganizationId).OrganizationCodeID == 3)
+        {
+            return requestedBranchId is null || requestedBranchId == scopeOrganizationId ? scopeOrganizationId : null;
+        }
+        if (!requestedBranchId.HasValue)
+        {
+            return null;
+        }
+        return GetPreviewBranches(scopeOrganizationId).Any(branch => branch.OrganizationId == requestedBranchId.Value)
+            ? requestedBranchId
+            : null;
     }
 
     private bool CanOwnFormCode(SettingsPrincipal principal, int ownerOrganizationId)

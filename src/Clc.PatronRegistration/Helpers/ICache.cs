@@ -10,6 +10,7 @@ namespace Clc.PatronRegistration.Helpers
     {
         List<RegistrationFormSetting> SettingsCache { get; }
         List<OrganizationsGetRow> OrganizationCache { get; }
+        bool IsInitialized { get; }
         void RebuildCache();
         OrganizationsGetRow GetOrg(int orgId);
         List<OrganizationsGetRow> GetBranches(int orgId);

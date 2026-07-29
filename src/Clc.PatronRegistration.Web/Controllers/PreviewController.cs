@@ -32,9 +32,8 @@ public sealed class PreviewController(
             return NotFound("This preview link is invalid or no longer active.");
         }
 
-        var renderOrganizationId = GetPreviewRenderOrganization(context);
         var model = Registration.BuildBaseRegistration(
-            renderOrganizationId,
+            context.Link.OperationalBranchId,
             forceDl,
             Request.GetTrueClientIP(),
             context.Settings,
@@ -70,16 +69,39 @@ public sealed class PreviewController(
         }
 
         registration.UseSettings(context.Settings);
-        var result = registration.CreateRegistration(
-            Request.GetTrueClientIP(),
-            ModelState,
-            context.Settings,
-            db,
-            papi,
-            melissa,
-            emailSender);
-        repository.WriteAudit("LivePreviewSubmission", true, AnonymousAudit(context), previewLinkId: context.Link.PreviewLinkId);
-        return Json(result);
+        registration.PatronBranchID = context.Link.OperationalBranchId;
+        try
+        {
+            var result = registration.CreateRegistration(
+                Request.GetTrueClientIP(),
+                ModelState,
+                context.Settings,
+                db,
+                papi,
+                melissa,
+                emailSender);
+            var failureReason = result.IsSuccess
+                ? null
+                : $"Registration status: {result.Status}; validation errors: {result.Errors.Count}.";
+            repository.WriteAudit(
+                "LivePreviewSubmission",
+                result.IsSuccess,
+                AnonymousAudit(context),
+                failureReason,
+                previewLinkId: context.Link.PreviewLinkId,
+                metadataJson: $"{{\"status\":\"{result.Status}\",\"errorCount\":{result.Errors.Count}}}");
+            return Json(result);
+        }
+        catch (Exception exception)
+        {
+            repository.WriteAudit(
+                "LivePreviewSubmission",
+                false,
+                AnonymousAudit(context),
+                $"Registration workflow threw {exception.GetType().Name}.",
+                previewLinkId: context.Link.PreviewLinkId);
+            throw;
+        }
     }
 
     [HttpPost("{token}/dupe-check")]
@@ -93,6 +115,7 @@ public sealed class PreviewController(
             return NotFound();
         }
         registration.UseSettings(context.Settings);
+        registration.PatronBranchID = context.Link.OperationalBranchId;
         return Json(registration.DupeCheck(db, papi));
     }
 
@@ -131,10 +154,11 @@ public sealed class PreviewController(
         {
             return null;
         }
-        var operationalLibraryId = draft.OrganizationId == options.Value.SystemOrganizationId
-            ? cache.OrganizationCache.First(organization => organization.OrganizationCodeID == 3).ParentOrganizationID
-                ?? options.Value.SystemOrganizationId
-            : cache.OrganizationCache.GetLibrary(draft.OrganizationId).OrganizationID;
+        if (!IsOperationalBranchValid(draft, link.OperationalBranchId))
+        {
+            return null;
+        }
+        var operationalLibraryId = cache.OrganizationCache.GetLibrary(link.OperationalBranchId).OrganizationID;
         var settings = new PreviewSettingProvider(draft, cache, options.Value.SystemOrganizationId, operationalLibraryId);
         return new PreviewContext(link, draft, settings);
     }
@@ -149,18 +173,21 @@ public sealed class PreviewController(
         HttpContext.TraceIdentifier,
         Request.GetTrueClientIP());
 
-    private int GetPreviewRenderOrganization(PreviewContext context)
+    private bool IsOperationalBranchValid(SettingDraft draft, int operationalBranchId)
     {
-        if (context.Draft.OrganizationId != options.Value.SystemOrganizationId &&
-            cache.GetOrg(context.Draft.OrganizationId).OrganizationCodeID == 3)
+        var branch = cache.OrganizationCache.SingleOrDefault(organization => organization.OrganizationID == operationalBranchId);
+        if (branch?.OrganizationCodeID != 3)
         {
-            return context.Draft.OrganizationId;
+            return false;
         }
-        if (context.Draft.OrganizationId != options.Value.SystemOrganizationId)
+        if (draft.OrganizationId == options.Value.SystemOrganizationId)
         {
-            return cache.GetBranches(context.Draft.OrganizationId).First().OrganizationID;
+            return true;
         }
-        return cache.OrganizationCache.First(organization => organization.OrganizationCodeID == 3).OrganizationID;
+        var scope = cache.GetOrg(draft.OrganizationId);
+        return scope.OrganizationCodeID == 3
+            ? operationalBranchId == draft.OrganizationId
+            : branch.ParentOrganizationID == draft.OrganizationId;
     }
 
     private void SetSecurityHeaders()

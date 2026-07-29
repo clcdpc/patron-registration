@@ -9,6 +9,8 @@
         (SettingGroup.Label, "Field label settings"),
         (SettingGroup.Require, "Required field settings")
     };
+    var settingsError = TempData["SettingsError"] as string;
+    var settingsErrorGroup = TempData["SettingsErrorGroup"] as string;
 }
 <link rel="stylesheet" href="~/css/settings.css" asp-append-version="true" />
 
@@ -22,6 +24,10 @@
         <a asp-action="Forms" asp-route-libraryId="@Model.LibraryId">Form codes</a>
     </nav>
 </header>
+@if (!string.IsNullOrWhiteSpace(settingsError))
+{
+    <div class="validation-summary" role="alert">@settingsError</div>
+}
 
 <section class="settings-panel scope-panel" aria-labelledby="scope-heading">
     <h2 id="scope-heading">Scope</h2>
@@ -84,6 +90,17 @@
                     @Html.AntiForgeryToken()
                     <input type="hidden" name="OrganizationId" value="@Model.OrganizationId" />
                     <input type="hidden" name="FormCode" value="@Model.FormCode" />
+                    <label for="preview-operational-branch">Operational branch</label>
+                    <select id="preview-operational-branch" name="OperationalBranchId" required>
+                        @if (Model.PreviewBranches.Count != 1)
+                        {
+                            <option value="">Select a branch</option>
+                        }
+                        @foreach (var branch in Model.PreviewBranches)
+                        {
+                            <option value="@branch.OrganizationId" selected="@(Model.PreviewBranches.Count == 1)">@branch.DisplayName</option>
+                        }
+                    </select>
                     <label class="inline-check"><input type="checkbox" name="AllowLiveSubmission" value="true" /> Allow real live submission</label>
                     <button type="submit">Create preview link</button>
                 </form>
@@ -94,8 +111,9 @@
                 <ul class="preview-links">
                     @foreach (var link in Model.PreviewLinks)
                     {
+                        var operationalBranch = Model.PreviewBranches.FirstOrDefault(branch => branch.OrganizationId == link.OperationalBranchId);
                         <li>
-                            Link #@link.PreviewLinkId — @(link.RevokedAtUtc.HasValue ? "Revoked" : link.AllowLiveSubmission ? "Active live preview" : "Active safe preview")
+                            Link #@link.PreviewLinkId — @(operationalBranch?.DisplayName ?? $"branch {link.OperationalBranchId}") — @(link.RevokedAtUtc.HasValue ? "Revoked" : link.AllowLiveSubmission ? "Active live preview" : "Active safe preview")
                             @if (!link.RevokedAtUtc.HasValue)
                             {
                                 <form asp-action="ToggleLiveSubmission" asp-route-previewLinkId="@link.PreviewLinkId" method="post">
@@ -141,7 +159,7 @@
     @foreach (var group in groups)
     {
         var rows = Model.Settings.Where(row => row.Definition.Group == group.Item1).ToList();
-        <details class="dynamic-settings">
+        <details class="dynamic-settings" open="@(rows.Any(row => row.DraftOperation is not null) || group.Item1.ToString().Equals(settingsErrorGroup, StringComparison.OrdinalIgnoreCase))">
             <summary>@group.Item2 <span>(@rows.Count)</span></summary>
             <div class="settings-list">
                 @foreach (var row in rows)

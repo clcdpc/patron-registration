@@ -53,10 +53,10 @@
         <div>
             <label for="@operationId">Operation</label>
             <select id="@operationId" class="operation" name="Changes[@token].Operation" disabled>
-                <option value="Upsert">@(resolution.OwnsOverride ? "Update override" : "Add override")</option>
+                <option value="Upsert" selected="@(Model.DraftOperation != DraftOperation.RemoveOverride)">@(resolution.OwnsOverride ? "Update override" : "Add override")</option>
                 @if (resolution.OwnsOverride)
                 {
-                    <option value="RemoveOverride">Remove override</option>
+                    <option value="RemoveOverride" selected="@(Model.DraftOperation == DraftOperation.RemoveOverride)">Remove override</option>
                 }
             </select>
         </div>
@@ -96,6 +96,10 @@
             else
             {
                 <input id="@inputId" class="setting-value" name="Changes[@token].Value" type="@(definition.IsSensitive ? "password" : "text")" value="@editorValue" autocomplete="@(definition.IsSensitive ? "new-password" : "off")" disabled />
+                @if (definition.IsSensitive)
+                {
+                    <button type="button" class="reveal-secret" aria-controls="@inputId" aria-expanded="false" aria-label="Reveal @definition.DisplayName">Reveal secret</button>
+                }
             }
         </div>
         <button type="button" class="edit-setting">Edit this setting</button>

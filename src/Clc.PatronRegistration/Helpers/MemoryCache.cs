@@ -16,6 +16,7 @@ namespace Clc.PatronRegistration.Helpers
     public class MemoryCache(IPapiClient papi, IDbHelper db) : ICache
     {
         private readonly object rebuildLock = new();
+        public bool IsInitialized => _settingsCache is not null;
         private List<RegistrationFormSetting> _settingsCache = null!;
         public List<RegistrationFormSetting> SettingsCache
         {
