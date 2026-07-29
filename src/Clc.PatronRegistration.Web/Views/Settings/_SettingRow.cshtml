@@ -1,17 +1,103 @@
 @using Clc.PatronRegistration.Administration
-@model KeyValuePair<int, Clc.PatronRegistration.Web.Models.SettingRowViewModel>
-@{ var i=Model.Key; var row=Model.Value; var d=row.Definition; var r=row.Resolution; var value=row.DraftOperation==DraftOperation.Upsert?row.DraftValue:(r.OwnsOverride?r.CurrentOverrideValue:r.EffectiveValue) ?? ""; }
-<article class="setting-row" data-search="@($"{d.DisplayName} {d.Key} {d.Description} {(d.IsSensitive?"":r.EffectiveValue)}".ToLowerInvariant())">
- <h3>@d.DisplayName <code>@d.Key</code></h3><p>@d.Description</p>
- <p><strong>Effective:</strong> @(d.IsSensitive?"••••••••":r.EffectiveValue ?? "Not configured") <small>from @r.SourceOrganizationType @r.SourceOrganizationId, form “@(r.SourceFormCode.Length==0?"default":r.SourceFormCode)”</small></p>
- <input type="hidden" name="Changes[@i].Key" value="@d.Key" /><label>Operation <select name="Changes[@i].Operation" class="operation"><option value="Upsert">@(r.OwnsOverride?"Update override":"Add override")</option><option value="RemoveOverride" disabled="@(!r.OwnsOverride)">Remove override</option></select></label>
- <label>Value
- @if(d.ValueType==SettingValueType.Boolean){<select name="Changes[@i].Value" class="setting-value"><option value="true" selected="@(value.Equals("true",StringComparison.OrdinalIgnoreCase))">True</option><option value="false" selected="@(value.Equals("false",StringComparison.OrdinalIgnoreCase))">False</option></select>}
- else if(d.ValueType is SettingValueType.Integer or SettingValueType.NullableInteger or SettingValueType.Decimal){<input name="Changes[@i].Value" class="setting-value" type="number" step="@(d.ValueType==SettingValueType.Decimal?"any":"1")" value="@value" />}
- else if(d.ValueType is SettingValueType.Date or SettingValueType.NullableDate){<input name="Changes[@i].Value" class="setting-value" type="date" value="@value" />}
- else if(d.ValueType==SettingValueType.EmailAddress){<input name="Changes[@i].Value" class="setting-value" type="email" value="@value" />}
- else if(d.ValueType==SettingValueType.Uri){<input name="Changes[@i].Value" class="setting-value" type="url" value="@value" />}
- else if(d.ValueType is SettingValueType.LongString or SettingValueType.Html or SettingValueType.EmailTemplate){<textarea name="Changes[@i].Value" class="setting-value" rows="4">@value</textarea>@if(d.ValueType is SettingValueType.Html or SettingValueType.EmailTemplate){<iframe sandbox="" title="Isolated preview for @d.DisplayName" class="html-preview"></iframe>}}
- else {<input name="Changes[@i].Value" class="setting-value" type="@(d.IsSensitive?"password":"text")" value="@value" autocomplete="@(d.IsSensitive?"new-password":"off")" />}
- </label><p class="override-state">@(row.DraftOperation is null ? (r.OwnsOverride?"Current scope owns an override.":"Inherited; saving adds an override.") : $"Draft: {row.DraftOperation}.")</p>
+@model Clc.PatronRegistration.Web.Models.SettingRowViewModel
+@{
+    var definition = Model.Definition;
+    var resolution = Model.Resolution;
+    var token = Model.Token;
+    var inputId = $"{token}-value";
+    var operationId = $"{token}-operation";
+    var editorValue = Model.DraftOperation == DraftOperation.Upsert
+        ? Model.DraftValue
+        : resolution.OwnsOverride ? resolution.CurrentOverrideValue : resolution.EffectiveValue;
+    editorValue ??= string.Empty;
+    var safeEffective = definition.IsSensitive ? string.Empty : resolution.EffectiveValue;
+    var searchText = $"{definition.DisplayName} {definition.Key} {definition.Description} {safeEffective}".ToLowerInvariant();
+}
+<article class="setting-row"
+         data-search="@searchText"
+         data-display-name="@definition.DisplayName"
+         data-setting-key="@definition.Key"
+         data-old-value="@(definition.IsSensitive ? "••••••••" : resolution.EffectiveValue)"
+         data-sensitive="@definition.IsSensitive.ToString().ToLowerInvariant()">
+    <input class="change-index" type="hidden" name="Changes.Index" value="@token" disabled />
+    <input class="change-key" type="hidden" name="Changes[@token].Key" value="@definition.Key" disabled />
+
+    <header>
+        <h3>@definition.DisplayName</h3>
+        <code>@definition.Key</code>
+    </header>
+    <p>@definition.Description</p>
+    <dl class="setting-source">
+        <div>
+            <dt>Effective value</dt>
+            <dd>@(definition.IsSensitive ? "••••••••" : resolution.EffectiveValue ?? "Not configured")</dd>
+        </div>
+        <div>
+            <dt>Inherited source</dt>
+            <dd>@resolution.SourceOrganizationType @resolution.SourceOrganizationId · @(resolution.SourceFormCode.Length == 0 ? "default form" : resolution.SourceFormCode)</dd>
+        </div>
+        <div>
+            <dt>Override state</dt>
+            <dd>@(resolution.OwnsOverride ? "This scope owns an override." : "Inherited; saving adds an override.")</dd>
+        </div>
+        @if (Model.DraftOperation is not null)
+        {
+            <div>
+                <dt>Draft state</dt>
+                <dd>@Model.DraftOperation @(Model.DraftOperation == DraftOperation.Upsert && definition.IsSensitive ? "••••••••" : Model.DraftValue)</dd>
+            </div>
+        }
+    </dl>
+
+    <div class="setting-editor">
+        <div>
+            <label for="@operationId">Operation</label>
+            <select id="@operationId" class="operation" name="Changes[@token].Operation" disabled>
+                <option value="Upsert">@(resolution.OwnsOverride ? "Update override" : "Add override")</option>
+                @if (resolution.OwnsOverride)
+                {
+                    <option value="RemoveOverride">Remove override</option>
+                }
+            </select>
+        </div>
+        <div class="value-editor">
+            <label for="@inputId">Value</label>
+            @if (definition.ValueType == SettingValueType.Boolean)
+            {
+                <select id="@inputId" class="setting-value" name="Changes[@token].Value" disabled>
+                    <option value="true" selected="@editorValue.Equals("true", StringComparison.OrdinalIgnoreCase)">True</option>
+                    <option value="false" selected="@editorValue.Equals("false", StringComparison.OrdinalIgnoreCase)">False</option>
+                </select>
+            }
+            else if (definition.ValueType is SettingValueType.Integer or SettingValueType.NullableInteger or SettingValueType.Decimal)
+            {
+                <input id="@inputId" class="setting-value" name="Changes[@token].Value" type="number" step="@(definition.ValueType == SettingValueType.Decimal ? "any" : "1")" value="@editorValue" disabled />
+            }
+            else if (definition.ValueType is SettingValueType.Date or SettingValueType.NullableDate)
+            {
+                <input id="@inputId" class="setting-value" name="Changes[@token].Value" type="date" value="@editorValue" disabled />
+            }
+            else if (definition.ValueType == SettingValueType.EmailAddress)
+            {
+                <input id="@inputId" class="setting-value" name="Changes[@token].Value" type="email" value="@editorValue" disabled />
+            }
+            else if (definition.ValueType == SettingValueType.Uri)
+            {
+                <input id="@inputId" class="setting-value" name="Changes[@token].Value" type="url" value="@editorValue" disabled />
+            }
+            else if (definition.ValueType is SettingValueType.LongString or SettingValueType.Html or SettingValueType.EmailTemplate)
+            {
+                <textarea id="@inputId" class="setting-value" name="Changes[@token].Value" rows="4" disabled>@editorValue</textarea>
+                @if (definition.ValueType is SettingValueType.Html or SettingValueType.EmailTemplate)
+                {
+                    <iframe sandbox="" title="Isolated preview for @definition.DisplayName" class="html-preview"></iframe>
+                }
+            }
+            else
+            {
+                <input id="@inputId" class="setting-value" name="Changes[@token].Value" type="@(definition.IsSensitive ? "password" : "text")" value="@editorValue" autocomplete="@(definition.IsSensitive ? "new-password" : "off")" disabled />
+            }
+        </div>
+        <button type="button" class="edit-setting">Edit this setting</button>
+    </div>
 </article>

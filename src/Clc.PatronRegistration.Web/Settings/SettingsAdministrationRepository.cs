@@ -6,53 +6,508 @@ using Microsoft.Data.SqlClient;
 
 namespace Clc.PatronRegistration.Web.Settings;
 
+public sealed record AuditContext(
+    string? ActorId,
+    string? ActorName,
+    int? ActorOrganizationId,
+    int TargetOrganizationId,
+    int TargetLibraryId,
+    string FormCode,
+    string? CorrelationId,
+    string? IpAddress);
+
+public sealed record FormCodeMetadata(
+    int OrganizationId,
+    string FormCode,
+    string DisplayName,
+    string? Description,
+    DateTime CreatedAtUtc,
+    string CreatedBy,
+    DateTime ModifiedAtUtc,
+    string ModifiedBy);
+
+public sealed record PreviewLinkRecord(
+    long PreviewLinkId,
+    long DraftId,
+    byte[] TokenHash,
+    bool AllowLiveSubmission,
+    DateTime? RevokedAtUtc,
+    DateTime? ExpiresAtUtc,
+    int OrganizationId,
+    string FormCode,
+    string DraftStatus);
+
+public sealed record FormCodeImpact(int MetadataRows, int OverrideRows, int Drafts, int PreviewLinks);
+
+public sealed record SettingsAuditRow(
+    long AuditEventId,
+    DateTime TimestampUtc,
+    string EventType,
+    int TargetOrganizationId,
+    int? TargetLibraryId,
+    string FormCode,
+    string? SettingKey,
+    string? PreviousValue,
+    string? NewValue,
+    bool Succeeded,
+    string? ActorName,
+    string? FailureReason,
+    string? CorrelationId,
+    string? IpAddress);
+
 public interface ISettingsAdministrationRepository
 {
     long GetVersion(int organizationId, string formCode);
+    long GetCacheGeneration();
+    SettingDraft? GetDraft(long draftId);
     SettingDraft? GetActiveDraft(int organizationId, string formCode);
-    void DirectSave(int organizationId, string formCode, long expectedVersion, IReadOnlyList<SettingMutation> changes, string actor);
+    long CreateDraft(int organizationId, string formCode, AuditContext audit);
+    void SaveDraftChanges(long draftId, IReadOnlyList<SettingMutation> changes, AuditContext audit);
+    void CommitDraft(long draftId, IReadOnlyDictionary<string, SettingDefinition> catalog, AuditContext audit);
+    void DiscardDraft(long draftId, AuditContext audit);
+    void DirectSave(int organizationId, string formCode, long expectedVersion, IReadOnlyList<SettingMutation> changes, IReadOnlyDictionary<string, SettingDefinition> catalog, AuditContext audit);
+    long CreatePreviewLink(long draftId, byte[] tokenHash, bool allowLiveSubmission, AuditContext audit);
+    PreviewLinkRecord? FindPreviewLink(byte[] tokenHash);
+    PreviewLinkRecord? GetPreviewLink(long previewLinkId);
+    IReadOnlyList<PreviewLinkRecord> GetPreviewLinks(long draftId);
+    void RevokePreviewLink(long previewLinkId, AuditContext audit);
+    void TogglePreviewLiveSubmission(long previewLinkId, bool allowLiveSubmission, AuditContext audit);
+    IReadOnlyList<FormCodeMetadata> GetFormCodes(int libraryId, int systemOrganizationId);
+    void SaveFormCode(FormCodeMetadata metadata, bool isCreate, AuditContext audit);
+    FormCodeImpact GetFormCodeImpact(int ownerOrganizationId, string formCode, IReadOnlyCollection<int> affectedOrganizations);
+    void DeleteFormCode(int ownerOrganizationId, string formCode, IReadOnlyCollection<int> affectedOrganizations, AuditContext audit);
     IEnumerable<SettingsAuditRow> SearchAudit(int? libraryId, string? term);
+    void WriteAudit(string eventType, bool succeeded, AuditContext audit, string? failureReason = null, long? draftId = null, long? previewLinkId = null, string? metadataJson = null);
 }
-public sealed record SettingsAuditRow(long AuditEventId, DateTime TimestampUtc, string EventType, int TargetOrganizationId, string FormCode, string? SettingKey, string? PreviousValue, string? NewValue, bool Succeeded, string? ActorName);
 
 public sealed class SettingsAdministrationRepository(IDbHelperSettings settings) : ISettingsAdministrationRepository
 {
-    private SqlConnection Open() { var c = new SqlConnection($"Server={settings.db_hostname};Database={settings.db_name};Trusted_Connection=True;Encrypt=False;"); c.Open(); return c; }
+    private SqlConnection Open()
+    {
+        var connection = new SqlConnection($"Server={settings.db_hostname};Database={settings.db_name};Trusted_Connection=True;Encrypt=False;");
+        connection.Open();
+        return connection;
+    }
+
     public long GetVersion(int organizationId, string formCode)
     {
-        using var c = Open();
-        return c.QuerySingleOrDefault<long>("select Version from dbo.RegistrationSettingScopeVersions where OrganizationId=@organizationId and FormCode=@formCode", new { organizationId, formCode });
+        using var connection = Open();
+        return connection.QuerySingleOrDefault<long>(
+            "select Version from dbo.RegistrationSettingScopeVersions where OrganizationId=@organizationId and FormCode=@formCode",
+            new { organizationId, formCode });
     }
+
+    public long GetCacheGeneration()
+    {
+        using var connection = Open();
+        return connection.QuerySingle<long>("select Generation from dbo.RegistrationSettingsCacheGeneration where Id=1");
+    }
+
     public SettingDraft? GetActiveDraft(int organizationId, string formCode)
     {
-        using var c = Open();
-        var draft = c.QuerySingleOrDefault<dynamic>("select top (1) * from dbo.RegistrationSettingDrafts where OrganizationId=@organizationId and FormCode=@formCode and Status='Active'", new { organizationId, formCode });
-        if (draft is null) return null;
-        var changes = c.Query<(string SettingKey, string Operation, string? Value)>("select SettingKey, Operation, Value from dbo.RegistrationSettingDraftChanges where DraftId=@DraftId", new { draft.DraftId })
-            .Select(x => new SettingMutation(x.SettingKey, Enum.Parse<DraftOperation>(x.Operation), x.Value)).ToList();
-        return new((long)draft.DraftId, (int)draft.OrganizationId, (string)draft.FormCode, (long)draft.BaselineVersion, DraftStatus.Active, changes);
+        using var connection = Open();
+        var draftId = connection.QuerySingleOrDefault<long?>(
+            "select DraftId from dbo.RegistrationSettingDrafts where OrganizationId=@organizationId and FormCode=@formCode and Status='Active'",
+            new { organizationId, formCode });
+        return draftId.HasValue ? ReadDraft(connection, draftId.Value) : null;
     }
-    public void DirectSave(int organizationId, string formCode, long expectedVersion, IReadOnlyList<SettingMutation> changes, string actor)
+
+    public SettingDraft? GetDraft(long draftId)
     {
-        using var c = Open(); using var tx = c.BeginTransaction(IsolationLevel.Serializable);
-        c.Execute("if not exists(select 1 from dbo.RegistrationSettingScopeVersions with(updlock,holdlock) where OrganizationId=@organizationId and FormCode=@formCode) insert dbo.RegistrationSettingScopeVersions(OrganizationId,FormCode,Version,ModifiedAtUtc) values(@organizationId,@formCode,0,SYSUTCDATETIME())", new { organizationId, formCode }, tx);
-        var current = c.QuerySingle<long>("select Version from dbo.RegistrationSettingScopeVersions with(updlock,holdlock) where OrganizationId=@organizationId and FormCode=@formCode", new { organizationId, formCode }, tx);
-        if (current != expectedVersion) throw new DBConcurrencyException("Settings changed since this page was loaded. Reload and review the current values.");
+        using var connection = Open();
+        return ReadDraft(connection, draftId);
+    }
+
+    private static SettingDraft? ReadDraft(SqlConnection connection, long draftId, IDbTransaction? transaction = null)
+    {
+        var row = connection.QuerySingleOrDefault<DraftRow>(
+            "select DraftId,OrganizationId,FormCode,BaselineVersion,Status from dbo.RegistrationSettingDrafts where DraftId=@draftId",
+            new { draftId }, transaction);
+        if (row is null)
+        {
+            return null;
+        }
+
+        var changes = connection.Query<DraftChangeRow>(
+                "select SettingKey,Operation,Value from dbo.RegistrationSettingDraftChanges where DraftId=@draftId order by SettingKey",
+                new { draftId }, transaction)
+            .Select(change => new SettingMutation(change.SettingKey, Enum.Parse<DraftOperation>(change.Operation), change.Value))
+            .ToList();
+        return new SettingDraft(row.DraftId, row.OrganizationId, row.FormCode, row.BaselineVersion, Enum.Parse<DraftStatus>(row.Status), changes);
+    }
+
+    public long CreateDraft(int organizationId, string formCode, AuditContext audit)
+    {
+        using var connection = Open();
+        using var transaction = connection.BeginTransaction(IsolationLevel.Serializable);
+        EnsureVersionRow(connection, transaction, organizationId, formCode);
+        var existing = connection.QuerySingleOrDefault<long?>(
+            "select DraftId from dbo.RegistrationSettingDrafts with(updlock,holdlock) where OrganizationId=@organizationId and FormCode=@formCode and Status='Active'",
+            new { organizationId, formCode }, transaction);
+        if (existing.HasValue)
+        {
+            transaction.Commit();
+            return existing.Value;
+        }
+
+        var version = ReadVersion(connection, transaction, organizationId, formCode);
+        var draftId = connection.QuerySingle<long>(@"
+insert dbo.RegistrationSettingDrafts(OrganizationId,FormCode,BaselineVersion,Status,CreatedBy,ModifiedBy)
+output inserted.DraftId values(@organizationId,@formCode,@version,'Active',@actor,@actor)",
+            new { organizationId, formCode, version, actor = audit.ActorName ?? "unknown" }, transaction);
+        InsertAudit(connection, transaction, "DraftCreated", true, audit, draftId: draftId);
+        transaction.Commit();
+        return draftId;
+    }
+
+    public void SaveDraftChanges(long draftId, IReadOnlyList<SettingMutation> changes, AuditContext audit)
+    {
+        using var connection = Open();
+        using var transaction = connection.BeginTransaction(IsolationLevel.Serializable);
+        EnsureActiveDraft(connection, transaction, draftId);
         foreach (var change in changes)
         {
-            var old = c.QuerySingleOrDefault<string>("select Value from dbo.RegistrationFormSettings where OrganizationID=@organizationId and FormCode=@formCode and Setting=@Key", new { organizationId, formCode, change.Key }, tx);
-            var sensitive = change.Key.Equals("postmark_api_key", StringComparison.OrdinalIgnoreCase) || change.Key.Equals("melissa_data_api_key", StringComparison.OrdinalIgnoreCase);
-            if (change.Operation == DraftOperation.RemoveOverride)
-                c.Execute("delete dbo.RegistrationFormSettings where OrganizationID=@organizationId and FormCode=@formCode and Setting=@Key", new { organizationId, formCode, change.Key }, tx);
-            else c.Execute("update dbo.RegistrationFormSettings set Value=@Value where OrganizationID=@organizationId and FormCode=@formCode and Setting=@Key; if @@ROWCOUNT=0 insert dbo.RegistrationFormSettings(OrganizationID,Setting,FormCode,Value) values(@organizationId,@Key,@formCode,@Value)", new { organizationId, formCode, change.Key, change.Value }, tx);
-            c.Execute("insert dbo.RegistrationSettingAuditEvents(TimestampUtc,EventType,ActorName,TargetOrganizationId,FormCode,SettingKey,PreviousValue,NewValue,IsSensitive,Succeeded) values(SYSUTCDATETIME(),@eventType,@actor,@organizationId,@formCode,@Key,@previousValue,@newValue,@sensitive,1)", new { eventType = change.Operation == DraftOperation.RemoveOverride ? "OverrideRemoved" : old is null ? "OverrideCreated" : "OverrideUpdated", actor, organizationId, formCode, change.Key, previousValue = sensitive ? SensitiveValueMasker.Mask(old) : old, newValue = sensitive ? SensitiveValueMasker.Mask(change.Value) : change.Value, sensitive }, tx);
+            connection.Execute(@"
+update dbo.RegistrationSettingDraftChanges
+set Operation=@operation,Value=@value,ModifiedAtUtc=SYSUTCDATETIME(),ModifiedBy=@actor
+where DraftId=@draftId and SettingKey=@key;
+if @@ROWCOUNT=0
+ insert dbo.RegistrationSettingDraftChanges(DraftId,SettingKey,Operation,Value,ModifiedBy)
+ values(@draftId,@key,@operation,@value,@actor);",
+                new
+                {
+                    draftId,
+                    key = change.Key,
+                    operation = change.Operation.ToString(),
+                    value = change.Operation == DraftOperation.RemoveOverride ? null : change.Value,
+                    actor = audit.ActorName ?? "unknown"
+                }, transaction);
         }
-        c.Execute("update dbo.RegistrationSettingScopeVersions set Version=Version+1,ModifiedAtUtc=SYSUTCDATETIME() where OrganizationId=@organizationId and FormCode=@formCode; update dbo.RegistrationSettingsCacheGeneration set Generation=Generation+1,ModifiedAtUtc=SYSUTCDATETIME() where Id=1", new { organizationId, formCode }, tx);
-        tx.Commit();
+        connection.Execute(
+            "update dbo.RegistrationSettingDrafts set ModifiedAtUtc=SYSUTCDATETIME(),ModifiedBy=@actor where DraftId=@draftId",
+            new { draftId, actor = audit.ActorName ?? "unknown" }, transaction);
+        InsertAudit(connection, transaction, "DraftEdited", true, audit, draftId: draftId, metadataJson: $"{{\"changeCount\":{changes.Count}}}");
+        transaction.Commit();
     }
+
+    public void DirectSave(int organizationId, string formCode, long expectedVersion, IReadOnlyList<SettingMutation> changes, IReadOnlyDictionary<string, SettingDefinition> catalog, AuditContext audit)
+    {
+        using var connection = Open();
+        using var transaction = connection.BeginTransaction(IsolationLevel.Serializable);
+        EnsureVersionRow(connection, transaction, organizationId, formCode);
+        var current = ReadVersion(connection, transaction, organizationId, formCode);
+        if (current != expectedVersion)
+        {
+            InsertAudit(connection, transaction, "ConcurrencyConflict", false, audit, "Expected scope version was stale.");
+            transaction.Commit();
+            throw new DBConcurrencyException("Settings changed since this page was loaded. Reload and review the current values.");
+        }
+
+        ApplyChanges(connection, transaction, organizationId, formCode, changes, catalog, audit);
+        IncrementVersions(connection, transaction, organizationId, formCode);
+        InsertAudit(connection, transaction, "DirectSave", true, audit, metadataJson: $"{{\"changeCount\":{changes.Count}}}");
+        transaction.Commit();
+    }
+
+    public void CommitDraft(long draftId, IReadOnlyDictionary<string, SettingDefinition> catalog, AuditContext audit)
+    {
+        using var connection = Open();
+        using var transaction = connection.BeginTransaction(IsolationLevel.Serializable);
+        var draft = ReadDraft(connection, draftId, transaction) ?? throw new InvalidOperationException("Draft does not exist.");
+        if (draft.Status != DraftStatus.Active)
+        {
+            throw new InvalidOperationException("Only an active draft can be committed.");
+        }
+
+        EnsureVersionRow(connection, transaction, draft.OrganizationId, draft.FormCode);
+        if (ReadVersion(connection, transaction, draft.OrganizationId, draft.FormCode) != draft.BaselineVersion)
+        {
+            InsertAudit(connection, transaction, "DraftCommitConflict", false, audit, "Draft baseline version was stale.", draftId);
+            transaction.Commit();
+            throw new DBConcurrencyException("The live settings changed after this draft was created. Reload and review before creating a new draft.");
+        }
+
+        ApplyChanges(connection, transaction, draft.OrganizationId, draft.FormCode, draft.Changes, catalog, audit, draftId);
+        IncrementVersions(connection, transaction, draft.OrganizationId, draft.FormCode);
+        connection.Execute(@"
+update dbo.RegistrationSettingDrafts set Status='Committed',CommittedAtUtc=SYSUTCDATETIME(),CommittedBy=@actor,ModifiedAtUtc=SYSUTCDATETIME(),ModifiedBy=@actor where DraftId=@draftId;
+update dbo.RegistrationSettingPreviewLinks set RevokedAtUtc=coalesce(RevokedAtUtc,SYSUTCDATETIME()),RevokedBy=coalesce(RevokedBy,@actor),ModifiedAtUtc=SYSUTCDATETIME(),ModifiedBy=@actor where DraftId=@draftId;",
+            new { draftId, actor = audit.ActorName ?? "unknown" }, transaction);
+        InsertAudit(connection, transaction, "DraftCommitted", true, audit, draftId: draftId);
+        transaction.Commit();
+    }
+
+    public void DiscardDraft(long draftId, AuditContext audit)
+    {
+        using var connection = Open();
+        using var transaction = connection.BeginTransaction(IsolationLevel.Serializable);
+        EnsureActiveDraft(connection, transaction, draftId);
+        connection.Execute(@"
+update dbo.RegistrationSettingDrafts set Status='Discarded',DiscardedAtUtc=SYSUTCDATETIME(),DiscardedBy=@actor,ModifiedAtUtc=SYSUTCDATETIME(),ModifiedBy=@actor where DraftId=@draftId;
+update dbo.RegistrationSettingPreviewLinks set RevokedAtUtc=coalesce(RevokedAtUtc,SYSUTCDATETIME()),RevokedBy=coalesce(RevokedBy,@actor),ModifiedAtUtc=SYSUTCDATETIME(),ModifiedBy=@actor where DraftId=@draftId;",
+            new { draftId, actor = audit.ActorName ?? "unknown" }, transaction);
+        InsertAudit(connection, transaction, "DraftDiscarded", true, audit, draftId: draftId);
+        transaction.Commit();
+    }
+
+    public long CreatePreviewLink(long draftId, byte[] tokenHash, bool allowLiveSubmission, AuditContext audit)
+    {
+        using var connection = Open();
+        using var transaction = connection.BeginTransaction(IsolationLevel.Serializable);
+        EnsureActiveDraft(connection, transaction, draftId);
+        var previewLinkId = connection.QuerySingle<long>(@"
+insert dbo.RegistrationSettingPreviewLinks(DraftId,TokenHash,AllowLiveSubmission,CreatedBy,ModifiedBy)
+output inserted.PreviewLinkId values(@draftId,@tokenHash,@allowLiveSubmission,@actor,@actor)",
+            new { draftId, tokenHash, allowLiveSubmission, actor = audit.ActorName ?? "unknown" }, transaction);
+        InsertAudit(connection, transaction, "PreviewLinkCreated", true, audit, draftId: draftId, previewLinkId: previewLinkId);
+        transaction.Commit();
+        return previewLinkId;
+    }
+
+    public PreviewLinkRecord? FindPreviewLink(byte[] tokenHash)
+    {
+        using var connection = Open();
+        return connection.QuerySingleOrDefault<PreviewLinkRecord>(@"
+select p.PreviewLinkId,p.DraftId,p.TokenHash,p.AllowLiveSubmission,p.RevokedAtUtc,p.ExpiresAtUtc,d.OrganizationId,d.FormCode,d.Status DraftStatus
+from dbo.RegistrationSettingPreviewLinks p join dbo.RegistrationSettingDrafts d on d.DraftId=p.DraftId
+where p.TokenHash=@tokenHash", new { tokenHash });
+    }
+
+    public PreviewLinkRecord? GetPreviewLink(long previewLinkId)
+    {
+        using var connection = Open();
+        return connection.QuerySingleOrDefault<PreviewLinkRecord>(@"
+select p.PreviewLinkId,p.DraftId,p.TokenHash,p.AllowLiveSubmission,p.RevokedAtUtc,p.ExpiresAtUtc,d.OrganizationId,d.FormCode,d.Status DraftStatus
+from dbo.RegistrationSettingPreviewLinks p join dbo.RegistrationSettingDrafts d on d.DraftId=p.DraftId
+where p.PreviewLinkId=@previewLinkId", new { previewLinkId });
+    }
+
+    public IReadOnlyList<PreviewLinkRecord> GetPreviewLinks(long draftId)
+    {
+        using var connection = Open();
+        return connection.Query<PreviewLinkRecord>(@"
+select p.PreviewLinkId,p.DraftId,p.TokenHash,p.AllowLiveSubmission,p.RevokedAtUtc,p.ExpiresAtUtc,d.OrganizationId,d.FormCode,d.Status DraftStatus
+from dbo.RegistrationSettingPreviewLinks p join dbo.RegistrationSettingDrafts d on d.DraftId=p.DraftId
+where p.DraftId=@draftId order by p.PreviewLinkId desc", new { draftId }).ToList();
+    }
+
+    public void RevokePreviewLink(long previewLinkId, AuditContext audit)
+    {
+        using var connection = Open();
+        using var transaction = connection.BeginTransaction();
+        connection.Execute(@"
+update dbo.RegistrationSettingPreviewLinks
+set RevokedAtUtc=coalesce(RevokedAtUtc,SYSUTCDATETIME()),RevokedBy=coalesce(RevokedBy,@actor),ModifiedAtUtc=SYSUTCDATETIME(),ModifiedBy=@actor
+where PreviewLinkId=@previewLinkId", new { previewLinkId, actor = audit.ActorName ?? "unknown" }, transaction);
+        InsertAudit(connection, transaction, "PreviewLinkRevoked", true, audit, previewLinkId: previewLinkId);
+        transaction.Commit();
+    }
+
+    public void TogglePreviewLiveSubmission(long previewLinkId, bool allowLiveSubmission, AuditContext audit)
+    {
+        using var connection = Open();
+        using var transaction = connection.BeginTransaction();
+        connection.Execute(@"
+update dbo.RegistrationSettingPreviewLinks set AllowLiveSubmission=@allowLiveSubmission,ModifiedAtUtc=SYSUTCDATETIME(),ModifiedBy=@actor
+where PreviewLinkId=@previewLinkId and RevokedAtUtc is null",
+            new { previewLinkId, allowLiveSubmission, actor = audit.ActorName ?? "unknown" }, transaction);
+        InsertAudit(connection, transaction, "PreviewLiveSubmissionToggled", true, audit, previewLinkId: previewLinkId, metadataJson: $"{{\"enabled\":{allowLiveSubmission.ToString().ToLowerInvariant()}}}");
+        transaction.Commit();
+    }
+
+    public IReadOnlyList<FormCodeMetadata> GetFormCodes(int libraryId, int systemOrganizationId)
+    {
+        using var connection = Open();
+        return connection.Query<FormCodeMetadata>(@"
+select OrganizationId,FormCode,DisplayName,Description,CreatedAtUtc,CreatedBy,ModifiedAtUtc,ModifiedBy
+from dbo.RegistrationFormCodeMetadata where OrganizationId in (@libraryId,@systemOrganizationId)
+order by FormCode,case when OrganizationId=@libraryId then 0 else 1 end",
+            new { libraryId, systemOrganizationId }).ToList();
+    }
+
+    public void SaveFormCode(FormCodeMetadata metadata, bool isCreate, AuditContext audit)
+    {
+        if (string.IsNullOrWhiteSpace(metadata.FormCode))
+        {
+            throw new ArgumentException("The default form code cannot have a metadata row.");
+        }
+        using var connection = Open();
+        using var transaction = connection.BeginTransaction(IsolationLevel.Serializable);
+        if (isCreate)
+        {
+            connection.Execute(@"
+insert dbo.RegistrationFormCodeMetadata(OrganizationId,FormCode,DisplayName,Description,CreatedBy,ModifiedBy)
+values(@OrganizationId,@FormCode,@DisplayName,@Description,@CreatedBy,@ModifiedBy)", metadata, transaction);
+        }
+        else
+        {
+            connection.Execute(@"
+update dbo.RegistrationFormCodeMetadata set DisplayName=@DisplayName,Description=@Description,ModifiedAtUtc=SYSUTCDATETIME(),ModifiedBy=@ModifiedBy
+where OrganizationId=@OrganizationId and FormCode=@FormCode", metadata, transaction);
+        }
+        EnsureVersionRow(connection, transaction, metadata.OrganizationId, metadata.FormCode);
+        IncrementVersions(connection, transaction, metadata.OrganizationId, metadata.FormCode);
+        InsertAudit(connection, transaction, isCreate ? "FormCodeCreated" : "FormCodeMetadataUpdated", true, audit);
+        transaction.Commit();
+    }
+
+    public FormCodeImpact GetFormCodeImpact(int ownerOrganizationId, string formCode, IReadOnlyCollection<int> affectedOrganizations)
+    {
+        using var connection = Open();
+        return connection.QuerySingle<FormCodeImpact>(@"
+select
+ (select count(*) from dbo.RegistrationFormCodeMetadata where OrganizationId in @affectedOrganizations and FormCode=@formCode) MetadataRows,
+ (select count(*) from dbo.RegistrationFormSettings where OrganizationID in @affectedOrganizations and FormCode=@formCode) OverrideRows,
+ (select count(*) from dbo.RegistrationSettingDrafts where OrganizationId in @affectedOrganizations and FormCode=@formCode) Drafts,
+ (select count(*) from dbo.RegistrationSettingPreviewLinks p join dbo.RegistrationSettingDrafts d on d.DraftId=p.DraftId where d.OrganizationId in @affectedOrganizations and d.FormCode=@formCode) PreviewLinks",
+            new { ownerOrganizationId, formCode, affectedOrganizations });
+    }
+
+    public void DeleteFormCode(int ownerOrganizationId, string formCode, IReadOnlyCollection<int> affectedOrganizations, AuditContext audit)
+    {
+        if (string.IsNullOrWhiteSpace(formCode))
+        {
+            throw new ArgumentException("The default form code cannot be deleted.");
+        }
+        using var connection = Open();
+        using var transaction = connection.BeginTransaction(IsolationLevel.Serializable);
+        connection.Execute(@"
+delete p from dbo.RegistrationSettingPreviewLinks p join dbo.RegistrationSettingDrafts d on d.DraftId=p.DraftId where d.OrganizationId in @affectedOrganizations and d.FormCode=@formCode;
+delete from dbo.RegistrationSettingDrafts where OrganizationId in @affectedOrganizations and FormCode=@formCode;
+delete from dbo.RegistrationFormSettings where OrganizationID in @affectedOrganizations and FormCode=@formCode;
+delete from dbo.RegistrationFormCodeMetadata where OrganizationId in @affectedOrganizations and FormCode=@formCode;",
+            new { ownerOrganizationId, formCode, affectedOrganizations }, transaction);
+        EnsureVersionRow(connection, transaction, ownerOrganizationId, formCode);
+        IncrementVersions(connection, transaction, ownerOrganizationId, formCode);
+        InsertAudit(connection, transaction, "FormCodeDeleted", true, audit);
+        transaction.Commit();
+    }
+
     public IEnumerable<SettingsAuditRow> SearchAudit(int? libraryId, string? term)
     {
-        using var c = Open(); term = $"%{term ?? string.Empty}%";
-        return c.Query<SettingsAuditRow>("select top(500) AuditEventId,TimestampUtc,EventType,TargetOrganizationId,FormCode,SettingKey,PreviousValue,NewValue,Succeeded,ActorName from dbo.RegistrationSettingAuditEvents where (@libraryId is null or TargetLibraryId=@libraryId) and (EventType like @term or SettingKey like @term or ActorName like @term) order by TimestampUtc desc", new { libraryId, term }).ToList();
+        using var connection = Open();
+        var pattern = $"%{term ?? string.Empty}%";
+        return connection.Query<SettingsAuditRow>(@"
+select top(500) AuditEventId,TimestampUtc,EventType,TargetOrganizationId,TargetLibraryId,FormCode,SettingKey,
+ PreviousValue,NewValue,Succeeded,ActorName,FailureReason,CorrelationId,IpAddress
+from dbo.RegistrationSettingAuditEvents
+where (@libraryId is null or TargetLibraryId=@libraryId)
+ and (EventType like @pattern or SettingKey like @pattern or ActorName like @pattern or FormCode like @pattern)
+order by TimestampUtc desc", new { libraryId, pattern }).ToList();
     }
+
+    public void WriteAudit(string eventType, bool succeeded, AuditContext audit, string? failureReason = null, long? draftId = null, long? previewLinkId = null, string? metadataJson = null)
+    {
+        using var connection = Open();
+        InsertAudit(connection, null, eventType, succeeded, audit, failureReason, draftId, previewLinkId, metadataJson);
+    }
+
+    private static void ApplyChanges(SqlConnection connection, IDbTransaction transaction, int organizationId, string formCode, IReadOnlyList<SettingMutation> changes, IReadOnlyDictionary<string, SettingDefinition> catalog, AuditContext audit, long? draftId = null)
+    {
+        foreach (var change in changes)
+        {
+            if (!catalog.TryGetValue(change.Key, out var definition))
+            {
+                throw new InvalidOperationException($"Unrecognized setting key: {change.Key}");
+            }
+            var validationError = change.Operation == DraftOperation.Upsert ? definition.Validate(change.Value) : null;
+            if (validationError is not null)
+            {
+                throw new InvalidOperationException($"{definition.DisplayName}: {validationError}");
+            }
+
+            var old = connection.QuerySingleOrDefault<string>(
+                "select Value from dbo.RegistrationFormSettings where OrganizationID=@organizationId and FormCode=@formCode and Setting=@key",
+                new { organizationId, formCode, key = change.Key }, transaction);
+            if (change.Operation == DraftOperation.RemoveOverride)
+            {
+                connection.Execute(
+                    "delete dbo.RegistrationFormSettings where OrganizationID=@organizationId and FormCode=@formCode and Setting=@key",
+                    new { organizationId, formCode, key = change.Key }, transaction);
+            }
+            else
+            {
+                connection.Execute(@"
+update dbo.RegistrationFormSettings set Value=@value where OrganizationID=@organizationId and FormCode=@formCode and Setting=@key;
+if @@ROWCOUNT=0 insert dbo.RegistrationFormSettings(OrganizationID,Setting,FormCode,Value) values(@organizationId,@key,@formCode,@value);",
+                    new { organizationId, formCode, key = change.Key, value = change.Value }, transaction);
+            }
+
+            InsertAudit(connection, transaction,
+                change.Operation == DraftOperation.RemoveOverride ? "OverrideRemoved" : old is null ? "OverrideCreated" : "OverrideUpdated",
+                true, audit, draftId: draftId, settingKey: change.Key,
+                previousValue: definition.IsSensitive ? SensitiveValueMasker.Mask(old) : old,
+                newValue: definition.IsSensitive ? SensitiveValueMasker.Mask(change.Value) : change.Value,
+                isSensitive: definition.IsSensitive);
+        }
+    }
+
+    private static void EnsureActiveDraft(SqlConnection connection, IDbTransaction transaction, long draftId)
+    {
+        var status = connection.QuerySingleOrDefault<string>(
+            "select Status from dbo.RegistrationSettingDrafts with(updlock,holdlock) where DraftId=@draftId",
+            new { draftId }, transaction);
+        if (status != "Active")
+        {
+            throw new InvalidOperationException("Only an active draft can be changed.");
+        }
+    }
+
+    private static void EnsureVersionRow(SqlConnection connection, IDbTransaction transaction, int organizationId, string formCode)
+    {
+        connection.Execute(@"
+if not exists(select 1 from dbo.RegistrationSettingScopeVersions with(updlock,holdlock) where OrganizationId=@organizationId and FormCode=@formCode)
+ insert dbo.RegistrationSettingScopeVersions(OrganizationId,FormCode,Version,ModifiedAtUtc) values(@organizationId,@formCode,0,SYSUTCDATETIME());",
+            new { organizationId, formCode }, transaction);
+    }
+
+    private static long ReadVersion(SqlConnection connection, IDbTransaction transaction, int organizationId, string formCode) =>
+        connection.QuerySingle<long>(
+            "select Version from dbo.RegistrationSettingScopeVersions with(updlock,holdlock) where OrganizationId=@organizationId and FormCode=@formCode",
+            new { organizationId, formCode }, transaction);
+
+    private static void IncrementVersions(SqlConnection connection, IDbTransaction transaction, int organizationId, string formCode)
+    {
+        connection.Execute(@"
+update dbo.RegistrationSettingScopeVersions set Version=Version+1,ModifiedAtUtc=SYSUTCDATETIME() where OrganizationId=@organizationId and FormCode=@formCode;
+update dbo.RegistrationSettingsCacheGeneration set Generation=Generation+1,ModifiedAtUtc=SYSUTCDATETIME() where Id=1;",
+            new { organizationId, formCode }, transaction);
+    }
+
+    private static void InsertAudit(SqlConnection connection, IDbTransaction? transaction, string eventType, bool succeeded, AuditContext audit,
+        string? failureReason = null, long? draftId = null, long? previewLinkId = null, string? metadataJson = null,
+        string? settingKey = null, string? previousValue = null, string? newValue = null, bool isSensitive = false)
+    {
+        connection.Execute(@"
+insert dbo.RegistrationSettingAuditEvents(
+ TimestampUtc,EventType,ActorId,ActorName,ActorOrganizationId,TargetOrganizationId,TargetLibraryId,FormCode,
+ SettingKey,PreviousValue,NewValue,IsSensitive,DraftId,PreviewLinkId,CorrelationId,IpAddress,Succeeded,FailureReason,MetadataJson)
+values(
+ SYSUTCDATETIME(),@eventType,@ActorId,@ActorName,@ActorOrganizationId,@TargetOrganizationId,@TargetLibraryId,@FormCode,
+ @settingKey,@previousValue,@newValue,@isSensitive,@draftId,@previewLinkId,@CorrelationId,@IpAddress,@succeeded,@failureReason,@metadataJson);",
+            new
+            {
+                eventType,
+                audit.ActorId,
+                audit.ActorName,
+                audit.ActorOrganizationId,
+                audit.TargetOrganizationId,
+                audit.TargetLibraryId,
+                audit.FormCode,
+                settingKey,
+                previousValue,
+                newValue,
+                isSensitive,
+                draftId,
+                previewLinkId,
+                audit.CorrelationId,
+                audit.IpAddress,
+                succeeded,
+                failureReason,
+                metadataJson
+            }, transaction);
+    }
+
+    private sealed record DraftRow(long DraftId, int OrganizationId, string FormCode, long BaselineVersion, string Status);
+    private sealed record DraftChangeRow(string SettingKey, string Operation, string? Value);
 }

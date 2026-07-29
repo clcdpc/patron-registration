@@ -13,6 +13,7 @@ namespace Clc.PatronRegistration.Configuration
         public string db_hostname { get; set; } = string.Empty;
         public string db_name { get; set; } = string.Empty;
         public bool ForceKioskModeLocally { get; set; }
+        public int SettingsSystemOrganizationId { get; set; } = 1;
         public string[] CorsAllowedOrigins { get; set; } = Array.Empty<string>();
         public IPapiSettings Papi { get; set; } = new PapiSettings();
         public IMelissaClientSettings Melissa { get; set; } = new MelissaClientSettings();
@@ -22,6 +23,7 @@ namespace Clc.PatronRegistration.Configuration
     {
         public string[] CorsAllowedOrigins { get; }
         public bool ForceKioskModeLocally { get; set; }
+        int SettingsSystemOrganizationId { get; set; }
         IPapiSettings Papi { get; set; }
         IMelissaClientSettings Melissa { get; set; }
     }

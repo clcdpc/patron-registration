@@ -10,26 +10,28 @@ namespace Clc.PatronRegistration.Configuration
 {
     public class DbSettingProvider : ISettingProvider
     {
-        public int LibraryId { get; }
+        public int LibraryId { get; protected set; }
         public int OrganizationId { get; }
         [JsonIgnore]
         public ICache Cache { get; }
         public string FormCode { get; } = string.Empty;
+        public int SystemOrganizationId { get; }
 
-        public DbSettingProvider(int orgId, ICache cache) : this(orgId, cache, "") { }
+        public DbSettingProvider(int orgId, ICache cache) : this(orgId, cache, "", 1) { }
 
-        public DbSettingProvider(int orgId, ICache cache, string formCode = "")
+        public DbSettingProvider(int orgId, ICache cache, string formCode = "", int systemOrganizationId = 1, int? libraryId = null)
         {
             OrganizationId = orgId;
             FormCode = formCode;
             Cache = cache;
+            SystemOrganizationId = systemOrganizationId;
             var branch = cache.OrganizationCache.Single(o => o.OrganizationID == OrganizationId);
-            LibraryId = Cache.OrganizationCache.GetLibrary(orgId).OrganizationID;
+            LibraryId = libraryId ?? Cache.OrganizationCache.GetLibrary(orgId).OrganizationID;
         }
 
-        public T GetSetting<T>(string name, T defaultValue = default!)
+        public virtual T GetSetting<T>(string name, T defaultValue = default!)
         {
-            var dbValue = new SettingsResolver().Resolve(Cache.SettingsCache, name, OrganizationId, LibraryId, FormCode).EffectiveValue;
+            var dbValue = new SettingsResolver().Resolve(Cache.SettingsCache, name, OrganizationId, LibraryId, FormCode, SystemOrganizationId).EffectiveValue;
             return ConvertToType(dbValue, defaultValue);
         }
 
@@ -44,6 +46,11 @@ namespace Clc.PatronRegistration.Configuration
                     defaultValue ??= (T)(object)"";
                 }
 
+                return defaultValue;
+            }
+
+            if (value.Length == 0 && t.IsGenericType && t.GetGenericTypeDefinition() == typeof(Nullable<>))
+            {
                 return defaultValue;
             }
 
@@ -68,16 +75,16 @@ namespace Clc.PatronRegistration.Configuration
         public string GetFieldErrorMessage(string propertyName) => GetSetting<string>($"alert.{propertyName}");
         public bool GetFieldRequired(string propertyName) => GetSetting<bool>($"require.{propertyName}");
 
-        public List<string> GetRequiredFields()
+        public virtual List<string> GetRequiredFields()
         {
-            var fields = Cache.SettingsCache
-                .Where(s => new[] { OrganizationId, LibraryId, 1 }.Contains(s.OrganizationID) && s.Setting.StartsWith("require.", StringComparison.OrdinalIgnoreCase) && new[] { "", FormCode }.Contains(s.FormCode, StringComparer.OrdinalIgnoreCase))
-                .GroupBy(s => s.Setting)
-                .SelectMany(s => s.OrderByDescending(c => c.OrganizationID).OrderByDescending(c => c.FormCode).Select(c => c.Setting))
-                .Select(s => s.Split("require.")[1])
+            var resolver = new SettingsResolver();
+            return Cache.SettingsCache
+                .Where(setting => setting.Setting.StartsWith("require.", StringComparison.OrdinalIgnoreCase))
+                .Select(setting => setting.Setting)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Where(key => bool.TryParse(resolver.Resolve(Cache.SettingsCache, key, OrganizationId, LibraryId, FormCode, SystemOrganizationId).EffectiveValue, out var required) && required)
+                .Select(key => key["require.".Length..])
                 .ToList();
-
-            return fields;
         }
         public string HeaderImageUrl => GetSetting<string>("header_image_url");
         public string CssFile => GetSetting<string>("css_file");

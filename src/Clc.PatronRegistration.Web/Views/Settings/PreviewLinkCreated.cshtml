@@ -1,0 +1,10 @@
+@model string
+@{
+    ViewData["Title"] = "Preview link created";
+}
+<h1>Preview link created</h1>
+<p>This bearer URL is shown only once. Anyone who possesses it can access the current active draft, and may perform real registrations if live submission was enabled.</p>
+<label for="preview-url">Copy preview URL</label>
+<input id="preview-url" value="@Model" readonly />
+<button type="button" onclick="navigator.clipboard.writeText(document.getElementById('preview-url').value)">Copy URL</button>
+<p><a asp-action="Index">Return to settings</a></p>

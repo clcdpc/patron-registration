@@ -83,6 +83,11 @@ namespace Clc.PatronRegistration
         [JsonIgnore]
         public ISettingProvider Settings { get; protected set; }
 
+        public void UseSettings(ISettingProvider settings)
+        {
+            Settings = settings;
+        }
+
         public bool BypassAgreement { get; set; } = false;
         public bool ShouldDisplayAgreement => !string.IsNullOrWhiteSpace(Settings?.WarningText) && !BypassAgreement;
 

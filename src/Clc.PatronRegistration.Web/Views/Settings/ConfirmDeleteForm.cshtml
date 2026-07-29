@@ -1,0 +1,18 @@
+@model Clc.PatronRegistration.Web.Models.DeleteFormCodeViewModel
+@{
+    ViewData["Title"] = "Delete form code";
+}
+<h1>Delete form code @Model.FormCode</h1>
+<p>This operation is transactional and cannot be undone. It will remove:</p>
+<ul>
+    <li>@Model.Impact.MetadataRows metadata rows</li>
+    <li>@Model.Impact.OverrideRows setting overrides</li>
+    <li>@Model.Impact.Drafts drafts</li>
+    <li>@Model.Impact.PreviewLinks preview links</li>
+</ul>
+<form asp-action="DeleteForm" asp-route-formCode="@Model.FormCode" method="post">
+    @Html.AntiForgeryToken()
+    <input type="hidden" name="organizationId" value="@Model.OrganizationId" />
+    <button type="submit" class="danger-button">Delete form code and related data</button>
+    <a asp-action="Forms" asp-route-libraryId="@Model.OrganizationId">Cancel</a>
+</form>

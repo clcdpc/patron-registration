@@ -1,23 +1,51 @@
 # Patron-registration settings administration
 
-The MVC interface is rooted at `/settings`. Access requires authentication, the configurable `SettingsAdministration:RequiredRole` (default `Clc.CardReg.ManageSettings`), and an integer organization claim (`organization`, `organization_id`, or `extension_Organization`). Organization `-1` is the configurable global administrator; organization `1` is the configurable system scope. A library administrator is restricted server-side to its library and branches and never receives sensitive catalog entries. `UseAuthentication` runs before `UseAuthorization`.
+The MVC administration interface is rooted at `/settings`. It uses the existing Dapper and `RegistrationFormSettings` architecture; it does not use EF Core or run database migrations at startup.
 
-## Resolution and overrides
+## Authorization and scope
 
-One resolver evaluates named branch, default branch, named library, default library, named system, then default system rows. Inapplicable levels are omitted. A stored empty string remains an explicit override. **Remove override** is a separate delete operation and resumes inheritance; clearing an editor saves an empty override.
+Access requires authentication, the configurable `SettingsAdministration:RequiredRole` (default `Clc.CardReg.ManageSettings`), and an integer organization claim named `organization`, `organization_id`, or `extension_Organization`. The configured global organization (default `-1`) can select system, library, and branch scopes. A library administrator can select only its library and branches. Scope and form-code authorization is repeated for every read and write; selector values are not treated as authorization.
 
-The code-defined catalog is the write allowlist and supplies editor types, validation, sensitivity, search metadata, and the centralized recognized suffixes for `alert.*`, `label.*`, and `require.*`. HTML/template source is previewed only in a sandboxed iframe.
+The configured system organization defaults to `1`. The same configured value is passed to live `DbSettingProvider`, administration resolution, and preview overlays. Non-global administrators never receive sensitive catalog definitions, values, hidden fields, or search data.
 
-## Forms, drafts, and saving
+## Resolution, catalog, and overrides
 
-The empty form code is the implicit default and has no metadata row. Named system and library metadata use immutable codes; library metadata with the same code customizes a system definition. Creation copies no settings. The database schema supports one shared Active draft per scope, Upsert (including empty) and RemoveOverride operations, optimistic baseline versions, transactional commit cleanup, and preview-link revocation. Direct save submits an exact browser confirmation, validates catalog keys again, locks the scope version, applies a transaction, audits changes, increments both scope version and cache generation, commits, and immediately rebuilds the local cache.
+`SettingsResolver` evaluates, in order: named branch, default branch, named library, default library, named system, and default system. Inapplicable levels are omitted. `DbSettingProvider`, required-field lookup, administration display, and preview overlay all use this precedence.
 
-Shared preview URLs are bearer credentials. Tokens contain 256 random bits, are URL-safe, and only SHA-256 hashes are stored. Validation uses constant-time comparison. Responses use `no-store` and `Referrer-Policy: no-referrer`. Keep live-submission disabled unless real PAPI/Melissa/Postmark side effects are intended. Safe preview must block final POST side effects; live preview must re-read the server-side flag rather than accepting a hidden field.
+The code-defined catalog is the write allowlist. It defines editor type, validation, sensitivity, empty-value behavior, and recognized dynamic suffixes. String-like values can be explicitly empty. Boolean and non-null numeric/date values cannot. Nullable integer/date settings store an empty string and `DbSettingProvider` consistently converts that representation to `null`. Removing an override is always a distinct operation.
 
-Secrets are visible only to global administrators, use password controls, are masked in browser confirmation, and must be passed through `SensitiveValueMasker` before audit persistence. Masking never records a whole short, medium, or long value.
+## Direct save and drafts
 
-## Deployment and operations
+Direct save submits only browser-edited rows using ASP.NET Core `Changes.Index` tokens, displays an exact confirmation, validates every key and value again, locks the scope version, applies all operations in one transaction, writes audit events, increments scope and cache generations, and immediately rebuilds local live settings.
 
-Apply [`database/001-settings-administration.sql`](database/001-settings-administration.sql) manually before deploying; see [`database/README.md`](database/README.md). The app does not run migrations. Configure role/global/system IDs and the generation polling interval in configuration. Production deployments require HTTPS (the app redirects and uses HSTS outside Development), Azure AD role assignment, database least-privilege grants, and all existing external-service configuration. Multi-node deployments compare the database cache generation at the configured interval; a successful local mutation also rebuilds memory immediately. Draft-only edits do not invalidate live cache.
+One active shared draft is enforced by a filtered unique database index for each organization/form-code scope. Authorized administrators can create or reopen it, stage Upsert or RemoveOverride changes, commit, or discard it. Commit revalidates the catalog, compares the live scope version with the draft baseline, atomically applies changes, increments versions, marks the draft committed, revokes links, audits, and invalidates live cache. Discard revokes links without changing live cache.
 
-Audit access is global or library-isolated and searchable. Events carry actor/scope/correlation/network and success metadata supported by the schema; sensitive values remain masked even for global viewers.
+## Preview links
+
+An active draft can issue an unauthenticated bearer URL. The plaintext is returned once; the database receives only its SHA-256 hash. Tokens contain 256 cryptographically random bits and use URL-safe encoding. Preview lookup rejects revoked, expired, committed, discarded, and invalidated links. Responses use `no-store` and `Referrer-Policy: no-referrer`.
+
+Preview rendering uses the real registration view and a `PreviewSettingProvider`: live inheritance is resolved first, draft Upserts replace the selected-scope row, and draft RemoveOverride operations expose the next inherited value. Safe preview performs rendering, client validation, read-only duplicate checks, and driver-license parsing, but its final POST returns a blocked result without calling patron creation, sending email, writing normal success history, or performing other registration side effects. When the database link's `AllowLiveSubmission` flag is enabled, POST revalidates the token and active draft and runs the existing real workflow. The page prominently identifies live mode. No browser Boolean controls this decision.
+
+Treat every preview URL as a credential. Revoke it immediately if shared incorrectly. Enabling live mode permits real PAPI, Melissa, Postmark, record-set, note, and registration-history effects.
+
+## Form codes
+
+The empty default code is implicit and cannot be created, renamed, or deleted. Named codes allow letters, numbers, hyphens, and underscores and are immutable. Global administrators can own system metadata; library administrators can own metadata only at their library. Library metadata using an existing system code customizes its display name and description without changing the system definition.
+
+Deletion requires an impact page showing metadata, override, draft, and preview-link counts. The transaction removes affected metadata, library/branch or global overrides, drafts, and links. Removing a library customization therefore resumes system metadata inheritance. Creating metadata never copies inherited setting rows.
+
+## Audit and cache consistency
+
+Audit events record actor ID/name/organization, target organization/library/form, setting changes, request correlation ID, IP address, result, and failure reason where available. Library audit searches filter by `TargetLibraryId`; global searches include all libraries. Postmark and Melissa values pass through `SensitiveValueMasker` before persistence and remain masked for global viewers.
+
+Every live mutation increments `RegistrationSettingsCacheGeneration` and immediately rebuilds the current process cache. A hosted worker compares the database generation at `GenerationCheckSeconds` intervals and rebuilds when another process changes it. Rebuild and generation checks are serialized. Draft-only edits do not change live cache.
+
+## Manual database deployment
+
+1. Back up `clcdb` and verify the existing `dbo.RegistrationFormSettings` table.
+2. Run [`database/001-settings-administration.sql`](database/001-settings-administration.sql) against `clcdb`.
+3. Apply the least-privilege grants described in [`database/README.md`](database/README.md).
+4. Configure Azure AD, role assignments, organization IDs, SQL access, and existing external services.
+5. Deploy the application.
+
+Production requires HTTPS; the application redirects to HTTPS and enables HSTS outside Development. The SQL script is manual and idempotent. The application never applies production schema changes automatically.

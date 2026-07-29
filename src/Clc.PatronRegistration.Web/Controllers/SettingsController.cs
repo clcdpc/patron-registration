@@ -1,36 +1,80 @@
 using System.Data;
+using System.Security.Claims;
 using Clc.PatronRegistration.Administration;
 using Clc.PatronRegistration.Configuration;
 using Clc.PatronRegistration.Helpers;
 using Clc.PatronRegistration.Web.Models;
 using Clc.PatronRegistration.Web.Settings;
+using Clc.Polaris.Api;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using Clc.Polaris.Api;
+using Microsoft.Extensions.Options;
 
 namespace Clc.PatronRegistration.Web.Controllers;
 
 [Authorize]
 [Route("settings")]
-public sealed class SettingsController(ISettingsAuthorizationService authorization, ISettingsAdministrationRepository repository,
-    ISettingCatalog catalog, ICache cache) : Controller
+public sealed class SettingsController(
+    ISettingsAuthorizationService authorization,
+    ISettingsAdministrationRepository repository,
+    ISettingCatalog catalog,
+    ICache cache,
+    IPreviewTokenService previewTokens,
+    ISettingsCacheInvalidator cacheInvalidator,
+    IOptions<SettingsAdministrationOptions> options) : Controller
 {
+    private readonly SettingsAdministrationOptions settingsOptions = options.Value;
+    private IReadOnlyDictionary<string, SettingDefinition> CatalogByKey =>
+        catalog.All.ToDictionary(setting => setting.Key, StringComparer.OrdinalIgnoreCase);
+
     [HttpGet("")]
     public IActionResult Index(int? organizationId, string formCode = "")
     {
-        var principal = authorization.Describe(User);
-        if (!principal.HasRole || principal.OrganizationId is null) return Forbid();
-        var target = organizationId ?? (principal.IsGlobal ? 1 : principal.OrganizationId.Value);
-        if (!authorization.CanManage(User, target)) return Forbid();
-        var libraryId = target == 1 ? 1 : cache.OrganizationCache.GetLibrary(target).OrganizationID;
+        var principal = RequireManager();
+        if (principal is null)
+        {
+            return Forbid();
+        }
+
+        var target = organizationId ?? (principal.IsGlobal ? settingsOptions.SystemOrganizationId : GetLibraryId(principal.OrganizationId!.Value));
+        if (!authorization.CanManage(User, target) || !IsAvailableFormCode(target, formCode))
+        {
+            AuditRejected(target, formCode, "Invalid or unauthorized scope.");
+            return Forbid();
+        }
+
+        var libraryId = target == settingsOptions.SystemOrganizationId ? settingsOptions.SystemOrganizationId : GetLibraryId(target);
         var draft = repository.GetActiveDraft(target, formCode);
         var resolver = new SettingsResolver();
-        var visible = catalog.All.Where(x => principal.IsGlobal || !x.IsSensitive);
-        var model = new SettingsIndexViewModel { OrganizationId = target, LibraryId = libraryId, FormCode = formCode, IsGlobal = principal.IsGlobal,
-            ScopeVersion = repository.GetVersion(target, formCode), ActiveDraftId = draft?.DraftId,
-            Settings = visible.Select(def => new SettingRowViewModel(def, resolver.Resolve(cache.SettingsCache, def.Key, target, libraryId, formCode),
-                draft?.Changes.FirstOrDefault(x => x.Key.Equals(def.Key, StringComparison.OrdinalIgnoreCase))?.Value,
-                draft?.Changes.FirstOrDefault(x => x.Key.Equals(def.Key, StringComparison.OrdinalIgnoreCase))?.Operation)).ToList() };
+        var visibleSettings = catalog.All.Where(setting => principal.IsGlobal || !setting.IsSensitive).ToList();
+        var rows = new List<SettingRowViewModel>(visibleSettings.Count);
+
+        for (var index = 0; index < visibleSettings.Count; index++)
+        {
+            var definition = visibleSettings[index];
+            var draftChange = draft?.Changes.FirstOrDefault(change => change.Key.Equals(definition.Key, StringComparison.OrdinalIgnoreCase));
+            rows.Add(new SettingRowViewModel(
+                $"setting-{index}",
+                definition,
+                resolver.Resolve(cache.SettingsCache, definition.Key, target, libraryId, formCode, settingsOptions.SystemOrganizationId),
+                draftChange?.Value,
+                draftChange?.Operation));
+        }
+
+        var model = new SettingsIndexViewModel
+        {
+            OrganizationId = target,
+            OrganizationName = GetOrganizationName(target),
+            LibraryId = libraryId,
+            FormCode = formCode,
+            IsGlobal = principal.IsGlobal,
+            ScopeVersion = repository.GetVersion(target, formCode),
+            ActiveDraft = draft,
+            PreviewLinks = draft is null ? [] : repository.GetPreviewLinks(draft.DraftId),
+            Scopes = GetAuthorizedScopes(principal),
+            FormCodes = GetAvailableFormCodes(libraryId),
+            Settings = rows
+        };
         return View(model);
     }
 
@@ -38,30 +82,393 @@ public sealed class SettingsController(ISettingsAuthorizationService authorizati
     [ValidateAntiForgeryToken]
     public IActionResult DirectSave(SaveSettingsRequest request)
     {
-        if (!authorization.CanManage(User, request.OrganizationId)) return Forbid();
-        var mutations = new List<SettingMutation>();
-        foreach (var input in request.Changes)
+        if (!ValidateScope(request.OrganizationId, request.FormCode))
         {
-            if (!catalog.TryGet(input.Key, out var definition) || !authorization.CanManage(User, request.OrganizationId, definition.IsSensitive)) return BadRequest("Unrecognized or inaccessible setting key.");
-            if (!Enum.TryParse<DraftOperation>(input.Operation, out var operation)) return BadRequest("Invalid operation.");
-            var error = operation == DraftOperation.Upsert ? definition.Validate(input.Value) : null;
-            if (error is not null) ModelState.AddModelError(input.Key, error);
-            mutations.Add(new(input.Key, operation, input.Value));
+            AuditRejected(request.OrganizationId, request.FormCode, "Direct-save scope tampering rejected.");
+            return Forbid();
         }
-        if (!ModelState.IsValid) return ValidationProblem(ModelState);
-        try { repository.DirectSave(request.OrganizationId, request.FormCode ?? string.Empty, request.ExpectedVersion, mutations, User.Identity?.Name ?? "unknown"); cache.RebuildCache(); }
-        catch (DBConcurrencyException ex) { return Conflict(ex.Message); }
+
+        var mutations = ValidateMutations(request.Changes, request.OrganizationId);
+        if (!ModelState.IsValid)
+        {
+            repository.WriteAudit("ValidationFailed", false, CreateAudit(request.OrganizationId, request.FormCode), "One or more setting values were invalid.");
+            return ValidationProblem(ModelState);
+        }
+
+        try
+        {
+            repository.DirectSave(request.OrganizationId, request.FormCode, request.ExpectedVersion, mutations, CatalogByKey, CreateAudit(request.OrganizationId, request.FormCode));
+            cacheInvalidator.LiveSettingsChanged();
+        }
+        catch (DBConcurrencyException exception)
+        {
+            return Conflict(exception.Message);
+        }
+        catch (InvalidOperationException exception)
+        {
+            repository.WriteAudit("ValidationFailed", false, CreateAudit(request.OrganizationId, request.FormCode), exception.Message);
+            return BadRequest(exception.Message);
+        }
+
         return RedirectToAction(nameof(Index), new { organizationId = request.OrganizationId, formCode = request.FormCode });
+    }
+
+    [HttpPost("drafts")]
+    [ValidateAntiForgeryToken]
+    public IActionResult CreateDraft(int organizationId, string formCode = "")
+    {
+        if (!ValidateScope(organizationId, formCode))
+        {
+            return Forbid();
+        }
+        var draftId = repository.CreateDraft(organizationId, formCode, CreateAudit(organizationId, formCode));
+        return RedirectToAction(nameof(Index), new { organizationId, formCode, draftId });
+    }
+
+    [HttpPost("drafts/{draftId:long}/changes")]
+    [ValidateAntiForgeryToken]
+    public IActionResult SaveDraft(long draftId, DraftChangesRequest request)
+    {
+        var draft = AuthorizedActiveDraft(draftId, request.OrganizationId, request.FormCode);
+        if (draft is null)
+        {
+            return Forbid();
+        }
+        var mutations = ValidateMutations(request.Changes, request.OrganizationId);
+        if (!ModelState.IsValid)
+        {
+            repository.WriteAudit("ValidationFailed", false, CreateAudit(request.OrganizationId, request.FormCode), "Draft changes were invalid.", draftId);
+            return ValidationProblem(ModelState);
+        }
+        repository.SaveDraftChanges(draftId, mutations, CreateAudit(request.OrganizationId, request.FormCode));
+        return RedirectToAction(nameof(Index), new { organizationId = request.OrganizationId, formCode = request.FormCode });
+    }
+
+    [HttpPost("drafts/{draftId:long}/commit")]
+    [ValidateAntiForgeryToken]
+    public IActionResult CommitDraft(long draftId, int organizationId, string formCode = "")
+    {
+        if (AuthorizedActiveDraft(draftId, organizationId, formCode) is null)
+        {
+            return Forbid();
+        }
+        try
+        {
+            repository.CommitDraft(draftId, CatalogByKey, CreateAudit(organizationId, formCode));
+            cacheInvalidator.LiveSettingsChanged();
+        }
+        catch (DBConcurrencyException exception)
+        {
+            return Conflict(exception.Message);
+        }
+        catch (InvalidOperationException exception)
+        {
+            repository.WriteAudit("ValidationFailed", false, CreateAudit(organizationId, formCode), exception.Message, draftId);
+            return BadRequest(exception.Message);
+        }
+        return RedirectToAction(nameof(Index), new { organizationId, formCode });
+    }
+
+    [HttpPost("drafts/{draftId:long}/discard")]
+    [ValidateAntiForgeryToken]
+    public IActionResult DiscardDraft(long draftId, int organizationId, string formCode = "")
+    {
+        if (AuthorizedActiveDraft(draftId, organizationId, formCode) is null)
+        {
+            return Forbid();
+        }
+        repository.DiscardDraft(draftId, CreateAudit(organizationId, formCode));
+        return RedirectToAction(nameof(Index), new { organizationId, formCode });
+    }
+
+    [HttpPost("drafts/{draftId:long}/preview-links")]
+    [ValidateAntiForgeryToken]
+    public IActionResult CreatePreviewLink(long draftId, PreviewLinkRequest request)
+    {
+        if (AuthorizedActiveDraft(draftId, request.OrganizationId, request.FormCode) is null)
+        {
+            return Forbid();
+        }
+        var token = previewTokens.Create();
+        repository.CreatePreviewLink(draftId, token.Hash, request.AllowLiveSubmission, CreateAudit(request.OrganizationId, request.FormCode));
+        var previewUrl = Url.Action("Index", "Preview", new { token = token.Plaintext }, Request.Scheme)!;
+        return View("PreviewLinkCreated", model: previewUrl);
+    }
+
+    [HttpPost("preview-links/{previewLinkId:long}/revoke")]
+    [ValidateAntiForgeryToken]
+    public IActionResult RevokePreviewLink(long previewLinkId)
+    {
+        var link = repository.GetPreviewLink(previewLinkId);
+        if (link is null || !ValidateScope(link.OrganizationId, link.FormCode))
+        {
+            return Forbid();
+        }
+        repository.RevokePreviewLink(previewLinkId, CreateAudit(link.OrganizationId, link.FormCode));
+        return RedirectToAction(nameof(Index), new { organizationId = link.OrganizationId, formCode = link.FormCode });
+    }
+
+    [HttpPost("preview-links/{previewLinkId:long}/live-submission")]
+    [ValidateAntiForgeryToken]
+    public IActionResult ToggleLiveSubmission(long previewLinkId, bool allowLiveSubmission)
+    {
+        var link = repository.GetPreviewLink(previewLinkId);
+        if (link is null || !ValidateScope(link.OrganizationId, link.FormCode))
+        {
+            return Forbid();
+        }
+        repository.TogglePreviewLiveSubmission(previewLinkId, allowLiveSubmission, CreateAudit(link.OrganizationId, link.FormCode));
+        return RedirectToAction(nameof(Index), new { organizationId = link.OrganizationId, formCode = link.FormCode });
     }
 
     [HttpGet("audit")]
     public IActionResult Audit(string? search)
     {
-        var principal = authorization.Describe(User); if (!principal.HasRole || principal.OrganizationId is null) return Forbid();
-        int? library = principal.IsGlobal ? null : cache.OrganizationCache.GetLibrary(principal.OrganizationId.Value).OrganizationID;
-        return View(repository.SearchAudit(library, search));
+        var principal = RequireManager();
+        if (principal is null)
+        {
+            return Forbid();
+        }
+        int? libraryId = principal.IsGlobal ? null : GetLibraryId(principal.OrganizationId!.Value);
+        return View(repository.SearchAudit(libraryId, search));
     }
 
     [HttpGet("forms")]
-    public IActionResult Forms() => View();
+    public IActionResult Forms(int? libraryId)
+    {
+        var principal = RequireManager();
+        if (principal is null)
+        {
+            return Forbid();
+        }
+        var targetLibrary = libraryId ?? (principal.IsGlobal ? settingsOptions.SystemOrganizationId : GetLibraryId(principal.OrganizationId!.Value));
+        if (targetLibrary != settingsOptions.SystemOrganizationId && !authorization.CanManage(User, targetLibrary))
+        {
+            return Forbid();
+        }
+        return View(new FormsViewModel
+        {
+            LibraryId = targetLibrary,
+            SystemOrganizationId = settingsOptions.SystemOrganizationId,
+            IsGlobal = principal.IsGlobal,
+            Forms = repository.GetFormCodes(targetLibrary, settingsOptions.SystemOrganizationId)
+        });
+    }
+
+    [HttpPost("forms")]
+    [ValidateAntiForgeryToken]
+    public IActionResult CreateForm(FormCodeRequest request)
+    {
+        var principal = RequireManager();
+        if (principal is null || !CanOwnFormCode(principal, request.OrganizationId) || !ValidateFormCodeText(request))
+        {
+            return Forbid();
+        }
+        var actor = User.Identity?.Name ?? "unknown";
+        var metadata = new FormCodeMetadata(request.OrganizationId, request.FormCode, request.DisplayName, request.Description, DateTime.UtcNow, actor, DateTime.UtcNow, actor);
+        repository.SaveFormCode(metadata, true, CreateAudit(request.OrganizationId, request.FormCode));
+        cacheInvalidator.LiveSettingsChanged();
+        return RedirectToAction(nameof(Forms), new { libraryId = request.OrganizationId });
+    }
+
+    [HttpPost("forms/{formCode}/customize")]
+    [ValidateAntiForgeryToken]
+    public IActionResult CustomizeForm(string formCode, FormCodeRequest request)
+    {
+        var principal = RequireManager();
+        if (principal is null || formCode != request.FormCode || !CanOwnFormCode(principal, request.OrganizationId) || !ValidateFormCodeText(request))
+        {
+            return Forbid();
+        }
+        var actor = User.Identity?.Name ?? "unknown";
+        var existing = repository.GetFormCodes(request.OrganizationId, settingsOptions.SystemOrganizationId)
+            .Any(form => form.OrganizationId == request.OrganizationId && form.FormCode.Equals(formCode, StringComparison.OrdinalIgnoreCase));
+        repository.SaveFormCode(new(request.OrganizationId, formCode, request.DisplayName, request.Description, DateTime.UtcNow, actor, DateTime.UtcNow, actor), !existing, CreateAudit(request.OrganizationId, formCode));
+        cacheInvalidator.LiveSettingsChanged();
+        return RedirectToAction(nameof(Forms), new { libraryId = request.OrganizationId });
+    }
+
+    [HttpGet("forms/{formCode}/delete")]
+    public IActionResult ConfirmDeleteForm(string formCode, int organizationId)
+    {
+        var principal = RequireManager();
+        if (principal is null || !CanDeleteFormCode(principal, organizationId, formCode))
+        {
+            return Forbid();
+        }
+        var organizations = AffectedOrganizations(organizationId);
+        return View(new DeleteFormCodeViewModel
+        {
+            OrganizationId = organizationId,
+            FormCode = formCode,
+            Impact = repository.GetFormCodeImpact(organizationId, formCode, organizations)
+        });
+    }
+
+    [HttpPost("forms/{formCode}/delete")]
+    [ValidateAntiForgeryToken]
+    public IActionResult DeleteForm(string formCode, int organizationId)
+    {
+        var principal = RequireManager();
+        if (principal is null || !CanDeleteFormCode(principal, organizationId, formCode))
+        {
+            return Forbid();
+        }
+        repository.DeleteFormCode(organizationId, formCode, AffectedOrganizations(organizationId), CreateAudit(organizationId, formCode));
+        cacheInvalidator.LiveSettingsChanged();
+        return RedirectToAction(nameof(Forms), new { libraryId = organizationId });
+    }
+
+    private SettingsPrincipal? RequireManager()
+    {
+        var principal = authorization.Describe(User);
+        return principal.HasRole && principal.OrganizationId.HasValue ? principal : null;
+    }
+
+    private bool ValidateScope(int organizationId, string formCode) =>
+        RequireManager() is not null && authorization.CanManage(User, organizationId) && IsAvailableFormCode(organizationId, formCode);
+
+    private SettingDraft? AuthorizedActiveDraft(long draftId, int organizationId, string formCode)
+    {
+        if (!ValidateScope(organizationId, formCode))
+        {
+            return null;
+        }
+        var draft = repository.GetDraft(draftId);
+        return draft is { Status: DraftStatus.Active } && draft.OrganizationId == organizationId && draft.FormCode.Equals(formCode, StringComparison.OrdinalIgnoreCase) ? draft : null;
+    }
+
+    private List<SettingMutation> ValidateMutations(IEnumerable<SettingMutationInput> inputs, int organizationId)
+    {
+        var result = new List<SettingMutation>();
+        foreach (var input in inputs)
+        {
+            if (!catalog.TryGet(input.Key, out var definition) || !authorization.CanManage(User, organizationId, definition.IsSensitive))
+            {
+                ModelState.AddModelError("setting", "One or more submitted settings are unrecognized or inaccessible.");
+                continue;
+            }
+            if (!Enum.TryParse<DraftOperation>(input.Operation, out var operation))
+            {
+                ModelState.AddModelError(input.Key, "Invalid operation.");
+                continue;
+            }
+            var error = operation == DraftOperation.Upsert ? definition.Validate(input.Value) : null;
+            if (error is not null)
+            {
+                ModelState.AddModelError(input.Key, error);
+            }
+            result.Add(new SettingMutation(input.Key, operation, operation == DraftOperation.RemoveOverride ? null : input.Value));
+        }
+        if (result.Count == 0)
+        {
+            ModelState.AddModelError("changes", "Submit at least one setting change.");
+        }
+        return result;
+    }
+
+    private bool IsAvailableFormCode(int organizationId, string formCode)
+    {
+        if (string.IsNullOrEmpty(formCode))
+        {
+            return true;
+        }
+        var libraryId = organizationId == settingsOptions.SystemOrganizationId ? settingsOptions.SystemOrganizationId : GetLibraryId(organizationId);
+        return repository.GetFormCodes(libraryId, settingsOptions.SystemOrganizationId)
+            .Any(metadata => metadata.FormCode.Equals(formCode, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private List<FormCodeOption> GetAvailableFormCodes(int libraryId)
+    {
+        var result = new List<FormCodeOption> { new(string.Empty, "Default form", null, settingsOptions.SystemOrganizationId) };
+        foreach (var group in repository.GetFormCodes(libraryId, settingsOptions.SystemOrganizationId).GroupBy(form => form.FormCode, StringComparer.OrdinalIgnoreCase))
+        {
+            var preferred = group.FirstOrDefault(form => form.OrganizationId == libraryId) ?? group.First();
+            result.Add(new(preferred.FormCode, preferred.DisplayName, preferred.Description, preferred.OrganizationId));
+        }
+        return result.OrderBy(form => form.DisplayName).ToList();
+    }
+
+    private List<ScopeOption> GetAuthorizedScopes(SettingsPrincipal principal)
+    {
+        if (principal.IsGlobal)
+        {
+            var scopes = cache.OrganizationCache
+                .Where(organization => organization.OrganizationCodeID is 2 or 3)
+                .Select(organization => new ScopeOption(organization.OrganizationID, organization.DisplayName))
+                .ToList();
+            scopes.Insert(0, new ScopeOption(settingsOptions.SystemOrganizationId, "System defaults"));
+            return scopes;
+        }
+        var libraryId = GetLibraryId(principal.OrganizationId!.Value);
+        var result = new List<ScopeOption> { new(libraryId, GetOrganizationName(libraryId)) };
+        result.AddRange(cache.GetBranches(libraryId).Select(branch => new ScopeOption(branch.OrganizationID, branch.DisplayName)));
+        return result;
+    }
+
+    private bool CanOwnFormCode(SettingsPrincipal principal, int ownerOrganizationId)
+    {
+        if (ownerOrganizationId == settingsOptions.SystemOrganizationId)
+        {
+            return principal.IsGlobal;
+        }
+        return authorization.CanManage(User, ownerOrganizationId) && ownerOrganizationId == GetLibraryId(ownerOrganizationId);
+    }
+
+    private bool CanDeleteFormCode(SettingsPrincipal principal, int ownerOrganizationId, string formCode) =>
+        !string.IsNullOrWhiteSpace(formCode) && CanOwnFormCode(principal, ownerOrganizationId);
+
+    private bool ValidateFormCodeText(FormCodeRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(request.FormCode) || request.FormCode.Length > 64 ||
+            !request.FormCode.All(character => char.IsLetterOrDigit(character) || character is '-' or '_') ||
+            string.IsNullOrWhiteSpace(request.DisplayName) || request.DisplayName.Length > 200 || request.Description?.Length > 2000)
+        {
+            ModelState.AddModelError(nameof(request.FormCode), "Use a nonblank code of letters, numbers, hyphens, or underscores and a display name.");
+            return false;
+        }
+        return true;
+    }
+
+    private IReadOnlyCollection<int> AffectedOrganizations(int ownerOrganizationId)
+    {
+        if (ownerOrganizationId == settingsOptions.SystemOrganizationId)
+        {
+            return cache.OrganizationCache.Select(organization => organization.OrganizationID).Append(settingsOptions.SystemOrganizationId).Distinct().ToList();
+        }
+        return cache.GetBranches(ownerOrganizationId).Select(branch => branch.OrganizationID).Append(ownerOrganizationId).ToList();
+    }
+
+    private int GetLibraryId(int organizationId) => cache.OrganizationCache.GetLibrary(organizationId).OrganizationID;
+
+    private string GetOrganizationName(int organizationId) => organizationId == settingsOptions.SystemOrganizationId
+        ? "System defaults"
+        : cache.GetOrg(organizationId).DisplayName;
+
+    private AuditContext CreateAudit(int organizationId, string formCode)
+    {
+        var actor = authorization.Describe(User);
+        var targetLibraryId = organizationId == settingsOptions.SystemOrganizationId ? settingsOptions.SystemOrganizationId : GetLibraryId(organizationId);
+        return new AuditContext(
+            User.FindFirstValue("oid") ?? User.FindFirstValue(ClaimTypes.NameIdentifier),
+            User.Identity?.Name,
+            actor.OrganizationId,
+            organizationId,
+            targetLibraryId,
+            formCode,
+            HttpContext.TraceIdentifier,
+            Request.GetTrueClientIP());
+    }
+
+    private void AuditRejected(int organizationId, string formCode, string reason)
+    {
+        try
+        {
+            repository.WriteAudit("AuthorizationRejected", false, CreateAudit(organizationId, formCode), reason);
+        }
+        catch
+        {
+            // Authorization must still fail when the requested target cannot safely be resolved for auditing.
+        }
+    }
 }

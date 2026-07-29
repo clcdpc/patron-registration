@@ -27,6 +27,8 @@ namespace Clc.PatronRegistration.Web
             builder.AddClcConfigFolder();
 
             IRegistrationConfiguration config = builder.Configuration.Get<RegistrationConfiguration>()!;
+            config.SettingsSystemOrganizationId = builder.Configuration.GetValue<int?>("SettingsAdministration:SystemOrganizationId")
+                ?? config.SettingsSystemOrganizationId;
             builder.Services.AddSingleton(config);
 
             builder.Services.AddControllersWithViews();
@@ -60,8 +62,10 @@ namespace Clc.PatronRegistration.Web
             builder.Services.Configure<SettingsAdministrationOptions>(builder.Configuration.GetSection(SettingsAdministrationOptions.SectionName));
             builder.Services.AddSingleton<ISettingCatalog, SettingCatalog>();
             builder.Services.AddSingleton<IPreviewTokenService, PreviewTokenService>();
-            builder.Services.AddScoped<ISettingsAuthorizationService, SettingsAuthorizationService>();
-            builder.Services.AddScoped<ISettingsAdministrationRepository, SettingsAdministrationRepository>();
+            builder.Services.AddSingleton<ISettingsAuthorizationService, SettingsAuthorizationService>();
+            builder.Services.AddSingleton<ISettingsAdministrationRepository, SettingsAdministrationRepository>();
+            builder.Services.AddSingleton<ISettingsCacheInvalidator, SettingsCacheInvalidator>();
+            builder.Services.AddHostedService<SettingsCacheGenerationWorker>();
 
             builder.Services
                 .AddSingleton<IActionContextAccessor, ActionContextAccessor>()
@@ -78,7 +82,7 @@ namespace Clc.PatronRegistration.Web
                         formCode = "kiosk";
                     }
 
-                    return s.ResolveWith<DbSettingProvider>(id, formCode);
+                    return s.ResolveWith<DbSettingProvider>(id, formCode, config.SettingsSystemOrganizationId);
                 });
 
             builder.Services

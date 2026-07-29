@@ -1,22 +1,178 @@
 @using Clc.PatronRegistration.Administration
 @model Clc.PatronRegistration.Web.Models.SettingsIndexViewModel
-@{ ViewData["Title"] = "Registration settings"; }
-<h1>Registration settings</h1>
-<nav aria-label="Settings administration"><a asp-action="Audit">Audit history</a> · <a asp-action="Forms">Form codes</a></nav>
-<section class="settings-scope" aria-labelledby="scope-heading">
- <h2 id="scope-heading">Scope</h2>
- <form method="get"><label>Organization <input name="organizationId" type="number" value="@Model.OrganizationId" @(Model.IsGlobal ? "" : "readonly") /></label>
- <label>Form code <input name="formCode" value="@Model.FormCode" placeholder="Default form" /></label><button type="submit">Load scope</button></form>
- <p>Library @Model.LibraryId / organization @Model.OrganizationId / <strong>@(Model.FormCode.Length == 0 ? "Default form" : Model.FormCode)</strong>. Live version @Model.ScopeVersion.</p>
- <p class="draft-state">@(Model.ActiveDraftId is null ? "No active draft." : $"Active shared draft #{Model.ActiveDraftId}.")</p>
+@{
+    ViewData["Title"] = "Registration settings";
+    var ordinary = Model.Settings.Where(row => row.Definition.Group == SettingGroup.Ordinary).ToList();
+    var groups = new[]
+    {
+        (SettingGroup.Alert, "Alert field settings"),
+        (SettingGroup.Label, "Field label settings"),
+        (SettingGroup.Require, "Required field settings")
+    };
+}
+<link rel="stylesheet" href="~/css/settings.css" asp-append-version="true" />
+
+<header class="settings-header">
+    <div>
+        <h1>Registration settings</h1>
+        <p>Manage explicit overrides while retaining the documented system, library, and branch inheritance.</p>
+    </div>
+    <nav aria-label="Settings administration">
+        <a asp-action="Audit">Audit history</a>
+        <a asp-action="Forms" asp-route-libraryId="@Model.LibraryId">Form codes</a>
+    </nav>
+</header>
+
+<section class="settings-panel scope-panel" aria-labelledby="scope-heading">
+    <h2 id="scope-heading">Scope</h2>
+    <form method="get" class="scope-form">
+        <div>
+            <label for="organization-scope">Organization</label>
+            <select id="organization-scope" name="organizationId">
+                @foreach (var scope in Model.Scopes)
+                {
+                    <option value="@scope.OrganizationId" selected="@(scope.OrganizationId == Model.OrganizationId)">@scope.DisplayName</option>
+                }
+            </select>
+        </div>
+        <div>
+            <label for="form-code-scope">Form</label>
+            <select id="form-code-scope" name="formCode">
+                @foreach (var form in Model.FormCodes)
+                {
+                    <option value="@form.FormCode" selected="@(form.FormCode == Model.FormCode)">@form.DisplayName</option>
+                }
+            </select>
+        </div>
+        <button type="submit">Load scope</button>
+    </form>
+    <p class="scope-summary">
+        <strong>@Model.OrganizationName</strong> · @(Model.FormCode.Length == 0 ? "Default form" : Model.FormCode) · live version @Model.ScopeVersion
+    </p>
 </section>
-<label for="setting-search">Search settings</label> <input id="setting-search" type="search" autocomplete="off" placeholder="Name, key, description, or value" />
+
+<section class="settings-panel draft-panel" aria-labelledby="draft-heading">
+    <h2 id="draft-heading">Draft</h2>
+    <div aria-live="polite">
+        @if (Model.ActiveDraft is null)
+        {
+            <p>No active draft exists for this scope.</p>
+            <form asp-action="CreateDraft" method="post">
+                @Html.AntiForgeryToken()
+                <input type="hidden" name="organizationId" value="@Model.OrganizationId" />
+                <input type="hidden" name="formCode" value="@Model.FormCode" />
+                <button type="submit">Create shared draft</button>
+            </form>
+        }
+        else
+        {
+            <p><strong>Active shared draft #@Model.ActiveDraft.DraftId</strong>, based on live version @Model.ActiveDraft.BaselineVersion.</p>
+            <div class="button-row">
+                <form asp-action="CommitDraft" asp-route-draftId="@Model.ActiveDraft.DraftId" method="post">
+                    @Html.AntiForgeryToken()
+                    <input type="hidden" name="organizationId" value="@Model.OrganizationId" />
+                    <input type="hidden" name="formCode" value="@Model.FormCode" />
+                    <button type="submit">Commit draft</button>
+                </form>
+                <form asp-action="DiscardDraft" asp-route-draftId="@Model.ActiveDraft.DraftId" method="post">
+                    @Html.AntiForgeryToken()
+                    <input type="hidden" name="organizationId" value="@Model.OrganizationId" />
+                    <input type="hidden" name="formCode" value="@Model.FormCode" />
+                    <button type="submit" class="danger-button">Discard draft</button>
+                </form>
+                <form asp-action="CreatePreviewLink" asp-route-draftId="@Model.ActiveDraft.DraftId" method="post">
+                    @Html.AntiForgeryToken()
+                    <input type="hidden" name="OrganizationId" value="@Model.OrganizationId" />
+                    <input type="hidden" name="FormCode" value="@Model.FormCode" />
+                    <label class="inline-check"><input type="checkbox" name="AllowLiveSubmission" value="true" /> Allow real live submission</label>
+                    <button type="submit">Create preview link</button>
+                </form>
+            </div>
+            @if (Model.PreviewLinks.Count > 0)
+            {
+                <h3>Preview links</h3>
+                <ul class="preview-links">
+                    @foreach (var link in Model.PreviewLinks)
+                    {
+                        <li>
+                            Link #@link.PreviewLinkId — @(link.RevokedAtUtc.HasValue ? "Revoked" : link.AllowLiveSubmission ? "Active live preview" : "Active safe preview")
+                            @if (!link.RevokedAtUtc.HasValue)
+                            {
+                                <form asp-action="ToggleLiveSubmission" asp-route-previewLinkId="@link.PreviewLinkId" method="post">
+                                    @Html.AntiForgeryToken()
+                                    <input type="hidden" name="allowLiveSubmission" value="@(!link.AllowLiveSubmission)" />
+                                    <button type="submit">@(link.AllowLiveSubmission ? "Disable live submission" : "Enable live submission")</button>
+                                </form>
+                                <form asp-action="RevokePreviewLink" asp-route-previewLinkId="@link.PreviewLinkId" method="post">
+                                    @Html.AntiForgeryToken()
+                                    <button type="submit">Revoke link</button>
+                                </form>
+                            }
+                        </li>
+                    }
+                </ul>
+            }
+        }
+    </div>
+</section>
+
+<section class="settings-search" aria-labelledby="search-label">
+    <label id="search-label" for="setting-search">Search settings</label>
+    <input id="setting-search" type="search" autocomplete="off" placeholder="Display name, key, field, description, or safe effective value" />
+    <p id="search-status" aria-live="polite"></p>
+</section>
+
 <form asp-action="DirectSave" method="post" id="settings-form">
- @Html.AntiForgeryToken()<input type="hidden" name="OrganizationId" value="@Model.OrganizationId" /><input type="hidden" name="FormCode" value="@Model.FormCode" /><input type="hidden" name="ExpectedVersion" value="@Model.ScopeVersion" />
- <h2>Settings</h2><div class="settings-list">@{ var ordinary = Model.Settings.Where(x => x.Definition.Group == SettingGroup.Ordinary).ToList(); }@for(var i=0;i<ordinary.Count;i++){ <partial name="_SettingRow" model="@(new KeyValuePair<int, Clc.PatronRegistration.Web.Models.SettingRowViewModel>(i, ordinary[i]))" /> }</div>
- @{ var offset=ordinary.Count; }
- @foreach(var group in new[]{SettingGroup.Alert,SettingGroup.Label,SettingGroup.Require}) { var rows=Model.Settings.Where(x=>x.Definition.Group==group).ToList(); <details class="dynamic-settings"><summary>@group.ToString().ToLowerInvariant().* field settings (@rows.Count)</summary>@for(var j=0;j<rows.Count;j++){<partial name="_SettingRow" model="@(new KeyValuePair<int, Clc.PatronRegistration.Web.Models.SettingRowViewModel>(offset+j, rows[j]))" />} </details> offset += rows.Count; }
- <div class="settings-actions"><button type="submit">Review and direct-save changes</button> <button type="button" disabled title="Available after an active draft is created">Create preview link</button></div>
+    @Html.AntiForgeryToken()
+    <input type="hidden" name="OrganizationId" value="@Model.OrganizationId" />
+    <input type="hidden" name="FormCode" value="@Model.FormCode" />
+    <input type="hidden" name="ExpectedVersion" value="@Model.ScopeVersion" />
+
+    <section aria-labelledby="ordinary-heading">
+        <h2 id="ordinary-heading">Settings</h2>
+        <div class="settings-list">
+            @foreach (var row in ordinary)
+            {
+                <partial name="_SettingRow" model="row" />
+            }
+        </div>
+    </section>
+
+    @foreach (var group in groups)
+    {
+        var rows = Model.Settings.Where(row => row.Definition.Group == group.Item1).ToList();
+        <details class="dynamic-settings">
+            <summary>@group.Item2 <span>(@rows.Count)</span></summary>
+            <div class="settings-list">
+                @foreach (var row in rows)
+                {
+                    <partial name="_SettingRow" model="row" />
+                }
+            </div>
+        </details>
+    }
+
+    <div class="settings-actions">
+        <button type="submit">Review and direct-save changes</button>
+        @if (Model.ActiveDraft is not null)
+        {
+            <button type="submit"
+                    formaction="@Url.Action("SaveDraft", new { draftId = Model.ActiveDraft.DraftId })"
+                    data-submit-kind="draft">
+                Save changes to draft
+            </button>
+        }
+    </div>
 </form>
-<dialog id="save-confirm"><h2>Confirm exact changes</h2><p>Target: organization @Model.OrganizationId, form code “@(Model.FormCode.Length==0?"default":Model.FormCode)”.</p><ul></ul><button id="confirm-save">Save changes</button> <button type="button" id="cancel-save">Cancel</button></dialog>
+
+<dialog id="save-confirm" aria-labelledby="save-confirm-title">
+    <h2 id="save-confirm-title">Confirm exact changes</h2>
+    <p>Target: <strong>@Model.OrganizationName</strong>; form: <strong>@(Model.FormCode.Length == 0 ? "Default form" : Model.FormCode)</strong>.</p>
+    <ul></ul>
+    <div class="button-row">
+        <button id="confirm-save" type="button">Apply these changes</button>
+        <button id="cancel-save" type="button">Cancel</button>
+    </div>
+</dialog>
+
 <script src="~/js/settings.js" asp-append-version="true"></script>

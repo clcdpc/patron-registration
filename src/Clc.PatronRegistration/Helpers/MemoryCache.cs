@@ -15,6 +15,7 @@ namespace Clc.PatronRegistration.Helpers
 {
     public class MemoryCache(IPapiClient papi, IDbHelper db) : ICache
     {
+        private readonly object rebuildLock = new();
         private List<RegistrationFormSetting> _settingsCache = null!;
         public List<RegistrationFormSetting> SettingsCache
         {
@@ -42,9 +43,12 @@ namespace Clc.PatronRegistration.Helpers
 
         public void RebuildCache()
         {
-            var orgResult = papi.OrganizationsGet(OrganizationType.All);
-            _organizationCache = orgResult.Data.OrganizationsGetRows;
-            _settingsCache = db.GetAllSettings().ToList();
+            lock (rebuildLock)
+            {
+                var orgResult = papi.OrganizationsGet(OrganizationType.All);
+                _organizationCache = orgResult.Data.OrganizationsGetRows;
+                _settingsCache = db.GetAllSettings().ToList();
+            }
         }
         public OrganizationsGetRow GetOrg(int orgId) => OrganizationCache.Single(o => o.OrganizationID == orgId);
         public List<OrganizationsGetRow> GetBranches(int orgId)

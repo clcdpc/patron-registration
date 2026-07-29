@@ -4,7 +4,7 @@ namespace Clc.PatronRegistration.Configuration;
 public sealed class SettingsResolver
 {
     public ResolvedSetting Resolve(IEnumerable<RegistrationFormSetting> settings, string key,
-        int organizationId, int libraryId, string? formCode, int systemOrganizationId = 1,
+        int organizationId, int libraryId, string? formCode, int systemOrganizationId,
         ISet<(int OrganizationId, string FormCode, string Key)>? removed = null)
     {
         formCode ??= string.Empty;

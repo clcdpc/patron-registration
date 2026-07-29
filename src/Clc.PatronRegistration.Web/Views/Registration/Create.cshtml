@@ -1,9 +1,29 @@
-﻿@model Clc.PatronRegistration.Registration
-@inject ISettingProvider Settings
-
+@model Clc.PatronRegistration.Registration
 @{
     Layout = "_Layout";
+    var Settings = Model.Settings;
+    var isSettingsPreview = ViewData["IsSettingsPreview"] as bool? == true;
+    var allowLiveSubmission = ViewData["AllowLiveSubmission"] as bool? == true;
+    var previewToken = ViewData["PreviewToken"] as string;
+    var submitUrl = isSettingsPreview
+        ? Url.Action("Submit", "Preview", new { token = previewToken })
+        : this.BuildAction("Submit");
+    var driverLicenseUrl = isSettingsPreview
+        ? Url.Action("DriverLicense", "Preview", new { token = previewToken })
+        : this.BuildAction("dl");
+    var duplicateCheckUrl = isSettingsPreview
+        ? Url.Action("DupeCheck", "Preview", new { token = previewToken })
+        : this.BuildAction("DupeCheck");
     //Layout = Clc.PatronRegistration.Helpers.HttpContextHelper.Current.Request.Method.Equals("get", StringComparison.OrdinalIgnoreCase) ? "_Layout" : null;
+}
+
+@if (isSettingsPreview)
+{
+    <link rel="stylesheet" href="~/css/settings.css" asp-append-version="true" />
+    <aside class="preview-banner @(allowLiveSubmission ? "live-preview" : "safe-preview")" role="status">
+        <strong>@(allowLiveSubmission ? "LIVE TEST PREVIEW" : "SAFE PREVIEW")</strong>
+        <span>@(allowLiveSubmission ? "Submitting performs the real registration workflow and external side effects." : "Final submission is blocked; no patron or registration side effect will be created.")</span>
+    </aside>
 }
 
 @if (!@Context.IsInjectedForm())
@@ -350,6 +370,7 @@
     const messageDiv = q('#status-message');
     const addToMailingListCheckbox = q('#AddToMailingList');
     const smsNoticeInfo = q('#smsNoticeInfo');
+    const antiforgeryToken = q('input[name="__RequestVerificationToken"]');
 
     let isTeacher = false;
 
@@ -624,7 +645,7 @@
 
         var formData = new FormData(document.forms.regform);
 
-        postData("@this.BuildAction("Submit")", formData).then((data) => {
+        postData("@submitUrl", formData).then((data) => {
             if (data.isSuccess) {
                 theform.reset();
                 theform.remove();
@@ -694,8 +715,9 @@
 
         var formData = new FormData();
         formData.append("dlinfo", dlinfo);
+        formData.append("__RequestVerificationToken", antiforgeryToken.value);
 
-        postData("@this.BuildAction("dl")", formData).then((data) => {
+        postData("@driverLicenseUrl", formData).then((data) => {
             var dataJson = JSON.stringify(data);
             nameFirst.value = data.firstName;
             nameMiddle.value = data.middleName;
@@ -721,7 +743,8 @@
             formData.append("nameLast", nameLast.value);
             formData.append("LibraryId", @(Model.LibraryId));
             formData.append("BirthDate", birthdate.value);
-            postData("@this.BuildAction("DupeCheck")", formData).then((data) => {
+            formData.append("__RequestVerificationToken", antiforgeryToken.value);
+            postData("@duplicateCheckUrl", formData).then((data) => {
                 if (data.isDupe === true) {
                     theform.innerHTML = data.message;
                     window.scrollTo(0,0);

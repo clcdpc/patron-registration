@@ -1,1 +1,82 @@
-@{ ViewData["Title"]="Form codes"; }<h1>Form-code management</h1><p>The blank default form always exists and cannot be renamed or deleted. Named form codes are immutable after creation.</p><p>Creation, customization, and destructive deletion are performed against metadata deployed by the administration database script.</p><a asp-action="Index">Back to settings</a>
+@model Clc.PatronRegistration.Web.Models.FormsViewModel
+@{
+    ViewData["Title"] = "Form codes";
+}
+<link rel="stylesheet" href="~/css/settings.css" asp-append-version="true" />
+<h1>Form-code management</h1>
+<p>The blank default form always exists and cannot be renamed or deleted. Named codes are immutable after creation.</p>
+
+<table>
+    <caption>System and library form-code metadata available to library @Model.LibraryId</caption>
+    <thead>
+        <tr>
+            <th scope="col">Code</th>
+            <th scope="col">Display name</th>
+            <th scope="col">Description</th>
+            <th scope="col">Owner</th>
+            <th scope="col">Actions</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code>(blank)</code></td>
+            <td>Default form</td>
+            <td>Implicit default form</td>
+            <td>System</td>
+            <td>Cannot be changed or deleted</td>
+        </tr>
+        @foreach (var form in Model.Forms)
+        {
+            <tr>
+                <td><code>@form.FormCode</code></td>
+                <td>@form.DisplayName</td>
+                <td>@form.Description</td>
+                <td>@form.OrganizationId</td>
+                <td>
+                    @if (form.OrganizationId == Model.LibraryId || Model.IsGlobal)
+                    {
+                        <a asp-action="ConfirmDeleteForm" asp-route-organizationId="@form.OrganizationId" asp-route-formCode="@form.FormCode">Review deletion</a>
+                    }
+                </td>
+            </tr>
+        }
+    </tbody>
+</table>
+
+@if (Model.LibraryId != Model.SystemOrganizationId)
+{
+    <section class="settings-panel" aria-labelledby="customize-heading">
+        <h2 id="customize-heading">Customize a system form for this library</h2>
+        @foreach (var form in Model.Forms.Where(item => item.OrganizationId == Model.SystemOrganizationId))
+        {
+            <form asp-action="CustomizeForm" asp-route-formCode="@form.FormCode" method="post">
+                @Html.AntiForgeryToken()
+                <input type="hidden" name="OrganizationId" value="@Model.LibraryId" />
+                <input type="hidden" name="FormCode" value="@form.FormCode" />
+                <strong><code>@form.FormCode</code></strong>
+                <label for="custom-name-@form.FormCode">Library display name</label>
+                <input id="custom-name-@form.FormCode" name="DisplayName" value="@form.DisplayName" maxlength="200" required />
+                <label for="custom-description-@form.FormCode">Library description</label>
+                <textarea id="custom-description-@form.FormCode" name="Description" maxlength="2000">@form.Description</textarea>
+                <button type="submit">Save library customization</button>
+            </form>
+        }
+    </section>
+}
+
+<section class="settings-panel" aria-labelledby="create-form-heading">
+    <h2 id="create-form-heading">Create or customize a named form</h2>
+    <form asp-action="CreateForm" method="post">
+        @Html.AntiForgeryToken()
+        <label for="form-owner">Owning organization</label>
+        <input id="form-owner" name="OrganizationId" type="number" value="@Model.LibraryId" readonly />
+        <label for="new-form-code">Immutable code</label>
+        <input id="new-form-code" name="FormCode" maxlength="64" pattern="[A-Za-z0-9_-]+" required />
+        <label for="new-form-name">Display name</label>
+        <input id="new-form-name" name="DisplayName" maxlength="200" required />
+        <label for="new-form-description">Description</label>
+        <textarea id="new-form-description" name="Description" maxlength="2000"></textarea>
+        <button type="submit">Create metadata</button>
+    </form>
+</section>
+<p><a asp-action="Index">Back to settings</a></p>
