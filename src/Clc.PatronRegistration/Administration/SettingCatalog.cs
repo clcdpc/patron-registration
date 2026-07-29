@@ -254,7 +254,7 @@ public sealed class SettingCatalog : ISettingCatalog
     ];
     public IReadOnlyList<string> RequiredFieldSuffixes { get; } =
     [
-        "PhoneVoice1", "ReceiveEreceipts", "EmailAddress", "User5"
+        "PhoneVoice1", "EmailAddress", "User5"
     ];
     public IReadOnlyList<SettingDefinition> All { get; }
     private readonly Dictionary<string, SettingDefinition> byKey;

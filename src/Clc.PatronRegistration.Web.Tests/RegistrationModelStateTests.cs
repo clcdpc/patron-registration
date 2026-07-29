@@ -2,6 +2,7 @@ using Clc.Melissa;
 using Clc.PatronRegistration.Configuration;
 using Clc.PatronRegistration.Data;
 using Clc.Polaris.Api;
+using Clc.Polaris.Api.Models;
 using Microsoft.AspNetCore.Mvc.ModelBinding;
 using Moq;
 using Clc.Melissa.Models;
@@ -76,5 +77,40 @@ public class RegistrationModelStateTests
 
         Assert.AreEqual("workflow reached", exception.Message);
         melissa.Verify(value => value.PersonatorRequest(It.IsAny<PersonatorRequestRecord>()), Times.Once);
+    }
+
+    [DataTestMethod]
+    [DataRow(IdentifierSettingState.Missing)]
+    [DataRow(IdentifierSettingState.Zero)]
+    [DataRow(IdentifierSettingState.Negative)]
+    [DataRow(IdentifierSettingState.Malformed)]
+    public void InvalidRequiredLogonIdentifier_BlocksPatronCreation(IdentifierSettingState state)
+    {
+        var settings = new Mock<ISettingProvider>();
+        settings.SetupGet(value => value.PhoneNumberFormat).Returns("($1) $2-$3");
+        settings.SetupGet(value => value.RegistrationLogonUserId).Returns(0);
+        settings.As<IIdentifierSettingStateProvider>()
+            .Setup(value => value.GetIdentifierState("registration_logon_user_id"))
+            .Returns(new IdentifierSettingResult(state, state == IdentifierSettingState.Negative ? -1 : 0));
+        var db = new Mock<IDbHelper>();
+        db.Setup(value => value.CheckPatronIsDuplicate(It.IsAny<int>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<DateTime>())).Returns(false);
+        var papi = new Mock<IPapiClient>();
+        var registration = new Registration(settings.Object)
+        {
+            NameFirst = "Jane",
+            NameLast = "Doe",
+            Birthdate = new DateTime(2000, 1, 1),
+            State = "OH",
+            StreetOne = "1 Main St",
+            City = "Columbus",
+            PostalCode = "43215"
+        };
+
+        var result = registration.CreateRegistration("127.0.0.1", new ModelStateDictionary(), settings.Object,
+            db.Object, papi.Object, Mock.Of<IMelissaRestClient>(), Mock.Of<IEmailSender>());
+
+        Assert.IsFalse(result.IsSuccess);
+        StringAssert.Contains(result.Message, "configuration");
+        papi.Verify(value => value.PatronRegistrationCreate(It.IsAny<PatronRegistrationParams>()), Times.Never);
     }
 }

@@ -8,6 +8,21 @@ namespace Clc.PatronRegistration.Tests;
 [TestClass]
 public class AddToRecordSetSettingsTests
 {
+    [DataTestMethod]
+    [DataRow(null, IdentifierSettingState.Missing, null)]
+    [DataRow("", IdentifierSettingState.Missing, null)]
+    [DataRow("0", IdentifierSettingState.Zero, 0)]
+    [DataRow("73", IdentifierSettingState.Positive, 73)]
+    [DataRow("-2", IdentifierSettingState.Negative, -2)]
+    [DataRow("bad", IdentifierSettingState.Malformed, null)]
+    public void IdentifierParser_DistinguishesEveryLegacyState(string? value, IdentifierSettingState state, int? parsed)
+    {
+        var result = IdentifierSettingParser.Parse(value);
+
+        Assert.AreEqual(state, result.State);
+        Assert.AreEqual(parsed, result.Value);
+    }
+
     [TestMethod]
     public void MissingAndInheritedMissingValues_AreNull()
     {

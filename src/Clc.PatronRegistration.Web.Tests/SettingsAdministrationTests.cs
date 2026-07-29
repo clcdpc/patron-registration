@@ -10,6 +10,66 @@ namespace Clc.PatronRegistration.Tests;
 [TestClass]
 public class SettingsAdministrationTests
 {
+    [DataTestMethod]
+    [DataRow("metadata")]
+    [DataRow("setting-added")]
+    [DataRow("setting-removed")]
+    [DataRow("draft")]
+    [DataRow("preview")]
+    [DataRow("version")]
+    public void DeletionFingerprint_ChangesForEveryConfirmedContentCategory(string changedCategory)
+    {
+        var target = new FormCodeDeletionTarget(2, "kids", FormCodeDeletionKind.LibraryDefinition, false);
+        var metadata = new List<string> { "m|2|time|hash" };
+        var settings = new List<string> { "s|2|registration_text|VALUE_HASH" };
+        var drafts = new List<string> { "d|10|2|Active|0|time" };
+        var previews = new List<string> { "p|20|10|0||time|3" };
+        var versions = new List<string> { "v|2|1" };
+        var original = FormCodeDeletionFingerprint.Compute(target, [2, 3], metadata, versions, settings, drafts, previews);
+
+        switch (changedCategory)
+        {
+            case "metadata":
+                metadata[0] += "x";
+                break;
+            case "setting-added":
+                settings.Add("s|3|label.NameFirst|OTHER_HASH");
+                break;
+            case "setting-removed":
+                settings.Clear();
+                break;
+            case "draft":
+                drafts[0] += "x";
+                break;
+            case "preview":
+                previews[0] += "x";
+                break;
+            case "version":
+                versions[0] = "v|2|2";
+                break;
+        }
+
+        var changed = FormCodeDeletionFingerprint.Compute(target, [2, 3], metadata, versions, settings, drafts, previews);
+        Assert.AreNotEqual(original, changed);
+        Assert.AreEqual(original, FormCodeDeletionFingerprint.Compute(target, [2, 3],
+            ["m|2|time|hash"], ["v|2|1"], ["s|2|registration_text|VALUE_HASH"],
+            ["d|10|2|Active|0|time"], ["p|20|10|0||time|3"]));
+    }
+
+    [TestMethod]
+    public void DeletionFingerprint_IsOpaqueAndContainsNoSettingValue()
+    {
+        const string recognizableSecret = "recognizable-sensitive-setting-value";
+        var valueHash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(recognizableSecret)));
+        var target = new FormCodeDeletionTarget(2, "kids", FormCodeDeletionKind.LibraryDefinition, false);
+
+        var fingerprint = FormCodeDeletionFingerprint.Compute(target, [2], [], [],
+            [$"s|2|postmark_api_key|{valueHash}"], [], []);
+
+        Assert.AreEqual(64, fingerprint.Length);
+        Assert.IsFalse(fingerprint.Contains(recognizableSecret, StringComparison.Ordinal));
+    }
+
     [TestMethod]
     public void RequireCatalog_ExactlyMatchesDbConfiguredRequiredMetadata()
     {
@@ -24,8 +84,11 @@ public class SettingsAdministrationTests
             .OrderBy(name => name)
             .ToArray();
 
-        CollectionAssert.AreEqual(new[] { "EmailAddress", "PhoneVoice1", "ReceiveEreceipts", "User5" }, metadataFields);
+        CollectionAssert.AreEqual(new[] { "EmailAddress", "PhoneVoice1", "User5" }, metadataFields);
         CollectionAssert.AreEqual(metadataFields, catalogFields);
+        Assert.IsFalse(catalog.TryGet("require.ReceiveEreceipts", out _));
+        Assert.IsTrue(catalog.TryGet("label.ReceiveEreceipts", out _));
+        Assert.IsTrue(catalog.TryGet("alert.ReceiveEreceipts", out _));
     }
 
     [TestMethod]
@@ -69,7 +132,14 @@ public class SettingsAdministrationTests
     public void FormCodeDeletionLockOrder_IsDraftThenPreviewThenSettingsMetadata()
     {
         CollectionAssert.AreEqual(
-            new[] { FormCodeDeletionLockStep.Drafts, FormCodeDeletionLockStep.PreviewLinks, FormCodeDeletionLockStep.SettingsAndMetadata },
+            new[]
+            {
+                FormCodeDeletionLockStep.Drafts,
+                FormCodeDeletionLockStep.PreviewLinks,
+                FormCodeDeletionLockStep.Metadata,
+                FormCodeDeletionLockStep.ScopeVersions,
+                FormCodeDeletionLockStep.Settings
+            },
             FormCodeDeletionLockOrder.Required.ToArray());
     }
 

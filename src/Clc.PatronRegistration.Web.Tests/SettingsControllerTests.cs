@@ -284,8 +284,8 @@ public class SettingsControllerTests
     public void ConfirmDeleteForm_NonexistentOrUnownedCodeReturnsNotFound()
     {
         var repository = new Mock<ISettingsAdministrationRepository>();
-        repository.Setup(service => service.GetFormCodeDeletionTarget(1, "library-only", 1, It.IsAny<IReadOnlyCollection<int>>()))
-            .Returns((FormCodeDeletionTarget?)null);
+        repository.Setup(service => service.GetFormCodeDeletionSnapshot(1, "library-only", 1, It.IsAny<IReadOnlyCollection<int>>()))
+            .Returns((FormCodeDeletionSnapshot?)null);
         var authorization = new Mock<ISettingsAuthorizationService>();
         authorization.Setup(service => service.Describe(It.IsAny<ClaimsPrincipal>()))
             .Returns(new SettingsPrincipal(true, -1, true));
@@ -301,14 +301,14 @@ public class SettingsControllerTests
     {
         var repository = new Mock<ISettingsAdministrationRepository>();
         repository.Setup(service => service.DeleteFormCode(
-                It.IsAny<FormCodeDeletionTarget>(), 1, It.IsAny<IReadOnlyCollection<int>>(), It.IsAny<AuditContext>()))
+                It.IsAny<FormCodeDeletionTarget>(), It.IsAny<string>(), 1, It.IsAny<IReadOnlyCollection<int>>(), It.IsAny<AuditContext>()))
             .Throws(new System.Data.DBConcurrencyException("ownership changed"));
         var authorization = new Mock<ISettingsAuthorizationService>();
         authorization.Setup(service => service.Describe(It.IsAny<ClaimsPrincipal>()))
             .Returns(new SettingsPrincipal(true, -1, true));
         var controller = CreateController(repository, authorization);
 
-        var result = controller.DeleteForm("shared", 1, FormCodeDeletionKind.SystemDefinition, false);
+        var result = controller.DeleteForm("shared", 1, FormCodeDeletionKind.SystemDefinition, false, "fingerprint");
 
         Assert.IsInstanceOfType<ConflictObjectResult>(result);
     }
@@ -323,11 +323,12 @@ public class SettingsControllerTests
         authorization.Setup(service => service.CanManage(It.IsAny<ClaimsPrincipal>(), 2, It.IsAny<bool>())).Returns(true);
         var controller = CreateController(repository, authorization);
 
-        var result = controller.DeleteForm("shared", 2, FormCodeDeletionKind.LibraryDefinition, false);
+        var result = controller.DeleteForm("shared", 2, FormCodeDeletionKind.LibraryDefinition, false, "fingerprint");
 
         Assert.IsInstanceOfType<RedirectToActionResult>(result);
         repository.Verify(service => service.DeleteFormCode(
             It.Is<FormCodeDeletionTarget>(target => target.OwnerOrganizationId == 2 && target.FormCode == "shared"),
+            "fingerprint",
             1,
             It.Is<IReadOnlyCollection<int>>(organizations => organizations.Contains(2) && organizations.Contains(3) && !organizations.Contains(1) && !organizations.Contains(9)),
             It.IsAny<AuditContext>()), Times.Once);
@@ -342,11 +343,12 @@ public class SettingsControllerTests
             .Returns(new SettingsPrincipal(true, -1, true));
         var controller = CreateController(repository, authorization);
 
-        var result = controller.DeleteForm("shared", 1, FormCodeDeletionKind.SystemDefinition, false);
+        var result = controller.DeleteForm("shared", 1, FormCodeDeletionKind.SystemDefinition, false, "fingerprint");
 
         Assert.IsInstanceOfType<RedirectToActionResult>(result);
         repository.Verify(service => service.DeleteFormCode(
             It.Is<FormCodeDeletionTarget>(target => target.Kind == FormCodeDeletionKind.SystemDefinition),
+            "fingerprint",
             1,
             It.Is<IReadOnlyCollection<int>>(organizations => organizations.Contains(1) && organizations.Contains(2) && organizations.Contains(3)),
             It.IsAny<AuditContext>()), Times.Once);

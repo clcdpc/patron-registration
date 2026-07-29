@@ -1,4 +1,6 @@
 using System.Data;
+using System.Security.Cryptography;
+using System.Text;
 using Clc.PatronRegistration.Administration;
 using Clc.PatronRegistration.Configuration;
 using Dapper;
@@ -63,6 +65,25 @@ public sealed record FormCodeImpact(int MetadataRows, int OverrideRows, int Draf
 public sealed record LegacyFormCodeRow(int OrganizationId, string FormCode);
 public enum FormCodeDeletionKind { SystemDefinition, LibraryDefinition, LibraryCustomization }
 public sealed record FormCodeDeletionTarget(int OwnerOrganizationId, string FormCode, FormCodeDeletionKind Kind, bool IsLegacy);
+public sealed record FormCodeDeletionSnapshot(FormCodeDeletionTarget Target, IReadOnlyList<int> AffectedOrganizationIds, FormCodeImpact Impact, string Fingerprint);
+public static class FormCodeDeletionFingerprint
+{
+    public static string Compute(FormCodeDeletionTarget target, IEnumerable<int> organizationIds,
+        IEnumerable<string> metadata, IEnumerable<string> versions, IEnumerable<string> settings,
+        IEnumerable<string> drafts, IEnumerable<string> previewLinks)
+    {
+        var canonical = string.Join("\n", new[]
+        {
+            $"owner|{target.OwnerOrganizationId}|{target.FormCode}|{target.Kind}|{target.IsLegacy}",
+            $"organizations|{string.Join(',', organizationIds.OrderBy(id => id))}"
+        }.Concat(metadata.OrderBy(value => value, StringComparer.Ordinal))
+            .Concat(versions.OrderBy(value => value, StringComparer.Ordinal))
+            .Concat(settings.OrderBy(value => value, StringComparer.Ordinal))
+            .Concat(drafts.OrderBy(value => value, StringComparer.Ordinal))
+            .Concat(previewLinks.OrderBy(value => value, StringComparer.Ordinal)));
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonical)));
+    }
+}
 public static class FormCodeDeletionOwnership
 {
     public static FormCodeDeletionTarget? Classify(int ownerOrganizationId, string formCode, int systemOrganizationId,
@@ -79,14 +100,16 @@ public static class FormCodeDeletionOwnership
         return new FormCodeDeletionTarget(ownerOrganizationId, formCode, kind, !ownerMetadata);
     }
 }
-public enum FormCodeDeletionLockStep { Drafts, PreviewLinks, SettingsAndMetadata }
+public enum FormCodeDeletionLockStep { Drafts, PreviewLinks, Metadata, ScopeVersions, Settings }
 public static class FormCodeDeletionLockOrder
 {
     public static IReadOnlyList<FormCodeDeletionLockStep> Required { get; } =
     [
         FormCodeDeletionLockStep.Drafts,
         FormCodeDeletionLockStep.PreviewLinks,
-        FormCodeDeletionLockStep.SettingsAndMetadata
+        FormCodeDeletionLockStep.Metadata,
+        FormCodeDeletionLockStep.ScopeVersions,
+        FormCodeDeletionLockStep.Settings
     ];
 }
 
@@ -137,8 +160,8 @@ public interface ISettingsAdministrationRepository
     IReadOnlyList<LegacyFormCodeRow> GetLegacyFormCodes();
     void SaveFormCode(FormCodeMetadata metadata, bool isCreate, AuditContext audit);
     FormCodeImpact GetFormCodeImpact(int ownerOrganizationId, string formCode, IReadOnlyCollection<int> affectedOrganizations);
-    FormCodeDeletionTarget? GetFormCodeDeletionTarget(int ownerOrganizationId, string formCode, int systemOrganizationId, IReadOnlyCollection<int> affectedOrganizations);
-    void DeleteFormCode(FormCodeDeletionTarget expectedTarget, int systemOrganizationId, IReadOnlyCollection<int> affectedOrganizations, AuditContext audit);
+    FormCodeDeletionSnapshot? GetFormCodeDeletionSnapshot(int ownerOrganizationId, string formCode, int systemOrganizationId, IReadOnlyCollection<int> knownOrganizations);
+    void DeleteFormCode(FormCodeDeletionTarget expectedTarget, string expectedFingerprint, int systemOrganizationId, IReadOnlyCollection<int> knownOrganizations, AuditContext audit);
     IEnumerable<SettingsAuditRow> SearchAudit(int? libraryId, bool includeSensitive, string? term);
     void WriteAudit(string eventType, bool succeeded, AuditContext audit, string? failureReason = null, long? draftId = null, long? previewLinkId = null, string? metadataJson = null);
 }
@@ -276,6 +299,9 @@ if @@ROWCOUNT=0
         {
             throw new DBConcurrencyException("The staged draft mutation no longer exists.");
         }
+        connection.Execute(
+            "update dbo.RegistrationSettingDrafts set ModifiedAtUtc=SYSUTCDATETIME(),ModifiedBy=@actor where DraftId=@draftId",
+            new { draftId, actor = audit.ActorName ?? "unknown" }, transaction);
         InsertAudit(connection, transaction, "DraftChangeRemoved", true, audit, draftId: draftId,
             settingKey: settingKey, isSensitive: definition.IsSensitive);
         transaction.Commit();
@@ -537,35 +563,34 @@ select
             new { ownerOrganizationId, formCode, affectedOrganizations });
     }
 
-    public FormCodeDeletionTarget? GetFormCodeDeletionTarget(int ownerOrganizationId, string formCode, int systemOrganizationId, IReadOnlyCollection<int> affectedOrganizations)
+    public FormCodeDeletionSnapshot? GetFormCodeDeletionSnapshot(int ownerOrganizationId, string formCode, int systemOrganizationId, IReadOnlyCollection<int> knownOrganizations)
     {
         using var connection = Open();
-        return ReadFormCodeDeletionTarget(connection, null, ownerOrganizationId, formCode, systemOrganizationId, affectedOrganizations, false);
+        var affected = DiscoverAffectedOrganizations(connection, ownerOrganizationId, formCode, systemOrganizationId, knownOrganizations);
+        using var transaction = connection.BeginTransaction(IsolationLevel.Serializable);
+        var snapshot = BuildDeletionSnapshot(connection, transaction, ownerOrganizationId, formCode, systemOrganizationId, affected, true);
+        transaction.Commit();
+        return snapshot;
     }
 
-    public void DeleteFormCode(FormCodeDeletionTarget expectedTarget, int systemOrganizationId, IReadOnlyCollection<int> affectedOrganizations, AuditContext audit)
+    public void DeleteFormCode(FormCodeDeletionTarget expectedTarget, string expectedFingerprint, int systemOrganizationId, IReadOnlyCollection<int> knownOrganizations, AuditContext audit)
     {
         if (string.IsNullOrWhiteSpace(expectedTarget.FormCode))
         {
             throw new ArgumentException("The default form code cannot be deleted.");
         }
         using var connection = Open();
+        var affectedOrganizations = DiscoverAffectedOrganizations(connection, expectedTarget.OwnerOrganizationId,
+            expectedTarget.FormCode, systemOrganizationId, knownOrganizations);
         using var transaction = connection.BeginTransaction(IsolationLevel.Serializable);
-        _ = connection.Query<long>(@"
-select DraftId from dbo.RegistrationSettingDrafts with(updlock,holdlock)
-where OrganizationId in @affectedOrganizations and FormCode=@formCode
-order by DraftId", new { formCode = expectedTarget.FormCode, affectedOrganizations }, transaction).ToList();
-        _ = connection.Query<long>(@"
-select p.PreviewLinkId from dbo.RegistrationSettingPreviewLinks p with(updlock,holdlock)
-join dbo.RegistrationSettingDrafts d on d.DraftId=p.DraftId
-where d.OrganizationId in @affectedOrganizations and d.FormCode=@formCode
-order by p.PreviewLinkId", new { formCode = expectedTarget.FormCode, affectedOrganizations }, transaction).ToList();
-
-        var actualTarget = ReadFormCodeDeletionTarget(connection, transaction, expectedTarget.OwnerOrganizationId,
+        var lockedSnapshot = BuildDeletionSnapshot(connection, transaction, expectedTarget.OwnerOrganizationId,
             expectedTarget.FormCode, systemOrganizationId, affectedOrganizations, true);
-        if (actualTarget is null || actualTarget.Kind != expectedTarget.Kind || actualTarget.IsLegacy != expectedTarget.IsLegacy)
+        if (string.IsNullOrWhiteSpace(expectedFingerprint) || lockedSnapshot is null || lockedSnapshot.Target.Kind != expectedTarget.Kind ||
+            lockedSnapshot.Target.IsLegacy != expectedTarget.IsLegacy ||
+            !CryptographicOperations.FixedTimeEquals(
+                Encoding.ASCII.GetBytes(lockedSnapshot.Fingerprint), Encoding.ASCII.GetBytes(expectedFingerprint)))
         {
-            throw new DBConcurrencyException("The form-code ownership changed or no longer exists. Reload the form-code page.");
+            throw new DBConcurrencyException("The form-code deletion contents changed. Review the deletion impact again.");
         }
         connection.Execute(@"
 delete p from dbo.RegistrationSettingPreviewLinks p join dbo.RegistrationSettingDrafts d on d.DraftId=p.DraftId where d.OrganizationId in @affectedOrganizations and d.FormCode=@formCode;
@@ -587,25 +612,103 @@ delete from dbo.RegistrationFormCodeMetadata where OrganizationId in @affectedOr
         transaction.Commit();
     }
 
-    private static FormCodeDeletionTarget? ReadFormCodeDeletionTarget(SqlConnection connection, IDbTransaction? transaction,
-        int ownerOrganizationId, string formCode, int systemOrganizationId,
-        IReadOnlyCollection<int> affectedOrganizations, bool lockRows)
+    private static IReadOnlyList<int> DiscoverAffectedOrganizations(SqlConnection connection, int ownerOrganizationId,
+        string formCode, int systemOrganizationId, IReadOnlyCollection<int> knownOrganizations)
+    {
+        var discovered = new HashSet<int>(knownOrganizations) { ownerOrganizationId };
+        if (ownerOrganizationId == systemOrganizationId)
+        {
+            foreach (var id in connection.Query<int>(@"
+select OrganizationId from dbo.RegistrationFormCodeMetadata where FormCode=@formCode
+union select OrganizationID from dbo.RegistrationFormSettings where FormCode=@formCode
+union select OrganizationId from dbo.RegistrationSettingDrafts where FormCode=@formCode", new { formCode }))
+            {
+                discovered.Add(id);
+            }
+        }
+        else
+        {
+            foreach (var id in connection.Query<int>(@"
+select distinct TargetOrganizationId from dbo.RegistrationSettingAuditEvents
+where TargetLibraryId=@ownerOrganizationId and FormCode=@formCode
+ and (exists(select 1 from dbo.RegistrationFormCodeMetadata m where m.OrganizationId=TargetOrganizationId and m.FormCode=@formCode)
+   or exists(select 1 from dbo.RegistrationFormSettings s where s.OrganizationID=TargetOrganizationId and s.FormCode=@formCode)
+   or exists(select 1 from dbo.RegistrationSettingDrafts d where d.OrganizationId=TargetOrganizationId and d.FormCode=@formCode))",
+                new { ownerOrganizationId, formCode }))
+            {
+                discovered.Add(id);
+            }
+        }
+        return discovered.OrderBy(id => id).ToList();
+    }
+
+    private static FormCodeDeletionSnapshot? BuildDeletionSnapshot(SqlConnection connection, IDbTransaction? transaction,
+        int ownerOrganizationId, string formCode, int systemOrganizationId, IReadOnlyList<int> affectedOrganizations, bool lockRows)
     {
         var hint = lockRows ? " with(updlock,holdlock)" : string.Empty;
-        var ownerMetadata = connection.QuerySingle<int>(
-            $"select count(*) from dbo.RegistrationFormCodeMetadata{hint} where OrganizationId=@ownerOrganizationId and FormCode=@formCode",
-            new { ownerOrganizationId, formCode }, transaction) > 0;
-        var systemMetadata = ownerOrganizationId == systemOrganizationId || connection.QuerySingle<int>(
-            $"select count(*) from dbo.RegistrationFormCodeMetadata{hint} where OrganizationId=@systemOrganizationId and FormCode=@formCode",
-            new { systemOrganizationId, formCode }, transaction) > 0;
-        IReadOnlyCollection<int> legacyOrganizations = ownerOrganizationId == systemOrganizationId
-            ? [systemOrganizationId]
-            : affectedOrganizations;
-        var hasOwnedSettings = connection.QuerySingle<int>(
-            $"select count(*) from dbo.RegistrationFormSettings{hint} where OrganizationID in @legacyOrganizations and FormCode=@formCode",
-            new { legacyOrganizations, formCode }, transaction) > 0;
-        return FormCodeDeletionOwnership.Classify(ownerOrganizationId, formCode, systemOrganizationId,
+        var organizationFilter = ownerOrganizationId == systemOrganizationId
+            ? "FormCode=@formCode"
+            : "OrganizationId in @affectedOrganizations and FormCode=@formCode";
+        var drafts = connection.Query<string>($@"
+select concat('d|',DraftId,'|',OrganizationId,'|',Status,'|',BaselineVersion,'|',convert(varchar(33),ModifiedAtUtc,126))
+from dbo.RegistrationSettingDrafts{hint} where {organizationFilter} order by DraftId",
+            new { affectedOrganizations, formCode }, transaction).ToList();
+        var links = connection.Query<string>($@"
+select concat('p|',p.PreviewLinkId,'|',p.DraftId,'|',convert(int,p.AllowLiveSubmission),'|',
+ coalesce(convert(varchar(33),p.RevokedAtUtc,126),''),'|',convert(varchar(33),p.ModifiedAtUtc,126),'|',p.OperationalBranchId)
+from dbo.RegistrationSettingPreviewLinks p{hint} join dbo.RegistrationSettingDrafts d on d.DraftId=p.DraftId
+where {(ownerOrganizationId == systemOrganizationId ? "d.FormCode=@formCode" : "d.OrganizationId in @affectedOrganizations and d.FormCode=@formCode")} order by p.PreviewLinkId",
+            new { affectedOrganizations, formCode }, transaction).ToList();
+        var metadata = connection.Query<string>($@"
+select concat('m|',OrganizationId,'|',convert(varchar(33),ModifiedAtUtc,126),'|',
+ convert(varchar(64),hashbytes('SHA2_256',concat(DisplayName,'|',coalesce(Description,''))),2))
+from dbo.RegistrationFormCodeMetadata{hint} where {organizationFilter} order by OrganizationId",
+            new { affectedOrganizations, formCode }, transaction).ToList();
+        if (lockRows)
+        {
+            foreach (var organizationId in affectedOrganizations)
+            {
+                EnsureVersionRow(connection, transaction!, organizationId, formCode);
+            }
+        }
+        var versions = connection.Query<string>($@"
+select concat('v|',OrganizationId,'|',Version)
+from dbo.RegistrationSettingScopeVersions{hint} where OrganizationId in @affectedOrganizations and FormCode=@formCode order by OrganizationId",
+            new { affectedOrganizations, formCode }, transaction).ToList();
+        foreach (var organizationId in affectedOrganizations.Where(id =>
+                     !versions.Any(row => row.StartsWith($"v|{id}|", StringComparison.Ordinal))))
+        {
+            versions.Add($"v|{organizationId}|0");
+        }
+        versions.Sort(StringComparer.Ordinal);
+        var settingsFilter = ownerOrganizationId == systemOrganizationId
+            ? "FormCode=@formCode"
+            : "OrganizationID in @affectedOrganizations and FormCode=@formCode";
+        var settings = connection.Query<string>($@"
+select concat('s|',OrganizationID,'|',Setting,'|',convert(varchar(64),hashbytes('SHA2_256',coalesce(Value,'')),2))
+from dbo.RegistrationFormSettings{hint} where {settingsFilter} order by OrganizationID,Setting",
+            new { affectedOrganizations, formCode }, transaction).ToList();
+        var ownerMetadata = metadata.Any(row => row.StartsWith($"m|{ownerOrganizationId}|", StringComparison.Ordinal));
+        var systemMetadata = ownerOrganizationId == systemOrganizationId ||
+            metadata.Any(row => row.StartsWith($"m|{systemOrganizationId}|", StringComparison.Ordinal));
+        var ownedOrganizationIds = ownerOrganizationId == systemOrganizationId
+            ? new HashSet<int> { systemOrganizationId }
+            : affectedOrganizations.ToHashSet();
+        var hasOwnedSettings = settings.Any(row =>
+        {
+            var separator = row.IndexOf('|', 2);
+            return separator > 2 && int.TryParse(row.AsSpan(2, separator - 2), out var id) && ownedOrganizationIds.Contains(id);
+        });
+        var target = FormCodeDeletionOwnership.Classify(ownerOrganizationId, formCode, systemOrganizationId,
             ownerMetadata, systemMetadata, hasOwnedSettings);
+        if (target is null)
+        {
+            return null;
+        }
+        var fingerprint = FormCodeDeletionFingerprint.Compute(target, affectedOrganizations,
+            metadata, versions, settings, drafts, links);
+        return new FormCodeDeletionSnapshot(target, affectedOrganizations,
+            new FormCodeImpact(metadata.Count, settings.Count, drafts.Count, links.Count), fingerprint);
     }
 
     public static IReadOnlyList<int> AffectedVersionScopes(IEnumerable<int> affectedOrganizations) =>

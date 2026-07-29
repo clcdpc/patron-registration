@@ -62,7 +62,6 @@ namespace Clc.PatronRegistration
 
         public int? TxtPhone { get; set; }
 
-        [DbConfiguredRequired]
         [DbConfiguredDisplayName]
         [VerifyEmailProvidedForEreceipts]
         public bool ReceiveEreceipts { get; set; }

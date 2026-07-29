@@ -100,6 +100,7 @@ public sealed class DeleteFormCodeViewModel
         _ => Kind.ToString()
     };
     public bool IsLegacy { get; set; }
+    public string SnapshotFingerprint { get; set; } = string.Empty;
     public IReadOnlyList<string> AffectedOrganizationNames { get; set; } = [];
     public FormCodeImpact Impact { get; set; } = new(0, 0, 0, 0);
 }

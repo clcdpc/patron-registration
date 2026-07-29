@@ -30,6 +30,7 @@
     <input type="hidden" name="organizationId" value="@Model.OrganizationId" />
     <input type="hidden" name="kind" value="@Model.Kind" />
     <input type="hidden" name="isLegacy" value="@Model.IsLegacy" />
+    <input type="hidden" name="snapshotFingerprint" value="@Model.SnapshotFingerprint" />
     <button type="submit" class="danger-button">Delete form code and related data</button>
     <a asp-action="Forms" asp-route-libraryId="@Model.OrganizationId">Cancel</a>
 </form>

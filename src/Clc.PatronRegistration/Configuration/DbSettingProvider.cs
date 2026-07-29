@@ -8,7 +8,7 @@ using System.Globalization;
 
 namespace Clc.PatronRegistration.Configuration
 {
-    public class DbSettingProvider : ISettingProvider
+    public class DbSettingProvider : ISettingProvider, IIdentifierSettingStateProvider
     {
         public int LibraryId { get; protected set; }
         public int OrganizationId { get; }
@@ -35,11 +35,9 @@ namespace Clc.PatronRegistration.Configuration
             return ConvertToType(dbValue, defaultValue);
         }
 
-        private int GetLegacySafeInteger(string name)
-        {
-            var value = GetSetting<string>(name);
-            return int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) ? parsed : 0;
-        }
+        public virtual IdentifierSettingResult GetIdentifierState(string key) => IdentifierSettingParser.Parse(GetSetting<string>(key));
+
+        private int GetLegacySafeInteger(string name) => GetIdentifierState(name).Value.GetValueOrDefault();
 
         public static T ConvertToType<T>(string? value, T defaultValue = default!)
         {

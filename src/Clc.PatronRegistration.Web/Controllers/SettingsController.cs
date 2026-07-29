@@ -9,6 +9,7 @@ using Clc.Polaris.Api;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
+using Microsoft.Data.SqlClient;
 
 namespace Clc.PatronRegistration.Web.Controllers;
 
@@ -482,9 +483,9 @@ public sealed class SettingsController(
             return Forbid();
         }
         var organizations = AffectedOrganizations(organizationId);
-        var target = repository.GetFormCodeDeletionTarget(
+        var snapshot = repository.GetFormCodeDeletionSnapshot(
             organizationId, formCode, settingsOptions.SystemOrganizationId, organizations);
-        if (target is null)
+        if (snapshot is null)
         {
             return NotFound("The selected form code is not owned by this scope.");
         }
@@ -493,16 +494,17 @@ public sealed class SettingsController(
             OrganizationId = organizationId,
             OwnerOrganizationName = cache.GetOrg(organizationId).Name,
             FormCode = formCode,
-            Kind = target.Kind,
-            IsLegacy = target.IsLegacy,
-            AffectedOrganizationNames = organizations.Select(id => cache.GetOrg(id).Name).ToList(),
-            Impact = repository.GetFormCodeImpact(organizationId, formCode, organizations)
+            Kind = snapshot.Target.Kind,
+            IsLegacy = snapshot.Target.IsLegacy,
+            SnapshotFingerprint = snapshot.Fingerprint,
+            AffectedOrganizationNames = snapshot.AffectedOrganizationIds.Select(OrganizationDisplayName).ToList(),
+            Impact = snapshot.Impact
         });
     }
 
     [HttpPost("forms/{formCode}/delete")]
     [ValidateAntiForgeryToken]
-    public IActionResult DeleteForm(string formCode, int organizationId, FormCodeDeletionKind kind, bool isLegacy)
+    public IActionResult DeleteForm(string formCode, int organizationId, FormCodeDeletionKind kind, bool isLegacy, string snapshotFingerprint)
     {
         var principal = RequireManager();
         if (principal is null || !CanDeleteFormCode(principal, organizationId, formCode))
@@ -511,12 +513,16 @@ public sealed class SettingsController(
         }
         try
         {
-            repository.DeleteFormCode(new FormCodeDeletionTarget(organizationId, formCode, kind, isLegacy),
+            repository.DeleteFormCode(new FormCodeDeletionTarget(organizationId, formCode, kind, isLegacy), snapshotFingerprint,
                 settingsOptions.SystemOrganizationId, AffectedOrganizations(organizationId), CreateAudit(organizationId, formCode));
         }
         catch (DBConcurrencyException exception)
         {
             return Conflict(exception.Message);
+        }
+        catch (SqlException exception) when (exception.Number == 1205)
+        {
+            return Conflict("The form-code deletion conflicted with another settings change. Review the deletion impact again.");
         }
         cacheInvalidator.LiveSettingsChanged();
         return RedirectToAction(nameof(Forms), new { libraryId = organizationId });
@@ -701,6 +707,9 @@ public sealed class SettingsController(
     }
 
     private int GetLibraryId(int organizationId) => cache.OrganizationCache.GetLibrary(organizationId).OrganizationID;
+
+    private string OrganizationDisplayName(int organizationId) =>
+        cache.OrganizationCache.FirstOrDefault(organization => organization.OrganizationID == organizationId)?.Name ?? $"Organization {organizationId}";
 
     private string GetOrganizationName(int organizationId) => organizationId == settingsOptions.SystemOrganizationId
         ? "System defaults"
