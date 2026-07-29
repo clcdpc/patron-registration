@@ -15,6 +15,20 @@ namespace Clc.PatronRegistration.Tests;
 [TestClass]
 public class SettingsControllerTests
 {
+    [TestMethod]
+    public void CreateDraft_ConcurrentRepositoryChangeReturnsConflict()
+    {
+        var repository = new Mock<ISettingsAdministrationRepository>();
+        repository.Setup(service => service.CreateDraft(3, string.Empty, It.IsAny<AuditContext>()))
+            .Throws(new System.Data.DBConcurrencyException("The form is changing."));
+        var authorization = LibraryAuthorization();
+        var controller = CreateController(repository, authorization);
+
+        var result = controller.CreateDraft(3);
+
+        Assert.IsInstanceOfType<ConflictObjectResult>(result);
+    }
+
     [DataTestMethod]
     [DataRow("force_ecard_remotely")]
     [DataRow("require.User5")]

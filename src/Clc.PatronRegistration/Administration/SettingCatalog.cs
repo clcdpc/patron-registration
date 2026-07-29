@@ -90,6 +90,7 @@ public interface ISettingCatalog
     IReadOnlyList<SettingDefinition> All { get; }
     bool TryGet(string key, out SettingDefinition definition);
     IReadOnlyList<string> DynamicFieldSuffixes { get; }
+    IReadOnlyList<string> LabelFieldSuffixes { get; }
     IReadOnlyList<string> RequiredFieldSuffixes { get; }
 }
 
@@ -252,6 +253,14 @@ public sealed class SettingCatalog : ISettingCatalog
         "RequestPickupBranchID", "User1", "User5", "DeliverCardToSchool", "IsStudent",
         "IsTeacher", "IsECard", "AddToMailingList"
     ];
+    public IReadOnlyList<string> LabelFieldSuffixes { get; } =
+    [
+        "PatronBranchID", "NameFirst", "NameMiddle", "NameLast", "UseLegalName",
+        "LegalNameFirst", "LegalNameMiddle", "LegalNameLast", "Birthdate", "DeliveryOptionId",
+        "PhoneVoice1", "PhoneVoice2", "ReceiveEreceipts", "EmailAddress", "StreetOne", "StreetTwo",
+        "City", "State", "User5", "PostalCode", "Password", "Password2", "RequestPickupBranchID",
+        "User1", "DeliverCardToSchool", "IsStudent", "IsTeacher", "IsECard", "AddToMailingList"
+    ];
     public IReadOnlyList<string> RequiredFieldSuffixes { get; } =
     [
         "PhoneVoice1", "EmailAddress", "User5"
@@ -276,6 +285,9 @@ public sealed class SettingCatalog : ISettingCatalog
         foreach (var suffix in DynamicFieldSuffixes)
         {
             list.Add(new($"alert.{suffix}", $"{Friendly(suffix)} alert", "Stored alert text reserved for future validation-message integration.", SettingValueType.LongString, SettingGroup.Alert));
+        }
+        foreach (var suffix in LabelFieldSuffixes)
+        {
             list.Add(new($"label.{suffix}", $"{Friendly(suffix)} label", "Label shown for this field.", SettingValueType.ShortString, SettingGroup.Label));
         }
         foreach (var suffix in RequiredFieldSuffixes)

@@ -92,6 +92,82 @@ public class SettingsAdministrationTests
     }
 
     [TestMethod]
+    public void LabelCatalog_ExactlyMatchesDbConfiguredDisplayNameMetadata()
+    {
+        var metadataFields = typeof(RegistrationMetadata).GetProperties()
+            .Where(property => property.GetCustomAttributes(typeof(DbConfiguredDisplayName), true).Any())
+            .Select(property => property.Name)
+            .OrderBy(name => name)
+            .ToArray();
+        var catalog = new SettingCatalog();
+        var catalogFields = catalog.All.Where(definition => definition.Group == SettingGroup.Label)
+            .Select(definition => definition.Key["label.".Length..])
+            .OrderBy(name => name)
+            .ToArray();
+
+        CollectionAssert.AreEqual(metadataFields, catalogFields);
+        Assert.IsFalse(catalog.TryGet("label.AltEmailAddress", out _));
+        Assert.IsTrue(catalog.TryGet("alert.AltEmailAddress", out _));
+    }
+
+    [DataTestMethod]
+    [DataRow("added")]
+    [DataRow("removed")]
+    [DataRow("modified")]
+    public void LibraryDeletionFingerprint_TracksContextualSystemMetadata(string change)
+    {
+        var target = new FormCodeDeletionTarget(2, "kids", FormCodeDeletionKind.LibraryCustomization, false);
+        var metadata = new List<string> { "m|1|time-1|hash-1", "m|2|time-2|hash-2" };
+        var original = FormCodeDeletionFingerprint.Compute(target, [2, 3], metadata, [], [], [], []);
+
+        if (change == "added")
+        {
+            metadata[0] = "m|1|time-1|new-system-hash";
+        }
+        else if (change == "removed")
+        {
+            metadata.RemoveAt(0);
+        }
+        else
+        {
+            metadata[0] = "m|1|time-3|hash-1";
+        }
+
+        Assert.AreNotEqual(original, FormCodeDeletionFingerprint.Compute(target, [2, 3], metadata, [], [], [], []));
+    }
+
+    [TestMethod]
+    public void ConfirmationSnapshotRepositoryPath_IsReadOnly()
+    {
+        var root = FindRepositoryRoot();
+        var source = File.ReadAllText(Path.Combine(root,
+            "src/Clc.PatronRegistration.Web/Settings/SettingsAdministrationRepository.cs"));
+        var start = source.IndexOf("public FormCodeDeletionSnapshot? GetFormCodeDeletionSnapshot", StringComparison.Ordinal);
+        var end = source.IndexOf("public void DeleteFormCode", start, StringComparison.Ordinal);
+        var method = source[start..end];
+
+        StringAssert.Contains(method, "BuildDeletionSnapshot(connection, null");
+        Assert.IsFalse(method.Contains("EnsureVersionRow", StringComparison.Ordinal));
+        Assert.IsFalse(method.Contains("BeginTransaction", StringComparison.Ordinal));
+    }
+
+    [TestMethod]
+    public void CreateDraft_LocksDraftRangeBeforeScopeVersion()
+    {
+        var root = FindRepositoryRoot();
+        var source = File.ReadAllText(Path.Combine(root,
+            "src/Clc.PatronRegistration.Web/Settings/SettingsAdministrationRepository.cs"));
+        var start = source.IndexOf("public long CreateDraft", StringComparison.Ordinal);
+        var end = source.IndexOf("public void SaveDraftChanges", start, StringComparison.Ordinal);
+        var method = source[start..end];
+        var draftLock = method.IndexOf("RegistrationSettingDrafts with(updlock,holdlock)", StringComparison.Ordinal);
+        var versionLock = method.IndexOf("EnsureVersionRow", StringComparison.Ordinal);
+
+        Assert.IsTrue(draftLock >= 0);
+        Assert.IsTrue(versionLock > draftLock);
+    }
+
+    [TestMethod]
     public void GloballyRequiredFields_AreNotExposedAsDynamicRequirements()
     {
         var requiredFields = typeof(RegistrationMetadata).GetProperties()

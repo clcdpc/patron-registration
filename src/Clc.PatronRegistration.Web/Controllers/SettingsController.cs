@@ -113,6 +113,10 @@ public sealed class SettingsController(
         {
             return Conflict(exception.Message);
         }
+        catch (SqlException exception) when (exception.Number == 1205)
+        {
+            return Conflict("Direct save conflicted with another settings change. Reload and review the settings.");
+        }
         catch (InvalidOperationException exception)
         {
             repository.WriteAudit("ValidationFailed", false, CreateAudit(request.OrganizationId, request.FormCode), exception.Message);
@@ -130,8 +134,19 @@ public sealed class SettingsController(
         {
             return Forbid();
         }
-        var draftId = repository.CreateDraft(organizationId, formCode, CreateAudit(organizationId, formCode));
-        return RedirectToAction(nameof(Index), new { organizationId, formCode, draftId });
+        try
+        {
+            var draftId = repository.CreateDraft(organizationId, formCode, CreateAudit(organizationId, formCode));
+            return RedirectToAction(nameof(Index), new { organizationId, formCode, draftId });
+        }
+        catch (DBConcurrencyException exception)
+        {
+            return Conflict(exception.Message);
+        }
+        catch (SqlException exception) when (exception.Number == 1205)
+        {
+            return Conflict("Draft creation conflicted with another settings change. Reload and try again.");
+        }
     }
 
     [HttpPost("drafts/{draftId:long}/changes")]
@@ -219,6 +234,10 @@ public sealed class SettingsController(
         catch (DBConcurrencyException exception)
         {
             return Conflict(exception.Message);
+        }
+        catch (SqlException exception) when (exception.Number == 1205)
+        {
+            return Conflict("Draft commit conflicted with another settings change. Reload and review the draft.");
         }
         catch (InvalidOperationException exception)
         {

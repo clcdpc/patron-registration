@@ -226,7 +226,6 @@ public sealed class SettingsAdministrationRepository(IDbHelperSettings settings)
     {
         using var connection = Open();
         using var transaction = connection.BeginTransaction(IsolationLevel.Serializable);
-        EnsureVersionRow(connection, transaction, organizationId, formCode);
         var existing = connection.QuerySingleOrDefault<long?>(
             "select DraftId from dbo.RegistrationSettingDrafts with(updlock,holdlock) where OrganizationId=@organizationId and FormCode=@formCode and Status='Active'",
             new { organizationId, formCode }, transaction);
@@ -236,6 +235,9 @@ public sealed class SettingsAdministrationRepository(IDbHelperSettings settings)
             return existing.Value;
         }
 
+        // Repository transactions acquire only the locks they need, in this global order:
+        // draft, preview link, metadata, scope version, then live settings.
+        EnsureVersionRow(connection, transaction, organizationId, formCode);
         var version = ReadVersion(connection, transaction, organizationId, formCode);
         var draftId = connection.QuerySingle<long>(@"
 insert dbo.RegistrationSettingDrafts(OrganizationId,FormCode,BaselineVersion,Status,CreatedBy,ModifiedBy)
@@ -567,10 +569,9 @@ select
     {
         using var connection = Open();
         var affected = DiscoverAffectedOrganizations(connection, ownerOrganizationId, formCode, systemOrganizationId, knownOrganizations);
-        using var transaction = connection.BeginTransaction(IsolationLevel.Serializable);
-        var snapshot = BuildDeletionSnapshot(connection, transaction, ownerOrganizationId, formCode, systemOrganizationId, affected, true);
-        transaction.Commit();
-        return snapshot;
+        // Confirmation is intentionally read-only. Missing version rows are represented as
+        // version zero; the POST takes authoritative locks and may create those rows.
+        return BuildDeletionSnapshot(connection, null, ownerOrganizationId, formCode, systemOrganizationId, affected, false);
     }
 
     public void DeleteFormCode(FormCodeDeletionTarget expectedTarget, string expectedFingerprint, int systemOrganizationId, IReadOnlyCollection<int> knownOrganizations, AuditContext audit)
@@ -659,11 +660,14 @@ select concat('p|',p.PreviewLinkId,'|',p.DraftId,'|',convert(int,p.AllowLiveSubm
 from dbo.RegistrationSettingPreviewLinks p{hint} join dbo.RegistrationSettingDrafts d on d.DraftId=p.DraftId
 where {(ownerOrganizationId == systemOrganizationId ? "d.FormCode=@formCode" : "d.OrganizationId in @affectedOrganizations and d.FormCode=@formCode")} order by p.PreviewLinkId",
             new { affectedOrganizations, formCode }, transaction).ToList();
+        var metadataFilter = ownerOrganizationId == systemOrganizationId
+            ? "FormCode=@formCode"
+            : "(OrganizationId in @affectedOrganizations or OrganizationId=@systemOrganizationId) and FormCode=@formCode";
         var metadata = connection.Query<string>($@"
 select concat('m|',OrganizationId,'|',convert(varchar(33),ModifiedAtUtc,126),'|',
  convert(varchar(64),hashbytes('SHA2_256',concat(DisplayName,'|',coalesce(Description,''))),2))
-from dbo.RegistrationFormCodeMetadata{hint} where {organizationFilter} order by OrganizationId",
-            new { affectedOrganizations, formCode }, transaction).ToList();
+from dbo.RegistrationFormCodeMetadata{hint} where {metadataFilter} order by OrganizationId",
+            new { affectedOrganizations, formCode, systemOrganizationId }, transaction).ToList();
         if (lockRows)
         {
             foreach (var organizationId in affectedOrganizations)
@@ -707,8 +711,17 @@ from dbo.RegistrationFormSettings{hint} where {settingsFilter} order by Organiza
         }
         var fingerprint = FormCodeDeletionFingerprint.Compute(target, affectedOrganizations,
             metadata, versions, settings, drafts, links);
+        var affectedMetadataCount = ownerOrganizationId == systemOrganizationId
+            ? metadata.Count
+            : metadata.Count(row => RowOrganizationId(row) is int id && affectedOrganizations.Contains(id));
         return new FormCodeDeletionSnapshot(target, affectedOrganizations,
-            new FormCodeImpact(metadata.Count, settings.Count, drafts.Count, links.Count), fingerprint);
+            new FormCodeImpact(affectedMetadataCount, settings.Count, drafts.Count, links.Count), fingerprint);
+    }
+
+    private static int? RowOrganizationId(string row)
+    {
+        var separator = row.IndexOf('|', 2);
+        return separator > 2 && int.TryParse(row.AsSpan(2, separator - 2), out var id) ? id : null;
     }
 
     public static IReadOnlyList<int> AffectedVersionScopes(IEnumerable<int> affectedOrganizations) =>

@@ -2,6 +2,9 @@ using Clc.PatronRegistration.Administration;
 using Clc.PatronRegistration.Configuration;
 using Clc.Polaris.Api;
 using Moq;
+using NLog;
+using NLog.Config;
+using NLog.Targets;
 
 namespace Clc.PatronRegistration.Tests;
 
@@ -135,6 +138,44 @@ public class AddToRecordSetSettingsTests
         new Registration(settings.Object).AddToRecordSet(papi.Object, 123);
 
         papi.Verify(client => client.RecordSetContentAdd(73, 123, It.IsAny<int>(), It.IsAny<int>()), Times.Once);
+    }
+
+    [DataTestMethod]
+    [DataRow(IdentifierSettingState.Negative, -7)]
+    [DataRow(IdentifierSettingState.Malformed, null)]
+    public void InvalidOptionalIdentifier_IsSkippedAndDiagnosticContainsOnlyKeyAndCategory(
+        IdentifierSettingState state,
+        int? parsedValue)
+    {
+        const string recognizableMalformedValue = "recognizable-malformed-id";
+        var previousConfiguration = LogManager.Configuration;
+        var target = new MemoryTarget { Layout = "${message}" };
+        LogManager.Configuration = new LoggingConfiguration();
+        LogManager.Configuration.AddRule(LogLevel.Error, LogLevel.Fatal, target);
+        LogManager.ReconfigExistingLoggers();
+        var settings = new Mock<ISettingProvider>();
+        settings.SetupGet(provider => provider.AddToRecordSetId).Returns(parsedValue);
+        settings.As<IIdentifierSettingStateProvider>()
+            .Setup(provider => provider.GetIdentifierState("add_to_record_set_id"))
+            .Returns(new IdentifierSettingResult(state, parsedValue));
+        var papi = new Mock<IPapiClient>();
+
+        try
+        {
+            new Registration(settings.Object).AddToRecordSet(papi.Object, 123);
+
+            papi.Verify(client => client.RecordSetContentAdd(
+                It.IsAny<int>(), It.IsAny<int>(), It.IsAny<int>(), It.IsAny<int>()), Times.Never);
+            Assert.IsTrue(target.Logs.Any(message =>
+                message.Contains("add_to_record_set_id", StringComparison.Ordinal) &&
+                message.Contains(state.ToString(), StringComparison.Ordinal)));
+            Assert.IsFalse(target.Logs.Any(message => message.Contains(recognizableMalformedValue, StringComparison.Ordinal)));
+        }
+        finally
+        {
+            LogManager.Configuration = previousConfiguration;
+            LogManager.ReconfigExistingLoggers();
+        }
     }
 
     [TestMethod]

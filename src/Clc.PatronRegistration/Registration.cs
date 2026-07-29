@@ -112,9 +112,7 @@ namespace Clc.PatronRegistration
 
         public void SetPatronCode()
         {
-            var configuredId = Settings.PatronCodeId;
-            PatronCode = configuredId is > 0 ? configuredId : null;
-            LogInvalidOptionalIdentifier("patron_code_id", configuredId);
+            PatronCode = PositiveOptionalIdentifier("patron_code_id", Settings.PatronCodeId);
         }
 
         public void HandleSmsSettings()
@@ -387,12 +385,7 @@ namespace Clc.PatronRegistration
 
         private int? PositivePatronCodeOrCurrent(int configuredId, string settingKey)
         {
-            if (configuredId > 0)
-            {
-                return configuredId;
-            }
-            LogInvalidOptionalIdentifier(settingKey, configuredId);
-            return PatronCode;
+            return PositiveOptionalIdentifier(settingKey, configuredId) ?? PatronCode;
         }
 
         private IdentifierSettingResult IdentifierState(string settingKey, int? fallbackValue) =>
@@ -400,13 +393,14 @@ namespace Clc.PatronRegistration
                 ? stateProvider.GetIdentifierState(settingKey)
                 : IdentifierSettingParser.Parse(fallbackValue?.ToString(System.Globalization.CultureInfo.InvariantCulture));
 
-        private void LogInvalidOptionalIdentifier(string settingKey, int? fallbackValue)
+        private int? PositiveOptionalIdentifier(string settingKey, int? fallbackValue)
         {
             var result = IdentifierState(settingKey, fallbackValue);
             if (result.IsInvalid)
             {
                 logger.Error($"Skipping invalid registration setting {settingKey} ({result.State}).");
             }
+            return result.IsPositive ? result.Value : null;
         }
 
         public void HandleExpirationDate(PatronRegistrationParams registrationParams)
@@ -510,17 +504,13 @@ namespace Clc.PatronRegistration
 
         public Registration HandleValidAddressPreReg()
         {
-            var configuredId = Settings.ValidAddressPatronCodeId;
-            if (configuredId > 0) { PatronCode = configuredId; }
-            LogInvalidOptionalIdentifier("valid_address_patron_code_id", configuredId);
+            PatronCode = PositiveOptionalIdentifier("valid_address_patron_code_id", Settings.ValidAddressPatronCodeId) ?? PatronCode;
             return this;
         }
 
         public Registration HandleValidAddressPlusNamePreReg()
         {
-            var configuredId = Settings.ValidAddressPlusNamePatronCodeId;
-            if (configuredId > 0) { PatronCode = configuredId; }
-            LogInvalidOptionalIdentifier("valid_address_plus_name_patron_code_id", configuredId);
+            PatronCode = PositiveOptionalIdentifier("valid_address_plus_name_patron_code_id", Settings.ValidAddressPlusNamePatronCodeId) ?? PatronCode;
             return this;
         }
 
@@ -652,30 +642,28 @@ namespace Clc.PatronRegistration
 
         public void HandleAddToMailingList(IPapiClient papi, int patronId)
         {
-            var recordSetId = Settings.MailingListRecordSetId;
-            if (AddToMailingList && patronId > 0 && recordSetId > 0)
+            var recordSetId = PositiveOptionalIdentifier("mailing_list_record_set_id", Settings.MailingListRecordSetId);
+            if (AddToMailingList && patronId > 0 && recordSetId.HasValue)
             {
-                papi.RecordSetContentAdd(recordSetId, patronId);
+                papi.RecordSetContentAdd(recordSetId.Value, patronId);
             }
-            else if (AddToMailingList && (patronId <= 0 || recordSetId < 0))
+            else if (AddToMailingList && patronId <= 0)
             {
                 logger.Error("Skipping mailing-list record-set update because a required identifier is invalid.");
             }
-            LogInvalidOptionalIdentifier("mailing_list_record_set_id", recordSetId);
         }
 
         public void AddToRecordSet(IPapiClient papi, int patronId)
         {
-            var recordSetId = Settings.AddToRecordSetId;
-            if (patronId > 0 && recordSetId is > 0)
+            var recordSetId = PositiveOptionalIdentifier("add_to_record_set_id", Settings.AddToRecordSetId);
+            if (patronId > 0 && recordSetId.HasValue)
             {
                 papi.RecordSetContentAdd(recordSetId.Value, patronId);
             }
-            else if (patronId <= 0 || recordSetId is < 0)
+            else if (patronId <= 0)
             {
                 logger.Error("Skipping configured record-set update because a required identifier is invalid.");
             }
-            LogInvalidOptionalIdentifier("add_to_record_set_id", recordSetId);
         }
 
         public void AddPostRegistrationNote(IPapiClient papi)
@@ -712,16 +700,16 @@ namespace Clc.PatronRegistration
             switch (AddressVerificationStatus)
             {
                 case AddressVerificationStatus.Valid:
-                    LogInvalidOptionalIdentifier("valid_address_record_set_id", Settings.ValidAddressRecordSetId);
-                    AddPatronToRecordSet(patronId, Settings.ValidAddressRecordSetId, papi);
+                    AddPatronToRecordSet(patronId,
+                        PositiveOptionalIdentifier("valid_address_record_set_id", Settings.ValidAddressRecordSetId).GetValueOrDefault(), papi);
                     break;
                 case AddressVerificationStatus.ValidPlusNameMatch:
-                    LogInvalidOptionalIdentifier("valid_address_plus_name_record_set_id", Settings.ValidAddressPlusNameRecordSetId);
-                    AddPatronToRecordSet(patronId, Settings.ValidAddressPlusNameRecordSetId, papi);
+                    AddPatronToRecordSet(patronId,
+                        PositiveOptionalIdentifier("valid_address_plus_name_record_set_id", Settings.ValidAddressPlusNameRecordSetId).GetValueOrDefault(), papi);
                     break;
                 case AddressVerificationStatus.Invalid:
-                    LogInvalidOptionalIdentifier("invalid_address_record_set_id", Settings.InvalidAddressRecordSetId);
-                    AddPatronToRecordSet(patronId, Settings.InvalidAddressRecordSetId, papi);
+                    AddPatronToRecordSet(patronId,
+                        PositiveOptionalIdentifier("invalid_address_record_set_id", Settings.InvalidAddressRecordSetId).GetValueOrDefault(), papi);
                     break;
                 case AddressVerificationStatus.None:
                     break;
