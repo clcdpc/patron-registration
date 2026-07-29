@@ -54,10 +54,26 @@ namespace Clc.PatronRegistration.Configuration
                 return defaultValue;
             }
 
-
+            var isNullable = t.IsGenericType && t.GetGenericTypeDefinition().Equals(typeof(Nullable<>));
             if (t.IsGenericType && t.GetGenericTypeDefinition().Equals(typeof(Nullable<>)))
             {
                 t = Nullable.GetUnderlyingType(t);
+            }
+
+            if (isNullable)
+            {
+                if (t == typeof(int))
+                {
+                    return int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var integer)
+                        ? (T)(object)integer
+                        : defaultValue;
+                }
+                if (t == typeof(DateTime))
+                {
+                    return DateTime.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var date)
+                        ? (T)(object)date
+                        : defaultValue;
+                }
             }
 
             return Type.GetTypeCode(t) switch
@@ -168,7 +184,7 @@ namespace Clc.PatronRegistration.Configuration
         public int ValidAddressRecordSetId => GetSetting<int>("valid_address_record_set_id");
         public int ValidAddressPlusNameRecordSetId => GetSetting<int>("valid_address_plus_name_record_set_id");
         public int InvalidAddressRecordSetId => GetSetting<int>("invalid_address_record_set_id");
-        public int? AddToRecordSetId => GetSetting<int>("add_to_record_set_id");
+        public int? AddToRecordSetId => GetSetting<int?>("add_to_record_set_id");
         public string PostRegistrationNoteText => GetSetting<string>("post_registration_note_text");
         public DateTime? ExpirationDate => GetSetting<DateTime?>("expiration_date");
         public int? ExpirationDateYears => GetSetting<int?>("expiration_date_years");

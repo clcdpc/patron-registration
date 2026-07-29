@@ -48,6 +48,7 @@ public sealed record SettingDefinition(string Key, string DisplayName, string De
             SettingValueType.Boolean when !bool.TryParse(value, out _) => "Enter true or false.",
             SettingValueType.Integer when !int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out _) => "Enter a whole number.",
             SettingValueType.NullableInteger when value.Length > 0 && !int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out _) => "Enter a whole number or leave empty.",
+            SettingValueType.NullableInteger when Key == "add_to_record_set_id" && int.Parse(value, CultureInfo.InvariantCulture) <= 0 => "Record-set ID must be a positive whole number or empty.",
             SettingValueType.Decimal when !decimal.TryParse(value, NumberStyles.Number, CultureInfo.InvariantCulture, out _) => "Enter a decimal number.",
             SettingValueType.Date or SettingValueType.NullableDate when value.Length > 0 && !DateTime.TryParseExact(value, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out _) => "Enter a date as yyyy-MM-dd.",
             SettingValueType.EmailAddress when !MailAddress.TryCreate(value, out _) => "Enter a valid email address.",

@@ -44,7 +44,7 @@ public sealed class PreviewController(
         model.BypassAgreement = agreementAccepted;
         ViewData["IsSettingsPreview"] = true;
         ViewData["AllowLiveSubmission"] = context.Link.AllowLiveSubmission;
-        ViewData["PreviewToken"] = token;
+        ViewData["PreviewToken"] = previewRequestContext.PlaintextToken;
         ViewData["PreviewOperationalBranchName"] = branch.DisplayName;
         repository.WriteAudit("PreviewAccess", true, AnonymousAudit(context));
         return View("~/Views/Registration/Create.cshtml", model);

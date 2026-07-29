@@ -19,6 +19,23 @@ namespace Clc.PatronRegistration.Tests;
 public class PreviewRequestContextTests
 {
     [TestMethod]
+    public void PreviewMiddleware_RedactsTokenFromApplicationRequestDiagnostics()
+    {
+        const string token = "recognizable-preview-token-for-redaction";
+        var context = new DefaultHttpContext();
+        context.Request.Path = $"/preview/{token}";
+        context.Request.RouteValues["token"] = token;
+        context.Features.Get<Microsoft.AspNetCore.Http.Features.IHttpRequestFeature>()!.RawTarget = $"/preview/{token}";
+
+        PreviewRequestContextMiddleware.RedactPreviewTarget(context);
+
+        Assert.AreEqual("/preview/[redacted]", context.Request.Path.Value);
+        Assert.AreEqual("/preview/[redacted]", context.Features.Get<Microsoft.AspNetCore.Http.Features.IHttpRequestFeature>()!.RawTarget);
+        Assert.AreEqual("[redacted]", context.Request.RouteValues["token"]);
+        Assert.IsFalse(context.Request.Path.Value!.Contains(token, StringComparison.Ordinal));
+    }
+
+    [TestMethod]
     public void Resolver_ProvidesDraftDynamicMetadataAndStagedClientCredentials()
     {
         var draft = ActiveDraft(

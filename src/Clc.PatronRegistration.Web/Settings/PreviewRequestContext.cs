@@ -1,5 +1,6 @@
 using Clc.PatronRegistration.Administration;
 using Clc.PatronRegistration.Helpers;
+using Microsoft.AspNetCore.Http.Features;
 using Microsoft.Extensions.Options;
 
 namespace Clc.PatronRegistration.Web.Settings;
@@ -9,12 +10,14 @@ public sealed record PreviewRequestContext(PreviewLinkRecord Link, SettingDraft 
 public interface IPreviewRequestContextAccessor
 {
     bool IsPreviewRequest { get; set; }
+    string? PlaintextToken { get; set; }
     PreviewRequestContext? Current { get; set; }
 }
 
 public sealed class PreviewRequestContextAccessor : IPreviewRequestContextAccessor
 {
     public bool IsPreviewRequest { get; set; }
+    public string? PlaintextToken { get; set; }
     public PreviewRequestContext? Current { get; set; }
 }
 
@@ -69,6 +72,8 @@ public sealed class PreviewRequestContextMiddleware(RequestDelegate next)
 
         accessor.IsPreviewRequest = true;
         var token = httpContext.GetRouteValue("token")?.ToString();
+        accessor.PlaintextToken = token;
+        RedactPreviewTarget(httpContext);
         accessor.Current = token is null ? null : resolver.Resolve(token);
         if (accessor.Current is null)
         {
@@ -78,5 +83,17 @@ public sealed class PreviewRequestContextMiddleware(RequestDelegate next)
             return;
         }
         await next(httpContext);
+    }
+
+    public static void RedactPreviewTarget(HttpContext context)
+    {
+        const string redactedPath = "/preview/[redacted]";
+        context.Request.Path = redactedPath;
+        context.Request.RouteValues["token"] = "[redacted]";
+        var requestFeature = context.Features.Get<IHttpRequestFeature>();
+        if (requestFeature is not null)
+        {
+            requestFeature.RawTarget = redactedPath;
+        }
     }
 }

@@ -601,7 +601,14 @@ namespace Clc.PatronRegistration
             }
         }
 
-        public void AddToRecordSet(IPapiClient papi, int patronId) { if (Settings.AddToRecordSetId.HasValue) { papi.RecordSetContentAdd(Settings.AddToRecordSetId.Value, patronId); } }
+        public void AddToRecordSet(IPapiClient papi, int patronId)
+        {
+            var recordSetId = Settings.AddToRecordSetId;
+            if (recordSetId is > 0)
+            {
+                papi.RecordSetContentAdd(recordSetId.Value, patronId);
+            }
+        }
 
         public void AddPostRegistrationNote(IPapiClient papi)
         {

@@ -8,6 +8,19 @@ namespace Clc.PatronRegistration.Tests;
 public class SettingsAdministrationTests
 {
     [TestMethod]
+    public void FirstSensitiveDraftMutation_IsARevocationTransitionOnlyOnce()
+    {
+        var catalog = new SettingCatalog().All.ToDictionary(definition => definition.Key, StringComparer.OrdinalIgnoreCase);
+
+        Assert.IsTrue(SensitiveDraftPolicy.BecameSensitive(
+            ["registration_text"], ["registration_text", "postmark_api_key"], catalog));
+        Assert.IsFalse(SensitiveDraftPolicy.BecameSensitive(
+            ["postmark_api_key"], ["postmark_api_key", "melissa_data_api_key"], catalog));
+        Assert.IsFalse(SensitiveDraftPolicy.BecameSensitive(
+            ["postmark_api_key"], ["registration_text"], catalog));
+    }
+
+    [TestMethod]
     public void Resolver_UsesAllSixExplicitLevels()
     {
         var precedence = SettingsResolver.BuildPrecedence(3, 2, 1, "kids");

@@ -108,7 +108,7 @@ public class SettingsControllerTests
 
         Assert.IsInstanceOfType<RedirectToActionResult>(result);
         repository.Verify(service => service.CreatePreviewLink(
-            It.IsAny<long>(), It.IsAny<byte[]>(), It.IsAny<bool>(), It.IsAny<int>(), It.IsAny<AuditContext>()), Times.Never);
+            It.IsAny<long>(), It.IsAny<byte[]>(), It.IsAny<bool>(), It.IsAny<int>(), It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), It.IsAny<bool>(), It.IsAny<AuditContext>()), Times.Never);
     }
 
     [DataTestMethod]
@@ -262,7 +262,7 @@ public class SettingsControllerTests
         Assert.IsInstanceOfType<ForbidResult>(controller.RemoveDraftChange(draft.DraftId, 3, string.Empty, "postmark_api_key"));
 
         repository.Verify(service => service.CommitDraft(It.IsAny<long>(), It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), It.IsAny<bool>(), It.IsAny<AuditContext>()), Times.Never);
-        repository.Verify(service => service.RemoveDraftChange(It.IsAny<long>(), It.IsAny<string>(), It.IsAny<AuditContext>()), Times.Never);
+        repository.Verify(service => service.RemoveDraftChange(It.IsAny<long>(), It.IsAny<string>(), It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), It.IsAny<bool>(), It.IsAny<AuditContext>()), Times.Never);
     }
 
     [TestMethod]
@@ -324,7 +324,7 @@ public class SettingsControllerTests
         var draft = new SettingDraft(23, 3, string.Empty, 0, DraftStatus.Active,
             [new SettingMutation("registration_text", DraftOperation.Upsert, "draft")]);
         repository.Setup(service => service.GetDraft(draft.DraftId)).Returns(draft);
-        repository.Setup(service => service.RemoveDraftChange(draft.DraftId, "registration_text", It.IsAny<AuditContext>()))
+        repository.Setup(service => service.RemoveDraftChange(draft.DraftId, "registration_text", It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), It.IsAny<bool>(), It.IsAny<AuditContext>()))
             .Throws(new System.Data.DBConcurrencyException("The staged draft mutation no longer exists."));
         var controller = CreateController(repository, LibraryAuthorization());
 
@@ -332,6 +332,61 @@ public class SettingsControllerTests
 
         Assert.IsInstanceOfType<ConflictObjectResult>(result);
     }
+
+    [TestMethod]
+    public void CommitDraft_SensitiveMutationAddedAfterPrecheck_ReturnsForbid()
+    {
+        var repository = RaceRepository();
+        repository.Setup(service => service.CommitDraft(24, It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), false, It.IsAny<AuditContext>()))
+            .Throws(new UnauthorizedAccessException());
+
+        Assert.IsInstanceOfType<ForbidResult>(CreateController(repository, LibraryAuthorization()).CommitDraft(24, 3));
+    }
+
+    [TestMethod]
+    public void DiscardDraft_SensitiveMutationAddedAfterPrecheck_ReturnsForbid()
+    {
+        var repository = RaceRepository();
+        repository.Setup(service => service.DiscardDraft(24, It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), false, It.IsAny<AuditContext>()))
+            .Throws(new UnauthorizedAccessException());
+
+        Assert.IsInstanceOfType<ForbidResult>(CreateController(repository, LibraryAuthorization()).DiscardDraft(24, 3));
+    }
+
+    [TestMethod]
+    public void PreviewLifecycle_SensitiveMutationAddedAfterPrecheck_ReturnsForbid()
+    {
+        var repository = RaceRepository();
+        repository.Setup(service => service.GetPreviewLink(12)).Returns(PreviewLink(NonSensitiveDraft()));
+        repository.Setup(service => service.CreatePreviewLink(24, It.IsAny<byte[]>(), false, 3,
+                It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), false, It.IsAny<AuditContext>()))
+            .Throws(new UnauthorizedAccessException());
+        repository.Setup(service => service.TogglePreviewLiveSubmission(12, true,
+                It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), false, It.IsAny<AuditContext>()))
+            .Throws(new UnauthorizedAccessException());
+        repository.Setup(service => service.RevokePreviewLink(12,
+                It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), false, It.IsAny<AuditContext>()))
+            .Throws(new UnauthorizedAccessException());
+        var controller = CreateController(repository, LibraryAuthorization());
+        var url = new Mock<IUrlHelper>();
+        url.Setup(helper => helper.Action(It.IsAny<UrlActionContext>())).Returns("https://example.test/preview");
+        controller.Url = url.Object;
+
+        Assert.IsInstanceOfType<ForbidResult>(controller.CreatePreviewLink(24,
+            new PreviewLinkRequest { OrganizationId = 3, OperationalBranchId = 3 }));
+        Assert.IsInstanceOfType<ForbidResult>(controller.ToggleLiveSubmission(12, true));
+        Assert.IsInstanceOfType<ForbidResult>(controller.RevokePreviewLink(12));
+    }
+
+    private static Mock<ISettingsAdministrationRepository> RaceRepository()
+    {
+        var repository = new Mock<ISettingsAdministrationRepository>();
+        repository.Setup(service => service.GetDraft(24)).Returns(NonSensitiveDraft());
+        return repository;
+    }
+
+    private static SettingDraft NonSensitiveDraft() => new(24, 3, string.Empty, 0, DraftStatus.Active,
+        [new SettingMutation("registration_text", DraftOperation.Upsert, "draft")]);
 
     private static SettingDraft SensitiveDraft() => new(21, 3, string.Empty, 0, DraftStatus.Active,
         [new SettingMutation("postmark_api_key", DraftOperation.Upsert, new string('s', 32))]);

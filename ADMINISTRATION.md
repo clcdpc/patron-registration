@@ -14,6 +14,8 @@ The single configured system organization, `SettingsAdministration:SystemOrganiz
 
 The code-defined catalog is the write allowlist. It defines editor type, validation, sensitivity, empty-value behavior, and recognized dynamic suffixes. String-like values can be explicitly empty. Boolean and non-null numeric/date values cannot. Nullable integer/date settings store an empty string and `DbSettingProvider` consistently converts that representation to `null`. Removing an override is always a distinct operation.
 
+`add_to_record_set_id` is a nullable positive integer: missing and explicitly empty values disable the post-registration record-set action, positive values select the record set, and zero or negative values fail catalog validation. Legacy malformed nullable values are converted to `null` rather than throwing after patron creation.
+
 ## Direct save and drafts
 
 Direct save submits only browser-edited rows using ASP.NET Core `Changes.Index` tokens, displays an exact confirmation, validates every key and value again, locks the scope version, applies all operations in one transaction, writes audit events, increments scope and cache generations, and immediately rebuilds local live settings.
@@ -21,6 +23,8 @@ Direct save submits only browser-edited rows using ASP.NET Core `Changes.Index` 
 One active shared draft is enforced by a filtered unique database index for each organization/form-code scope. Authorized administrators can create or reopen it, stage Upsert or RemoveOverride changes, commit, or discard it. Commit revalidates the catalog, compares the live scope version with the draft baseline, atomically applies changes, increments versions, marks the draft committed, revokes links, audits, and invalidates live cache. Discard revokes links without changing live cache.
 
 If a global administrator stages a sensitive change, library administrators see only a generic restricted-changes notice. They may continue editing non-sensitive rows, but cannot commit, discard, preview, revoke, toggle, or remove restricted mutations. Every action rechecks the actual draft mutations server-side, and rejected audit events contain no sensitive key or value.
+
+These lifecycle checks are repeated inside each serializable Dapper transaction while the active draft is locked, closing the race between the controller check and persistence. When a draft first becomes restricted, that same draft-edit transaction revokes every existing preview link and writes only the generic `PreviewLinksRevokedForRestrictedDraft` audit event. Later sensitive edits do not repeatedly revoke replacement links created by a global administrator, and removed links are never automatically reactivated.
 
 ## Preview links
 
@@ -33,6 +37,8 @@ MVC `ModelState` is authoritative for normal and live-preview submissions before
 After endpoint routing and before MVC controller activation, `PreviewRequestContextMiddleware` resolves the bearer token, active draft, operational branch, eligibility, revocation, and expiration into one scoped preview context. The scoped `ISettingProvider` returns that context's `PreviewSettingProvider`; an invalid preview never falls back to live system defaults. This means registration construction, MVC model binding, `label.*` metadata, `require.*` validation, `alert.*` messages, Razor tag helpers, duplicate checks, and final submission all see the same draft overlay. Scoped Melissa and Postmark client factories select credentials from this same provider, so staged credential changes apply only to the validated preview request.
 
 Treat every preview URL as a credential. Revoke it immediately if shared incorrectly. Enabling live mode permits real PAPI, Melissa, Postmark, record-set, note, and registration-history effects.
+
+The application replaces the preview request path and raw target with `/preview/[redacted]` immediately after routing, before preview resolution and MVC execution, so downstream application diagnostics do not retain the bearer token. The shared URL still contains the bearer token as a path segment and may be observed by IIS, a reverse proxy, an APM agent that records requests before ASP.NET middleware, or browser history. Production operators **must** disable path capture or configure explicit `/preview/*` path redaction in every upstream access log, proxy, WAF, tracing, and monitoring layer. This upstream configuration is required for the no-plaintext-token logging guarantee; the application cannot retroactively redact logs written before its middleware executes.
 
 ## Form codes
 

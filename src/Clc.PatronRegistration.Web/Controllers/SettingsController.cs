@@ -150,7 +150,7 @@ public sealed class SettingsController(
             TempData["SettingsErrorGroup"] = request.Changes.FirstOrDefault(change => ModelState.ContainsKey(change.Key))?.Key.Split('.')[0];
             return RedirectToAction(nameof(Index), new { organizationId = request.OrganizationId, formCode = request.FormCode });
         }
-        repository.SaveDraftChanges(draftId, mutations, CreateAudit(request.OrganizationId, request.FormCode));
+        repository.SaveDraftChanges(draftId, mutations, CatalogByKey, CreateAudit(request.OrganizationId, request.FormCode));
         return RedirectToAction(nameof(Index), new { organizationId = request.OrganizationId, formCode = request.FormCode });
     }
 
@@ -167,7 +167,12 @@ public sealed class SettingsController(
         }
         try
         {
-            repository.RemoveDraftChange(draftId, settingKey, CreateAudit(organizationId, formCode));
+            repository.RemoveDraftChange(draftId, settingKey, CatalogByKey, authorization.Describe(User).IsGlobal, CreateAudit(organizationId, formCode));
+        }
+        catch (UnauthorizedAccessException)
+        {
+            AuditRestrictedDraftRejection(organizationId, formCode, "Draft mutation removal was rejected.");
+            return Forbid();
         }
         catch (DBConcurrencyException exception)
         {
@@ -191,6 +196,11 @@ public sealed class SettingsController(
             repository.CommitDraft(draftId, CatalogByKey, authorization.Describe(User).IsGlobal, CreateAudit(organizationId, formCode));
             cacheInvalidator.LiveSettingsChanged();
         }
+        catch (UnauthorizedAccessException)
+        {
+            AuditRestrictedDraftRejection(organizationId, formCode, "Draft commit was rejected.");
+            return Forbid();
+        }
         catch (DBConcurrencyException exception)
         {
             return Conflict(exception.Message);
@@ -213,7 +223,15 @@ public sealed class SettingsController(
             AuditRestrictedDraftRejection(organizationId, formCode, "Draft discard was rejected.");
             return Forbid();
         }
-        repository.DiscardDraft(draftId, CreateAudit(organizationId, formCode));
+        try
+        {
+            repository.DiscardDraft(draftId, CatalogByKey, authorization.Describe(User).IsGlobal, CreateAudit(organizationId, formCode));
+        }
+        catch (UnauthorizedAccessException)
+        {
+            AuditRestrictedDraftRejection(organizationId, formCode, "Draft discard was rejected.");
+            return Forbid();
+        }
         return RedirectToAction(nameof(Index), new { organizationId, formCode });
     }
 
@@ -235,7 +253,16 @@ public sealed class SettingsController(
             TempData["SettingsError"] = "Select an operational branch authorized for this preview scope.";
             return RedirectToAction(nameof(Index), new { organizationId = request.OrganizationId, formCode = request.FormCode });
         }
-        repository.CreatePreviewLink(draftId, token.Hash, request.AllowLiveSubmission, operationalBranchId.Value, CreateAudit(request.OrganizationId, request.FormCode));
+        try
+        {
+            repository.CreatePreviewLink(draftId, token.Hash, request.AllowLiveSubmission, operationalBranchId.Value, CatalogByKey,
+                authorization.Describe(User).IsGlobal, CreateAudit(request.OrganizationId, request.FormCode));
+        }
+        catch (UnauthorizedAccessException)
+        {
+            AuditRestrictedDraftRejection(request.OrganizationId, request.FormCode, "Preview-link creation was rejected.");
+            return Forbid();
+        }
         var previewUrl = Url.Action("Index", "Preview", new { token = token.Plaintext }, Request.Scheme)!;
         return View("PreviewLinkCreated", model: previewUrl);
     }
@@ -252,7 +279,12 @@ public sealed class SettingsController(
         }
         try
         {
-            repository.RevokePreviewLink(previewLinkId, CreateAudit(link.OrganizationId, link.FormCode));
+            repository.RevokePreviewLink(previewLinkId, CatalogByKey, authorization.Describe(User).IsGlobal, CreateAudit(link.OrganizationId, link.FormCode));
+        }
+        catch (UnauthorizedAccessException)
+        {
+            AuditRestrictedDraftRejection(link.OrganizationId, link.FormCode, "Preview-link revocation was rejected.");
+            return Forbid();
         }
         catch (DBConcurrencyException exception)
         {
@@ -273,7 +305,13 @@ public sealed class SettingsController(
         }
         try
         {
-            repository.TogglePreviewLiveSubmission(previewLinkId, allowLiveSubmission, CreateAudit(link.OrganizationId, link.FormCode));
+            repository.TogglePreviewLiveSubmission(previewLinkId, allowLiveSubmission, CatalogByKey,
+                authorization.Describe(User).IsGlobal, CreateAudit(link.OrganizationId, link.FormCode));
+        }
+        catch (UnauthorizedAccessException)
+        {
+            AuditRestrictedDraftRejection(link.OrganizationId, link.FormCode, "Preview live-submission change was rejected.");
+            return Forbid();
         }
         catch (DBConcurrencyException exception)
         {
