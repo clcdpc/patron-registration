@@ -20,6 +20,19 @@ public class SettingsAdministrationTests
             ["postmark_api_key"], ["registration_text"], catalog));
     }
 
+    [DataTestMethod]
+    [DataRow("postmark_api_key")]
+    [DataRow("melissa_data_api_key")]
+    public void SensitiveAuditRows_AreOmittedForLibraryButVisibleToGlobalAdministrator(string settingKey)
+    {
+        var row = new SettingsAuditRow(
+            1, DateTime.UtcNow, "OverrideUpdated", 2, 2, string.Empty, settingKey,
+            "masked", "masked", true, true, "global@example.org", null, null, null);
+
+        Assert.AreEqual(0, SettingsAuditVisibility.ForAdministrator([row], false).Count());
+        Assert.AreSame(row, SettingsAuditVisibility.ForAdministrator([row], true).Single());
+    }
+
     [TestMethod]
     public void Resolver_UsesAllSixExplicitLevels()
     {

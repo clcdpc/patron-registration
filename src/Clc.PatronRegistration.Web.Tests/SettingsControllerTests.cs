@@ -84,6 +84,27 @@ public class SettingsControllerTests
     }
 
     [DataTestMethod]
+    [DataRow(false, 2, false, "postmark_api_key")]
+    [DataRow(false, 2, false, "melissa_data_api_key")]
+    [DataRow(true, -1, true, "postmark_api_key")]
+    [DataRow(true, -1, true, "melissa_data_api_key")]
+    public void Audit_SearchSensitivityMatchesAdministratorScope(bool global, int organizationId, bool includeSensitive, string search)
+    {
+        var repository = new Mock<ISettingsAdministrationRepository>();
+        repository.Setup(service => service.SearchAudit(It.IsAny<int?>(), includeSensitive, search))
+            .Returns([]);
+        var authorization = new Mock<ISettingsAuthorizationService>();
+        authorization.Setup(service => service.Describe(It.IsAny<ClaimsPrincipal>()))
+            .Returns(new SettingsPrincipal(true, organizationId, global));
+        var controller = CreateController(repository, authorization);
+
+        var result = controller.Audit(search);
+
+        Assert.IsInstanceOfType<ViewResult>(result);
+        repository.Verify(service => service.SearchAudit(global ? null : 2, includeSensitive, search), Times.Once);
+    }
+
+    [DataTestMethod]
     [DataRow(1, null)]
     [DataRow(1, 999)]
     [DataRow(2, null)]
@@ -376,6 +397,69 @@ public class SettingsControllerTests
             new PreviewLinkRequest { OrganizationId = 3, OperationalBranchId = 3 }));
         Assert.IsInstanceOfType<ForbidResult>(controller.ToggleLiveSubmission(12, true));
         Assert.IsInstanceOfType<ForbidResult>(controller.RevokePreviewLink(12));
+    }
+
+    [TestMethod]
+    public void SavingAfterAnotherAdministratorDiscardedDraft_ReturnsConflict()
+    {
+        var repository = RaceRepository();
+        repository.Setup(service => service.SaveDraftChanges(24, It.IsAny<IReadOnlyList<SettingMutation>>(),
+                It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), It.IsAny<AuditContext>()))
+            .Throws(new System.Data.DBConcurrencyException("The shared draft is no longer active."));
+        var controller = CreateController(repository, LibraryAuthorization());
+
+        var result = controller.SaveDraft(24, new DraftChangesRequest
+        {
+            OrganizationId = 3,
+            Changes = [new SettingMutationInput { Key = "registration_text", Operation = "Upsert", Value = "new" }]
+        });
+
+        Assert.IsInstanceOfType<ConflictObjectResult>(result);
+    }
+
+    [TestMethod]
+    public void CommittingAfterConcurrentDraftEdit_ReturnsConflict()
+    {
+        var repository = RaceRepository();
+        repository.Setup(service => service.CommitDraft(24, It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), false, It.IsAny<AuditContext>()))
+            .Throws(new System.Data.DBConcurrencyException("The draft baseline is stale."));
+
+        var result = CreateController(repository, LibraryAuthorization()).CommitDraft(24, 3);
+
+        Assert.IsInstanceOfType<ConflictObjectResult>(result);
+    }
+
+    [TestMethod]
+    public void DiscardingOrPreviewingAfterConcurrentCommit_ReturnsConflict()
+    {
+        var repository = RaceRepository();
+        repository.Setup(service => service.DiscardDraft(24, It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), false, It.IsAny<AuditContext>()))
+            .Throws(new System.Data.DBConcurrencyException("The shared draft is no longer active."));
+        repository.Setup(service => service.CreatePreviewLink(24, It.IsAny<byte[]>(), false, 3,
+                It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), false, It.IsAny<AuditContext>()))
+            .Throws(new System.Data.DBConcurrencyException("The shared draft is no longer active."));
+        var controller = CreateController(repository, LibraryAuthorization());
+
+        Assert.IsInstanceOfType<ConflictObjectResult>(controller.DiscardDraft(24, 3));
+        Assert.IsInstanceOfType<ConflictObjectResult>(controller.CreatePreviewLink(24,
+            new PreviewLinkRequest { OrganizationId = 3, OperationalBranchId = 3 }));
+    }
+
+    [TestMethod]
+    public void TogglingOrRevokingConcurrentlyChangedLink_ReturnsConflict()
+    {
+        var repository = RaceRepository();
+        repository.Setup(service => service.GetPreviewLink(12)).Returns(PreviewLink(NonSensitiveDraft()));
+        repository.Setup(service => service.TogglePreviewLiveSubmission(12, true,
+                It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), false, It.IsAny<AuditContext>()))
+            .Throws(new System.Data.DBConcurrencyException("The preview link was revoked."));
+        repository.Setup(service => service.RevokePreviewLink(12,
+                It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), false, It.IsAny<AuditContext>()))
+            .Throws(new System.Data.DBConcurrencyException("The preview link was revoked."));
+        var controller = CreateController(repository, LibraryAuthorization());
+
+        Assert.IsInstanceOfType<ConflictObjectResult>(controller.ToggleLiveSubmission(12, true));
+        Assert.IsInstanceOfType<ConflictObjectResult>(controller.RevokePreviewLink(12));
     }
 
     private static Mock<ISettingsAdministrationRepository> RaceRepository()

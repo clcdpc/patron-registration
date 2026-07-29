@@ -88,7 +88,8 @@ public class PreviewRequestContextTests
     public void InvalidToken_CannotResolvePreviewSettings()
     {
         var repository = new Mock<ISettingsAdministrationRepository>();
-        repository.Setup(service => service.FindPreviewLink(It.IsAny<byte[]>())).Returns((PreviewLinkRecord?)null);
+        repository.Setup(service => service.ResolvePreviewContext(It.IsAny<byte[]>(), It.IsAny<DateTime>()))
+            .Returns((PreviewContextSnapshot?)null);
         var resolver = new PreviewContextResolver(
             repository.Object,
             new PreviewTokenService(),
@@ -97,6 +98,25 @@ public class PreviewRequestContextTests
             Options.Create(new SettingsAdministrationOptions()));
 
         Assert.IsNull(resolver.Resolve("invalid"));
+    }
+
+    [TestMethod]
+    public void RestrictedTransitionCommittedDuringLookup_DoesNotExposeRevokedLinkDraft()
+    {
+        var repository = new Mock<ISettingsAdministrationRepository>();
+        repository.Setup(service => service.ResolvePreviewContext(It.IsAny<byte[]>(), It.IsAny<DateTime>()))
+            .Returns((PreviewContextSnapshot?)null);
+        var resolver = new PreviewContextResolver(
+            repository.Object,
+            new PreviewTokenService(),
+            Mock.Of<IPreviewBranchEligibilityService>(),
+            new TestCache(),
+            Options.Create(new SettingsAdministrationOptions()));
+
+        var context = resolver.Resolve("old-link-revoked-during-sensitive-transition");
+
+        Assert.IsNull(context);
+        repository.Verify(service => service.GetDraft(It.IsAny<long>()), Times.Never);
     }
 
     [TestMethod]
@@ -233,8 +253,12 @@ public class PreviewRequestContextTests
         draft ??= ActiveDraft();
         link ??= Link("Active");
         var repository = new Mock<ISettingsAdministrationRepository>();
-        repository.Setup(service => service.FindPreviewLink(It.IsAny<byte[]>())).Returns(link);
-        repository.Setup(service => service.GetDraft(link.DraftId)).Returns(draft);
+        var validSnapshot = link.RevokedAtUtc is null &&
+            (link.ExpiresAtUtc is not { } expiration || expiration > DateTime.UtcNow);
+        repository.Setup(service => service.ResolvePreviewContext(It.IsAny<byte[]>(), It.IsAny<DateTime>()))
+            .Returns(validSnapshot && link.DraftStatus == DraftStatus.Active.ToString() && draft.Status == DraftStatus.Active
+                ? new PreviewContextSnapshot(link, draft)
+                : null);
         eligibility ??= new Mock<IPreviewBranchEligibilityService>();
         eligibility.Setup(service => service.IsEligible(draft.OrganizationId, link.OperationalBranchId, 1)).Returns(true);
         return new PreviewContextResolver(repository.Object, new PreviewTokenService(), eligibility.Object, new TestCache(), Options.Create(new SettingsAdministrationOptions()));

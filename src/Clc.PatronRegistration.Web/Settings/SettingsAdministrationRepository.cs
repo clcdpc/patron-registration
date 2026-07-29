@@ -38,6 +38,8 @@ public sealed record PreviewLinkRecord(
     string DraftStatus,
     int OperationalBranchId);
 
+public sealed record PreviewContextSnapshot(PreviewLinkRecord Link, SettingDraft Draft);
+
 public sealed record FormCodeImpact(int MetadataRows, int OverrideRows, int Drafts, int PreviewLinks);
 public sealed record LegacyFormCodeRow(int OrganizationId, string FormCode);
 
@@ -51,11 +53,20 @@ public sealed record SettingsAuditRow(
     string? SettingKey,
     string? PreviousValue,
     string? NewValue,
+    bool IsSensitive,
     bool Succeeded,
     string? ActorName,
     string? FailureReason,
     string? CorrelationId,
     string? IpAddress);
+
+public static class SettingsAuditVisibility
+{
+    public static IEnumerable<SettingsAuditRow> ForAdministrator(
+        IEnumerable<SettingsAuditRow> rows,
+        bool includeSensitive) =>
+        includeSensitive ? rows : rows.Where(row => !row.IsSensitive);
+}
 
 public interface ISettingsAdministrationRepository
 {
@@ -70,7 +81,7 @@ public interface ISettingsAdministrationRepository
     void DiscardDraft(long draftId, IReadOnlyDictionary<string, SettingDefinition> catalog, bool canManageSensitive, AuditContext audit);
     void DirectSave(int organizationId, string formCode, long expectedVersion, IReadOnlyList<SettingMutation> changes, IReadOnlyDictionary<string, SettingDefinition> catalog, AuditContext audit);
     long CreatePreviewLink(long draftId, byte[] tokenHash, bool allowLiveSubmission, int operationalBranchId, IReadOnlyDictionary<string, SettingDefinition> catalog, bool canManageSensitive, AuditContext audit);
-    PreviewLinkRecord? FindPreviewLink(byte[] tokenHash);
+    PreviewContextSnapshot? ResolvePreviewContext(byte[] tokenHash, DateTime nowUtc);
     PreviewLinkRecord? GetPreviewLink(long previewLinkId);
     IReadOnlyList<PreviewLinkRecord> GetPreviewLinks(long draftId);
     void RevokePreviewLink(long previewLinkId, IReadOnlyDictionary<string, SettingDefinition> catalog, bool canManageSensitive, AuditContext audit);
@@ -80,7 +91,7 @@ public interface ISettingsAdministrationRepository
     void SaveFormCode(FormCodeMetadata metadata, bool isCreate, AuditContext audit);
     FormCodeImpact GetFormCodeImpact(int ownerOrganizationId, string formCode, IReadOnlyCollection<int> affectedOrganizations);
     void DeleteFormCode(int ownerOrganizationId, string formCode, IReadOnlyCollection<int> affectedOrganizations, AuditContext audit);
-    IEnumerable<SettingsAuditRow> SearchAudit(int? libraryId, string? term);
+    IEnumerable<SettingsAuditRow> SearchAudit(int? libraryId, bool includeSensitive, string? term);
     void WriteAudit(string eventType, bool succeeded, AuditContext audit, string? failureReason = null, long? draftId = null, long? previewLinkId = null, string? metadataJson = null);
 }
 
@@ -244,11 +255,8 @@ if @@ROWCOUNT=0
         using var connection = Open();
         using var transaction = connection.BeginTransaction(IsolationLevel.Serializable);
         EnsureActiveDraft(connection, transaction, draftId);
-        var draft = ReadDraft(connection, draftId, transaction) ?? throw new InvalidOperationException("Draft does not exist.");
-        if (draft.Status != DraftStatus.Active)
-        {
-            throw new InvalidOperationException("Only an active draft can be committed.");
-        }
+        var draft = ReadDraft(connection, draftId, transaction) ??
+            throw new DBConcurrencyException("The shared draft no longer exists. Reload the settings page.");
         EnsureCanManageRestrictedDraft(connection, transaction, draftId, catalog, canManageSensitive);
 
         EnsureVersionRow(connection, transaction, draft.OrganizationId, draft.FormCode);
@@ -298,13 +306,55 @@ output inserted.PreviewLinkId values(@draftId,@tokenHash,@allowLiveSubmission,@o
         return previewLinkId;
     }
 
-    public PreviewLinkRecord? FindPreviewLink(byte[] tokenHash)
+    public PreviewContextSnapshot? ResolvePreviewContext(byte[] tokenHash, DateTime nowUtc)
     {
         using var connection = Open();
-        return connection.QuerySingleOrDefault<PreviewLinkRecord>(@"
-select p.PreviewLinkId,p.DraftId,p.TokenHash,p.AllowLiveSubmission,p.RevokedAtUtc,p.ExpiresAtUtc,d.OrganizationId,d.FormCode,d.Status DraftStatus,p.OperationalBranchId
-from dbo.RegistrationSettingPreviewLinks p join dbo.RegistrationSettingDrafts d on d.DraftId=p.DraftId
-where p.TokenHash=@tokenHash", new { tokenHash });
+        using var transaction = connection.BeginTransaction(IsolationLevel.Serializable);
+
+        // Token lookup identifies the draft without taking the link lock first. All writers
+        // lock draft then link, so take those locks in the same order before trusting either row.
+        var draftId = connection.QuerySingleOrDefault<long?>(
+            "select DraftId from dbo.RegistrationSettingPreviewLinks where TokenHash=@tokenHash",
+            new { tokenHash }, transaction);
+        if (!draftId.HasValue)
+        {
+            transaction.Commit();
+            return null;
+        }
+
+        var status = connection.QuerySingleOrDefault<string>(
+            "select Status from dbo.RegistrationSettingDrafts with(updlock,holdlock) where DraftId=@draftId",
+            new { draftId = draftId.Value }, transaction);
+        if (status != DraftStatus.Active.ToString())
+        {
+            transaction.Commit();
+            return null;
+        }
+
+        var link = connection.QuerySingleOrDefault<PreviewLinkRecord>(@"
+select p.PreviewLinkId,p.DraftId,p.TokenHash,p.AllowLiveSubmission,p.RevokedAtUtc,p.ExpiresAtUtc,
+ d.OrganizationId,d.FormCode,d.Status DraftStatus,p.OperationalBranchId
+from dbo.RegistrationSettingPreviewLinks p with(updlock,holdlock)
+join dbo.RegistrationSettingDrafts d on d.DraftId=p.DraftId
+where p.TokenHash=@tokenHash and p.DraftId=@draftId and p.RevokedAtUtc is null
+ and (p.ExpiresAtUtc is null or p.ExpiresAtUtc>@nowUtc) and d.Status='Active'",
+            new { tokenHash, draftId = draftId.Value, nowUtc }, transaction);
+        if (link is null)
+        {
+            transaction.Commit();
+            return null;
+        }
+
+        var draft = ReadDraft(connection, draftId.Value, transaction);
+        if (draft is null || draft.OrganizationId != link.OrganizationId ||
+            !draft.FormCode.Equals(link.FormCode, StringComparison.OrdinalIgnoreCase))
+        {
+            transaction.Commit();
+            return null;
+        }
+
+        transaction.Commit();
+        return new PreviewContextSnapshot(link, draft);
     }
 
     public PreviewLinkRecord? GetPreviewLink(long previewLinkId)
@@ -467,17 +517,18 @@ delete from dbo.RegistrationFormCodeMetadata where OrganizationId in @affectedOr
     public static IReadOnlyList<int> AffectedVersionScopes(IEnumerable<int> affectedOrganizations) =>
         affectedOrganizations.Distinct().ToList();
 
-    public IEnumerable<SettingsAuditRow> SearchAudit(int? libraryId, string? term)
+    public IEnumerable<SettingsAuditRow> SearchAudit(int? libraryId, bool includeSensitive, string? term)
     {
         using var connection = Open();
         var pattern = $"%{term ?? string.Empty}%";
         return connection.Query<SettingsAuditRow>(@"
 select top(500) AuditEventId,TimestampUtc,EventType,TargetOrganizationId,TargetLibraryId,FormCode,SettingKey,
- PreviousValue,NewValue,Succeeded,ActorName,FailureReason,CorrelationId,IpAddress
+ PreviousValue,NewValue,IsSensitive,Succeeded,ActorName,FailureReason,CorrelationId,IpAddress
 from dbo.RegistrationSettingAuditEvents
 where (@libraryId is null or TargetLibraryId=@libraryId)
+ and (@includeSensitive=1 or IsSensitive=0)
  and (EventType like @pattern or SettingKey like @pattern or ActorName like @pattern or FormCode like @pattern)
-order by TimestampUtc desc", new { libraryId, pattern }).ToList();
+order by TimestampUtc desc", new { libraryId, includeSensitive, pattern }).ToList();
     }
 
     public void WriteAudit(string eventType, bool succeeded, AuditContext audit, string? failureReason = null, long? draftId = null, long? previewLinkId = null, string? metadataJson = null)
@@ -533,7 +584,7 @@ if @@ROWCOUNT=0 insert dbo.RegistrationFormSettings(OrganizationID,Setting,FormC
             new { draftId }, transaction);
         if (status != "Active")
         {
-            throw new InvalidOperationException("Only an active draft can be changed.");
+            throw new DBConcurrencyException("The shared draft is no longer active. Reload the settings page.");
         }
     }
 

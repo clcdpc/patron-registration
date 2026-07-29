@@ -140,7 +140,7 @@ public sealed class SettingsController(
         var draft = AuthorizedActiveDraft(draftId, request.OrganizationId, request.FormCode);
         if (draft is null)
         {
-            return Forbid();
+            return DraftUnavailableResult(draftId, request.OrganizationId, request.FormCode);
         }
         var mutations = ValidateMutations(request.Changes, request.OrganizationId);
         if (!ModelState.IsValid)
@@ -150,7 +150,14 @@ public sealed class SettingsController(
             TempData["SettingsErrorGroup"] = request.Changes.FirstOrDefault(change => ModelState.ContainsKey(change.Key))?.Key.Split('.')[0];
             return RedirectToAction(nameof(Index), new { organizationId = request.OrganizationId, formCode = request.FormCode });
         }
-        repository.SaveDraftChanges(draftId, mutations, CatalogByKey, CreateAudit(request.OrganizationId, request.FormCode));
+        try
+        {
+            repository.SaveDraftChanges(draftId, mutations, CatalogByKey, CreateAudit(request.OrganizationId, request.FormCode));
+        }
+        catch (DBConcurrencyException exception)
+        {
+            return Conflict(exception.Message);
+        }
         return RedirectToAction(nameof(Index), new { organizationId = request.OrganizationId, formCode = request.FormCode });
     }
 
@@ -158,8 +165,11 @@ public sealed class SettingsController(
     [ValidateAntiForgeryToken]
     public IActionResult RemoveDraftChange(long draftId, int organizationId, string formCode, string settingKey)
     {
-        if (AuthorizedActiveDraft(draftId, organizationId, formCode) is null ||
-            !catalog.TryGet(settingKey, out var definition) ||
+        if (AuthorizedActiveDraft(draftId, organizationId, formCode) is null)
+        {
+            return DraftUnavailableResult(draftId, organizationId, formCode);
+        }
+        if (!catalog.TryGet(settingKey, out var definition) ||
             !authorization.CanManage(User, organizationId, definition.IsSensitive))
         {
             AuditRestrictedDraftRejection(organizationId, formCode, "Draft mutation removal was rejected.");
@@ -186,7 +196,11 @@ public sealed class SettingsController(
     public IActionResult CommitDraft(long draftId, int organizationId, string formCode = "")
     {
         var draft = AuthorizedActiveDraft(draftId, organizationId, formCode);
-        if (draft is null || !CanManageDraftLifecycle(draft))
+        if (draft is null)
+        {
+            return DraftUnavailableResult(draftId, organizationId, formCode);
+        }
+        if (!CanManageDraftLifecycle(draft))
         {
             AuditRestrictedDraftRejection(organizationId, formCode, "Draft commit was rejected.");
             return Forbid();
@@ -218,7 +232,11 @@ public sealed class SettingsController(
     public IActionResult DiscardDraft(long draftId, int organizationId, string formCode = "")
     {
         var draft = AuthorizedActiveDraft(draftId, organizationId, formCode);
-        if (draft is null || !CanManageDraftLifecycle(draft))
+        if (draft is null)
+        {
+            return DraftUnavailableResult(draftId, organizationId, formCode);
+        }
+        if (!CanManageDraftLifecycle(draft))
         {
             AuditRestrictedDraftRejection(organizationId, formCode, "Draft discard was rejected.");
             return Forbid();
@@ -232,6 +250,10 @@ public sealed class SettingsController(
             AuditRestrictedDraftRejection(organizationId, formCode, "Draft discard was rejected.");
             return Forbid();
         }
+        catch (DBConcurrencyException exception)
+        {
+            return Conflict(exception.Message);
+        }
         return RedirectToAction(nameof(Index), new { organizationId, formCode });
     }
 
@@ -240,7 +262,11 @@ public sealed class SettingsController(
     public IActionResult CreatePreviewLink(long draftId, PreviewLinkRequest request)
     {
         var draft = AuthorizedActiveDraft(draftId, request.OrganizationId, request.FormCode);
-        if (draft is null || !CanManageDraftLifecycle(draft))
+        if (draft is null)
+        {
+            return DraftUnavailableResult(draftId, request.OrganizationId, request.FormCode);
+        }
+        if (!CanManageDraftLifecycle(draft))
         {
             AuditRestrictedDraftRejection(request.OrganizationId, request.FormCode, "Preview-link creation was rejected.");
             return Forbid();
@@ -263,6 +289,10 @@ public sealed class SettingsController(
             AuditRestrictedDraftRejection(request.OrganizationId, request.FormCode, "Preview-link creation was rejected.");
             return Forbid();
         }
+        catch (DBConcurrencyException exception)
+        {
+            return Conflict(exception.Message);
+        }
         var previewUrl = Url.Action("Index", "Preview", new { token = token.Plaintext }, Request.Scheme)!;
         return View("PreviewLinkCreated", model: previewUrl);
     }
@@ -272,9 +302,13 @@ public sealed class SettingsController(
     public IActionResult RevokePreviewLink(long previewLinkId)
     {
         var link = repository.GetPreviewLink(previewLinkId);
-        if (link is null || !ValidateScope(link.OrganizationId, link.FormCode) || !CanManagePreviewLink(link))
+        if (link is null)
         {
-            if (link is not null) AuditRestrictedDraftRejection(link.OrganizationId, link.FormCode, "Preview-link revocation was rejected.");
+            return Conflict("The preview link no longer exists. Reload the settings page.");
+        }
+        if (!ValidateScope(link.OrganizationId, link.FormCode) || !CanManagePreviewLink(link))
+        {
+            AuditRestrictedDraftRejection(link.OrganizationId, link.FormCode, "Preview-link revocation was rejected.");
             return Forbid();
         }
         try
@@ -298,9 +332,13 @@ public sealed class SettingsController(
     public IActionResult ToggleLiveSubmission(long previewLinkId, bool allowLiveSubmission)
     {
         var link = repository.GetPreviewLink(previewLinkId);
-        if (link is null || !ValidateScope(link.OrganizationId, link.FormCode) || !CanManagePreviewLink(link))
+        if (link is null)
         {
-            if (link is not null) AuditRestrictedDraftRejection(link.OrganizationId, link.FormCode, "Preview live-submission change was rejected.");
+            return Conflict("The preview link no longer exists. Reload the settings page.");
+        }
+        if (!ValidateScope(link.OrganizationId, link.FormCode) || !CanManagePreviewLink(link))
+        {
+            AuditRestrictedDraftRejection(link.OrganizationId, link.FormCode, "Preview live-submission change was rejected.");
             return Forbid();
         }
         try
@@ -329,7 +367,8 @@ public sealed class SettingsController(
             return Forbid();
         }
         int? libraryId = principal.IsGlobal ? null : GetLibraryId(principal.OrganizationId!.Value);
-        return View(repository.SearchAudit(libraryId, search));
+        var rows = repository.SearchAudit(libraryId, principal.IsGlobal, search);
+        return View(SettingsAuditVisibility.ForAdministrator(rows, principal.IsGlobal));
     }
 
     [HttpGet("forms")]
@@ -489,6 +528,23 @@ public sealed class SettingsController(
         }
         var draft = repository.GetDraft(draftId);
         return draft is { Status: DraftStatus.Active } && draft.OrganizationId == organizationId && draft.FormCode.Equals(formCode, StringComparison.OrdinalIgnoreCase) ? draft : null;
+    }
+
+    private IActionResult DraftUnavailableResult(long draftId, int organizationId, string formCode)
+    {
+        if (!ValidateScope(organizationId, formCode))
+        {
+            return Forbid();
+        }
+
+        var draft = repository.GetDraft(draftId);
+        if (draft is null ||
+            (draft.OrganizationId == organizationId && draft.FormCode.Equals(formCode, StringComparison.OrdinalIgnoreCase)))
+        {
+            return Conflict("The shared draft is no longer active. Reload the settings page.");
+        }
+
+        return Forbid();
     }
 
     private bool DraftContainsSensitiveChanges(SettingDraft draft) => draft.Changes.Any(change =>

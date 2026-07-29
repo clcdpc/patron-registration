@@ -48,7 +48,7 @@ public class AddToRecordSetSettingsTests
         var catalog = new SettingCatalog();
         Assert.IsTrue(catalog.TryGet("add_to_record_set_id", out var definition));
 
-        Assert.IsNotNull(catalog.Validate(definition, value));
+        Assert.IsNotNull(definition.Validate(value));
     }
 
     [DataTestMethod]
@@ -59,7 +59,7 @@ public class AddToRecordSetSettingsTests
         var catalog = new SettingCatalog();
         Assert.IsTrue(catalog.TryGet("add_to_record_set_id", out var definition));
 
-        Assert.IsNull(catalog.Validate(definition, value));
+        Assert.IsNull(definition.Validate(value));
     }
 
     [DataTestMethod]

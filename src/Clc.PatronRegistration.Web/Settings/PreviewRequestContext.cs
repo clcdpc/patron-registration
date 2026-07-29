@@ -39,16 +39,14 @@ public sealed class PreviewContextResolver(
         {
             return null;
         }
-        var link = repository.FindPreviewLink(tokenService.Hash(token));
-        if (link is null || link.RevokedAtUtc.HasValue || link.ExpiresAtUtc < DateTime.UtcNow || link.DraftStatus != DraftStatus.Active.ToString())
+        var snapshot = repository.ResolvePreviewContext(tokenService.Hash(token), DateTime.UtcNow);
+        if (snapshot is null)
         {
             return null;
         }
-        var draft = repository.GetDraft(link.DraftId);
-        if (draft is not { Status: DraftStatus.Active } ||
-            draft.OrganizationId != link.OrganizationId ||
-            !draft.FormCode.Equals(link.FormCode, StringComparison.OrdinalIgnoreCase) ||
-            !branchEligibility.IsEligible(draft.OrganizationId, link.OperationalBranchId, options.Value.SystemOrganizationId))
+        var link = snapshot.Link;
+        var draft = snapshot.Draft;
+        if (!branchEligibility.IsEligible(draft.OrganizationId, link.OperationalBranchId, options.Value.SystemOrganizationId))
         {
             return null;
         }
