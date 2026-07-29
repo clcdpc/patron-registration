@@ -5,6 +5,7 @@
     var isSettingsPreview = ViewData["IsSettingsPreview"] as bool? == true;
     var allowLiveSubmission = ViewData["AllowLiveSubmission"] as bool? == true;
     var previewToken = ViewData["PreviewToken"] as string;
+    var previewOperationalBranchName = ViewData["PreviewOperationalBranchName"] as string;
     var submitUrl = isSettingsPreview
         ? Url.Action("Submit", "Preview", new { token = previewToken })
         : this.BuildAction("Submit");
@@ -23,6 +24,7 @@
     <aside class="preview-banner @(allowLiveSubmission ? "live-preview" : "safe-preview")" role="status">
         <strong>@(allowLiveSubmission ? "LIVE TEST PREVIEW" : "SAFE PREVIEW")</strong>
         <span>@(allowLiveSubmission ? "Submitting performs the real registration workflow and external side effects." : "Final submission is blocked; no patron or registration side effect will be created.")</span>
+        <span>Operational home branch: <strong>@previewOperationalBranchName</strong></span>
     </aside>
 }
 

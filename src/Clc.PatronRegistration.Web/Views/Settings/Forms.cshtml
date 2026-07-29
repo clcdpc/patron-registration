@@ -57,6 +57,28 @@
     </tbody>
 </table>
 
+@if (Model.LegacyForms.Count > 0)
+{
+    <section class="settings-panel" aria-labelledby="legacy-forms-heading">
+        <h2 id="legacy-forms-heading">Legacy form codes awaiting metadata</h2>
+        <p>These codes already have settings. Adopting one creates metadata only and does not copy or change setting rows.</p>
+        @foreach (var legacy in Model.LegacyForms.Where(form => Model.IsGlobal || form.OwnerOrganizationId == Model.LibraryId))
+        {
+            <form asp-action="CreateForm" method="post">
+                @Html.AntiForgeryToken()
+                <input type="hidden" name="OrganizationId" value="@legacy.OwnerOrganizationId" />
+                <input type="hidden" name="FormCode" value="@legacy.FormCode" />
+                <strong><code>@legacy.FormCode</code></strong> — inferred owner @legacy.OwnerOrganizationId
+                <label for="adopt-name-@legacy.OwnerOrganizationId-@legacy.FormCode">Display name</label>
+                <input id="adopt-name-@legacy.OwnerOrganizationId-@legacy.FormCode" name="DisplayName" value="@legacy.FormCode" maxlength="200" required />
+                <label for="adopt-description-@legacy.OwnerOrganizationId-@legacy.FormCode">Description</label>
+                <textarea id="adopt-description-@legacy.OwnerOrganizationId-@legacy.FormCode" name="Description" maxlength="2000"></textarea>
+                <button type="submit">Adopt metadata</button>
+            </form>
+        }
+    </section>
+}
+
 @if (Model.LibraryId != Model.SystemOrganizationId)
 {
     <section class="settings-panel" aria-labelledby="customize-heading">

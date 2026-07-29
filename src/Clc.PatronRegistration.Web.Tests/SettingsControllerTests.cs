@@ -172,18 +172,92 @@ public class SettingsControllerTests
             It.IsAny<AuditContext>()), Times.Once);
     }
 
+    [TestMethod]
+    public void Index_CombinesMetadataAndSettingsOnlyLegacyCodesWithoutDuplicates()
+    {
+        var repository = new Mock<ISettingsAdministrationRepository>();
+        repository.Setup(service => service.GetFormCodes(2, 1)).Returns(
+        [
+            new FormCodeMetadata(1, "registered", "Registered", null, DateTime.UtcNow, "a", DateTime.UtcNow, "a")
+        ]);
+        repository.Setup(service => service.GetLegacyFormCodes()).Returns(
+        [
+            new LegacyFormCodeRow(1, "kiosk"),
+            new LegacyFormCodeRow(2, "kids"),
+            new LegacyFormCodeRow(3, "kids"),
+            new LegacyFormCodeRow(3, "registered"),
+            new LegacyFormCodeRow(9, "other-library")
+        ]);
+        var authorization = new Mock<ISettingsAuthorizationService>();
+        authorization.Setup(service => service.Describe(It.IsAny<ClaimsPrincipal>()))
+            .Returns(new SettingsPrincipal(true, 2, false));
+        authorization.Setup(service => service.CanManage(It.IsAny<ClaimsPrincipal>(), 2, It.IsAny<bool>())).Returns(true);
+        var controller = CreateController(repository, authorization);
+
+        var result = controller.Index(2, string.Empty) as ViewResult;
+        var model = result?.Model as SettingsIndexViewModel;
+
+        Assert.IsNotNull(model);
+        CollectionAssert.AreEquivalent(new[] { string.Empty, "registered", "kiosk", "kids" }, model.FormCodes.Select(form => form.FormCode).ToList());
+        Assert.AreEqual(1, model.FormCodes.Count(form => form.FormCode == "kids"));
+        Assert.IsFalse(model.FormCodes.Single(form => form.FormCode == "kiosk").IsRegistered);
+    }
+
+    [TestMethod]
+    public void CreateForm_AdoptsLegacyCodeAsMetadataWithoutCopyingSettings()
+    {
+        var repository = new Mock<ISettingsAdministrationRepository>();
+        var authorization = new Mock<ISettingsAuthorizationService>();
+        authorization.Setup(service => service.Describe(It.IsAny<ClaimsPrincipal>()))
+            .Returns(new SettingsPrincipal(true, 2, false));
+        authorization.Setup(service => service.CanManage(It.IsAny<ClaimsPrincipal>(), 2, It.IsAny<bool>())).Returns(true);
+        var controller = CreateController(repository, authorization);
+
+        var result = controller.CreateForm(new FormCodeRequest
+        {
+            OrganizationId = 2,
+            FormCode = "kiosk",
+            DisplayName = "Kiosk"
+        });
+
+        Assert.IsInstanceOfType<RedirectToActionResult>(result);
+        repository.Verify(service => service.SaveFormCode(
+            It.Is<FormCodeMetadata>(metadata => metadata.OrganizationId == 2 && metadata.FormCode == "kiosk"),
+            true,
+            It.IsAny<AuditContext>()), Times.Once);
+        repository.Verify(service => service.DirectSave(
+            It.IsAny<int>(), It.IsAny<string>(), It.IsAny<long>(), It.IsAny<IReadOnlyList<SettingMutation>>(),
+            It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), It.IsAny<AuditContext>()), Times.Never);
+    }
+
+    [TestMethod]
+    public void PreviewOperationalContext_OverridesTamperedBranchAndLibrary()
+    {
+        var settings = new Mock<Clc.PatronRegistration.Configuration.ISettingProvider>();
+        settings.SetupGet(provider => provider.LibraryId).Returns(2);
+        var registration = new Registration(settings.Object) { PatronBranchID = 999, LibraryId = 888 };
+
+        PreviewController.ApplyOperationalContext(registration, settings.Object, 3);
+
+        Assert.AreEqual(3, registration.PatronBranchID);
+        Assert.AreEqual(2, registration.LibraryId);
+    }
+
     private static SettingsController CreateController(
         Mock<ISettingsAdministrationRepository> repository,
         Mock<ISettingsAuthorizationService> authorization)
     {
         repository.Setup(service => service.GetCacheGeneration()).Returns(1);
         var invalidator = new Mock<ISettingsCacheInvalidator>();
+        var branchEligibility = new Mock<IPreviewBranchEligibilityService>();
+        branchEligibility.Setup(service => service.GetEligibleBranches(It.IsAny<int>(), It.IsAny<int>())).Returns([]);
         var controller = new SettingsController(
             authorization.Object,
             repository.Object,
             new SettingCatalog(),
             new TestCache(),
             new PreviewTokenService(),
+            branchEligibility.Object,
             invalidator.Object,
             Options.Create(new SettingsAdministrationOptions()));
         controller.ControllerContext = new ControllerContext

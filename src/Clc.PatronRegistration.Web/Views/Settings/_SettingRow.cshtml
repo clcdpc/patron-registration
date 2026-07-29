@@ -103,5 +103,16 @@
             }
         </div>
         <button type="button" class="edit-setting">Edit this setting</button>
+        @if (Model.DraftOperation is not null && Model.DraftId.HasValue)
+        {
+            <button type="submit"
+                    formaction="@Url.Action("RemoveDraftChange", new { draftId = Model.DraftId })"
+                    name="settingKey"
+                    value="@definition.Key"
+                    data-submit-kind="draft"
+                    formnovalidate>
+                Remove staged draft change
+            </button>
+        }
     </div>
 </article>

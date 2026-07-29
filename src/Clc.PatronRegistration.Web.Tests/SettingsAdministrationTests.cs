@@ -150,6 +150,37 @@ public class SettingsAdministrationTests
     }
 
     [TestMethod]
+    public void SettingsSnapshot_OmitsCatalogSensitiveValuesButKeepsUsefulSettings()
+    {
+        const string postmarkSecret = "recognizable-postmark-secret-123";
+        const string melissaSecret = "recognizable-melissa-secret-456";
+        var cache = CacheWith(
+            Setting(1, "postmark_api_key", postmarkSecret),
+            Setting(1, "melissa_data_api_key", melissaSecret),
+            Setting(1, "registration_text", "Useful public text"));
+        var provider = new DbSettingProvider(3, cache, string.Empty, 1);
+
+        var snapshot = SettingsSnapshotSerializer.Serialize(provider);
+
+        Assert.IsFalse(snapshot.Contains(postmarkSecret, StringComparison.Ordinal));
+        Assert.IsFalse(snapshot.Contains(melissaSecret, StringComparison.Ordinal));
+        StringAssert.Contains(snapshot, "Useful public text");
+    }
+
+    [DataTestMethod]
+    [DataRow(SettingValueType.Html)]
+    [DataRow(SettingValueType.EmailTemplate)]
+    public void LongNonSensitiveAuditValues_ArePreservedInFull(SettingValueType type)
+    {
+        var value = new string('x', 25_000);
+        var definition = new SettingDefinition("long", "Long", "Long value", type);
+
+        Assert.IsNull(definition.Validate(value));
+        Assert.AreEqual(value, AuditValueFormatter.Format(value, definition.IsSensitive));
+        Assert.AreEqual(25_000, AuditValueFormatter.Format(value, false)!.Length);
+    }
+
+    [TestMethod]
     public void PreviewTokens_Have256BitsAndUrlSafeEncoding()
     {
         var service = new PreviewTokenService();
@@ -180,7 +211,7 @@ public class SettingsAdministrationTests
             new SettingMutation("warning_text", DraftOperation.RemoveOverride, null)
         ]);
 
-        var provider = new PreviewSettingProvider(draft, cache, 1);
+        var provider = new PreviewSettingProvider(draft, 3, cache, 1);
 
         Assert.AreEqual("draft", provider.RegistrationText);
         Assert.AreEqual(string.Empty, provider.WarningText);
@@ -199,11 +230,77 @@ public class SettingsAdministrationTests
         var administration = new SettingsResolver().Resolve(
             cache.SettingsCache, "registration_text", 3, 2, string.Empty, systemOrganizationId);
         var draft = new SettingDraft(8, 3, string.Empty, 0, DraftStatus.Active, []);
-        var preview = new PreviewSettingProvider(draft, cache, systemOrganizationId);
+        var preview = new PreviewSettingProvider(draft, 3, cache, systemOrganizationId);
 
         Assert.AreEqual("configured system", live.RegistrationText);
         Assert.AreEqual("configured system", administration.EffectiveValue);
         Assert.AreEqual("configured system", preview.RegistrationText);
+    }
+
+    [TestMethod]
+    public void BranchDraft_ResolvesAtItsOperationalBranch()
+    {
+        var cache = CacheWith(Setting(1, "registration_text", "system"), Setting(2, "registration_text", "library"));
+        var draft = Draft(3, new SettingMutation("registration_text", DraftOperation.Upsert, "branch draft"));
+
+        var preview = new PreviewSettingProvider(draft, 3, cache, 1);
+
+        Assert.AreEqual(3, preview.OrganizationId);
+        Assert.AreEqual(2, preview.LibraryId);
+        Assert.AreEqual("branch draft", preview.RegistrationText);
+    }
+
+    [TestMethod]
+    public void LibraryDraft_IsMaskedByOperationalBranchOverride()
+    {
+        var cache = CacheWith(Setting(1, "registration_text", "system"), Setting(3, "registration_text", "branch"));
+        var draft = Draft(2, new SettingMutation("registration_text", DraftOperation.Upsert, "library draft"));
+
+        var preview = new PreviewSettingProvider(draft, 3, cache, 1);
+
+        Assert.AreEqual("branch", preview.RegistrationText);
+    }
+
+    [TestMethod]
+    public void SystemDraft_IsMaskedByLibraryAndBranchOverrides()
+    {
+        var cache = CacheWith(
+            Setting(1, "registration_text", "system"),
+            Setting(2, "registration_text", "library"),
+            Setting(3, "registration_text", "branch"));
+        var draft = Draft(1, new SettingMutation("registration_text", DraftOperation.Upsert, "system draft"));
+
+        Assert.AreEqual("branch", new PreviewSettingProvider(draft, 3, cache, 1).RegistrationText);
+    }
+
+    [TestMethod]
+    public void SystemDraft_IsVisibleWhenNoLowerOverrideMasksIt()
+    {
+        var cache = CacheWith(Setting(1, "registration_text", "system"));
+        var draft = Draft(1, new SettingMutation("registration_text", DraftOperation.Upsert, "system draft"));
+
+        Assert.AreEqual("system draft", new PreviewSettingProvider(draft, 3, cache, 1).RegistrationText);
+    }
+
+    [DataTestMethod]
+    [DataRow(3, "library")]
+    [DataRow(2, "branch")]
+    [DataRow(1, "branch")]
+    public void RemoveOverride_RemovesOnlyTheDraftScope(int draftOrganizationId, string expected)
+    {
+        var rows = new List<RegistrationFormSetting> { Setting(1, "registration_text", "system") };
+        if (draftOrganizationId != 2)
+        {
+            rows.Add(Setting(2, "registration_text", "library"));
+        }
+        if (draftOrganizationId != 3)
+        {
+            rows.Add(Setting(3, "registration_text", "branch"));
+        }
+        var cache = CacheWith(rows.ToArray());
+        var draft = Draft(draftOrganizationId, new SettingMutation("registration_text", DraftOperation.RemoveOverride, null));
+
+        Assert.AreEqual(expected, new PreviewSettingProvider(draft, 3, cache, 1).RegistrationText);
     }
 
     [TestMethod]
@@ -243,4 +340,9 @@ public class SettingsAdministrationTests
         Value = value,
         FormCode = formCode
     };
+
+    private static TestCache CacheWith(params RegistrationFormSetting[] settings) => new() { SettingsCache = settings.ToList() };
+
+    private static SettingDraft Draft(int organizationId, params SettingMutation[] changes) =>
+        new(20, organizationId, string.Empty, 0, DraftStatus.Active, changes);
 }

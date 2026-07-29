@@ -19,6 +19,7 @@ using System.Text.RegularExpressions;
 using System.Windows.Markup;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
+using Clc.PatronRegistration.Administration;
 
 namespace Clc.PatronRegistration
 {
@@ -542,7 +543,7 @@ namespace Clc.PatronRegistration
             }
 
             var settingsSnapshot = "";
-            try { settingsSnapshot = Settings.ToJson(); }
+            try { settingsSnapshot = SettingsSnapshotSerializer.Serialize(Settings); }
             catch (JsonSerializationException) { settingsSnapshot = ""; }
 
             var papiResponseJson = "";

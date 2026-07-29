@@ -20,6 +20,7 @@ public sealed class SettingsController(
     ISettingCatalog catalog,
     ICache cache,
     IPreviewTokenService previewTokens,
+    IPreviewBranchEligibilityService previewBranchEligibility,
     ISettingsCacheInvalidator cacheInvalidator,
     IOptions<SettingsAdministrationOptions> options) : Controller
 {
@@ -58,7 +59,8 @@ public sealed class SettingsController(
                 definition,
                 resolver.Resolve(cache.SettingsCache, definition.Key, target, libraryId, formCode, settingsOptions.SystemOrganizationId),
                 draftChange?.Value,
-                draftChange?.Operation));
+                draftChange?.Operation,
+                draft?.DraftId));
         }
 
         var model = new SettingsIndexViewModel
@@ -149,6 +151,18 @@ public sealed class SettingsController(
         return RedirectToAction(nameof(Index), new { organizationId = request.OrganizationId, formCode = request.FormCode });
     }
 
+    [HttpPost("drafts/{draftId:long}/changes/remove")]
+    [ValidateAntiForgeryToken]
+    public IActionResult RemoveDraftChange(long draftId, int organizationId, string formCode, string settingKey)
+    {
+        if (AuthorizedActiveDraft(draftId, organizationId, formCode) is null || !catalog.TryGet(settingKey, out _))
+        {
+            return Forbid();
+        }
+        repository.RemoveDraftChange(draftId, settingKey, CreateAudit(organizationId, formCode));
+        return RedirectToAction(nameof(Index), new { organizationId, formCode });
+    }
+
     [HttpPost("drafts/{draftId:long}/commit")]
     [ValidateAntiForgeryToken]
     public IActionResult CommitDraft(long draftId, int organizationId, string formCode = "")
@@ -199,7 +213,8 @@ public sealed class SettingsController(
         if (!operationalBranchId.HasValue)
         {
             ModelState.AddModelError(nameof(request.OperationalBranchId), "Select an operational branch authorized for this preview scope.");
-            return RedirectToAction(nameof(Index), new { organizationId = request.OrganizationId, formCode = request.FormCode, error = "Select a valid operational branch." });
+            TempData["SettingsError"] = "Select an operational branch authorized for this preview scope.";
+            return RedirectToAction(nameof(Index), new { organizationId = request.OrganizationId, formCode = request.FormCode });
         }
         repository.CreatePreviewLink(draftId, token.Hash, request.AllowLiveSubmission, operationalBranchId.Value, CreateAudit(request.OrganizationId, request.FormCode));
         var previewUrl = Url.Action("Index", "Preview", new { token = token.Plaintext }, Request.Scheme)!;
@@ -215,7 +230,14 @@ public sealed class SettingsController(
         {
             return Forbid();
         }
-        repository.RevokePreviewLink(previewLinkId, CreateAudit(link.OrganizationId, link.FormCode));
+        try
+        {
+            repository.RevokePreviewLink(previewLinkId, CreateAudit(link.OrganizationId, link.FormCode));
+        }
+        catch (DBConcurrencyException exception)
+        {
+            return Conflict(exception.Message);
+        }
         return RedirectToAction(nameof(Index), new { organizationId = link.OrganizationId, formCode = link.FormCode });
     }
 
@@ -228,7 +250,14 @@ public sealed class SettingsController(
         {
             return Forbid();
         }
-        repository.TogglePreviewLiveSubmission(previewLinkId, allowLiveSubmission, CreateAudit(link.OrganizationId, link.FormCode));
+        try
+        {
+            repository.TogglePreviewLiveSubmission(previewLinkId, allowLiveSubmission, CreateAudit(link.OrganizationId, link.FormCode));
+        }
+        catch (DBConcurrencyException exception)
+        {
+            return Conflict(exception.Message);
+        }
         return RedirectToAction(nameof(Index), new { organizationId = link.OrganizationId, formCode = link.FormCode });
     }
 
@@ -386,7 +415,8 @@ public sealed class SettingsController(
         LibraryId = libraryId,
         SystemOrganizationId = settingsOptions.SystemOrganizationId,
         IsGlobal = isGlobal,
-        Forms = repository.GetFormCodes(libraryId, settingsOptions.SystemOrganizationId)
+        Forms = repository.GetFormCodes(libraryId, settingsOptions.SystemOrganizationId),
+        LegacyForms = GetLegacyFormOptions(libraryId)
     };
 
     private bool ValidateScope(int organizationId, string formCode) =>
@@ -450,7 +480,47 @@ public sealed class SettingsController(
             var preferred = group.FirstOrDefault(form => form.OrganizationId == libraryId) ?? group.First();
             result.Add(new(preferred.FormCode, preferred.DisplayName, preferred.Description, preferred.OrganizationId));
         }
+        foreach (var legacy in GetLegacyFormOptions(libraryId).Where(legacy => result.All(form => !form.FormCode.Equals(legacy.FormCode, StringComparison.OrdinalIgnoreCase))))
+        {
+            result.Add(legacy);
+        }
         return result.OrderBy(form => form.DisplayName).ToList();
+    }
+
+    private IReadOnlyList<FormCodeOption> GetLegacyFormOptions(int libraryId)
+    {
+        var metadata = repository.GetFormCodes(libraryId, settingsOptions.SystemOrganizationId);
+        var result = new List<FormCodeOption>();
+        foreach (var row in repository.GetLegacyFormCodes())
+        {
+            int ownerOrganizationId;
+            if (row.OrganizationId == settingsOptions.SystemOrganizationId)
+            {
+                ownerOrganizationId = settingsOptions.SystemOrganizationId;
+            }
+            else
+            {
+                try
+                {
+                    ownerOrganizationId = GetLibraryId(row.OrganizationId);
+                }
+                catch (InvalidOperationException)
+                {
+                    continue;
+                }
+            }
+            if (ownerOrganizationId != settingsOptions.SystemOrganizationId && ownerOrganizationId != libraryId)
+            {
+                continue;
+            }
+            if (metadata.Any(item => item.OrganizationId == ownerOrganizationId && item.FormCode.Equals(row.FormCode, StringComparison.OrdinalIgnoreCase)) ||
+                result.Any(item => item.OwnerOrganizationId == ownerOrganizationId && item.FormCode.Equals(row.FormCode, StringComparison.OrdinalIgnoreCase)))
+            {
+                continue;
+            }
+            result.Add(new(row.FormCode, $"{row.FormCode} (legacy/unregistered)", "Existing settings without metadata.", ownerOrganizationId, false));
+        }
+        return result.OrderBy(item => item.FormCode).ToList();
     }
 
     private List<ScopeOption> GetAuthorizedScopes(SettingsPrincipal principal)
@@ -472,35 +542,23 @@ public sealed class SettingsController(
 
     private IReadOnlyList<ScopeOption> GetPreviewBranches(int scopeOrganizationId)
     {
-        if (scopeOrganizationId == settingsOptions.SystemOrganizationId)
-        {
-            return cache.OrganizationCache
-                .Where(organization => organization.OrganizationCodeID == 3)
-                .Select(branch => new ScopeOption(branch.OrganizationID, branch.DisplayName))
-                .OrderBy(branch => branch.DisplayName)
-                .ToList();
-        }
-        if (cache.GetOrg(scopeOrganizationId).OrganizationCodeID == 3)
-        {
-            return [new ScopeOption(scopeOrganizationId, GetOrganizationName(scopeOrganizationId))];
-        }
-        return cache.GetBranches(scopeOrganizationId)
-            .Select(branch => new ScopeOption(branch.OrganizationID, branch.DisplayName))
-            .OrderBy(branch => branch.DisplayName)
-            .ToList();
+        return previewBranchEligibility.GetEligibleBranches(scopeOrganizationId, settingsOptions.SystemOrganizationId);
     }
 
     private int? ResolveOperationalBranch(int scopeOrganizationId, int? requestedBranchId)
     {
         if (scopeOrganizationId != settingsOptions.SystemOrganizationId && cache.GetOrg(scopeOrganizationId).OrganizationCodeID == 3)
         {
-            return requestedBranchId is null || requestedBranchId == scopeOrganizationId ? scopeOrganizationId : null;
+            return (requestedBranchId is null || requestedBranchId == scopeOrganizationId) &&
+                   previewBranchEligibility.IsEligible(scopeOrganizationId, scopeOrganizationId, settingsOptions.SystemOrganizationId)
+                ? scopeOrganizationId
+                : null;
         }
         if (!requestedBranchId.HasValue)
         {
             return null;
         }
-        return GetPreviewBranches(scopeOrganizationId).Any(branch => branch.OrganizationId == requestedBranchId.Value)
+        return previewBranchEligibility.IsEligible(scopeOrganizationId, requestedBranchId.Value, settingsOptions.SystemOrganizationId)
             ? requestedBranchId
             : null;
     }

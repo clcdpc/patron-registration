@@ -6,6 +6,7 @@ using Clc.PatronRegistration.Helpers;
 using Clc.PatronRegistration.Web.Settings;
 using Clc.Polaris.Api;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc.Rendering;
 using Microsoft.Extensions.Options;
 
 namespace Clc.PatronRegistration.Web.Controllers;
@@ -15,6 +16,7 @@ namespace Clc.PatronRegistration.Web.Controllers;
 public sealed class PreviewController(
     ISettingsAdministrationRepository repository,
     IPreviewTokenService tokenService,
+    IPreviewBranchEligibilityService previewBranchEligibility,
     ICache cache,
     IDbHelper db,
     IPapiClient papi,
@@ -38,10 +40,15 @@ public sealed class PreviewController(
             Request.GetTrueClientIP(),
             context.Settings,
             db);
+        var branch = cache.GetOrg(context.Link.OperationalBranchId);
+        model.PatronBranchID = context.Link.OperationalBranchId;
+        model.LibraryId = context.Settings.LibraryId;
+        model.Branches = new SelectList(new[] { branch }, "OrganizationID", "DisplayName", context.Link.OperationalBranchId);
         model.BypassAgreement = agreementAccepted;
         ViewData["IsSettingsPreview"] = true;
         ViewData["AllowLiveSubmission"] = context.Link.AllowLiveSubmission;
         ViewData["PreviewToken"] = token;
+        ViewData["PreviewOperationalBranchName"] = branch.DisplayName;
         repository.WriteAudit("PreviewAccess", true, AnonymousAudit(context));
         return View("~/Views/Registration/Create.cshtml", model);
     }
@@ -68,8 +75,7 @@ public sealed class PreviewController(
             });
         }
 
-        registration.UseSettings(context.Settings);
-        registration.PatronBranchID = context.Link.OperationalBranchId;
+        ApplyOperationalContext(registration, context.Settings, context.Link.OperationalBranchId);
         try
         {
             var result = registration.CreateRegistration(
@@ -114,8 +120,7 @@ public sealed class PreviewController(
         {
             return NotFound();
         }
-        registration.UseSettings(context.Settings);
-        registration.PatronBranchID = context.Link.OperationalBranchId;
+        ApplyOperationalContext(registration, context.Settings, context.Link.OperationalBranchId);
         return Json(registration.DupeCheck(db, papi));
     }
 
@@ -154,12 +159,11 @@ public sealed class PreviewController(
         {
             return null;
         }
-        if (!IsOperationalBranchValid(draft, link.OperationalBranchId))
+        if (!previewBranchEligibility.IsEligible(draft.OrganizationId, link.OperationalBranchId, options.Value.SystemOrganizationId))
         {
             return null;
         }
-        var operationalLibraryId = cache.OrganizationCache.GetLibrary(link.OperationalBranchId).OrganizationID;
-        var settings = new PreviewSettingProvider(draft, cache, options.Value.SystemOrganizationId, operationalLibraryId);
+        var settings = new PreviewSettingProvider(draft, link.OperationalBranchId, cache, options.Value.SystemOrganizationId);
         return new PreviewContext(link, draft, settings);
     }
 
@@ -173,21 +177,11 @@ public sealed class PreviewController(
         HttpContext.TraceIdentifier,
         Request.GetTrueClientIP());
 
-    private bool IsOperationalBranchValid(SettingDraft draft, int operationalBranchId)
+    public static void ApplyOperationalContext(Registration registration, ISettingProvider settings, int operationalBranchId)
     {
-        var branch = cache.OrganizationCache.SingleOrDefault(organization => organization.OrganizationID == operationalBranchId);
-        if (branch?.OrganizationCodeID != 3)
-        {
-            return false;
-        }
-        if (draft.OrganizationId == options.Value.SystemOrganizationId)
-        {
-            return true;
-        }
-        var scope = cache.GetOrg(draft.OrganizationId);
-        return scope.OrganizationCodeID == 3
-            ? operationalBranchId == draft.OrganizationId
-            : branch.ParentOrganizationID == draft.OrganizationId;
+        registration.UseSettings(settings);
+        registration.PatronBranchID = operationalBranchId;
+        registration.LibraryId = settings.LibraryId;
     }
 
     private void SetSecurityHeaders()

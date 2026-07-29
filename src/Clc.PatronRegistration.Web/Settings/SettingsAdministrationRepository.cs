@@ -39,6 +39,7 @@ public sealed record PreviewLinkRecord(
     int OperationalBranchId);
 
 public sealed record FormCodeImpact(int MetadataRows, int OverrideRows, int Drafts, int PreviewLinks);
+public sealed record LegacyFormCodeRow(int OrganizationId, string FormCode);
 
 public sealed record SettingsAuditRow(
     long AuditEventId,
@@ -64,6 +65,7 @@ public interface ISettingsAdministrationRepository
     SettingDraft? GetActiveDraft(int organizationId, string formCode);
     long CreateDraft(int organizationId, string formCode, AuditContext audit);
     void SaveDraftChanges(long draftId, IReadOnlyList<SettingMutation> changes, AuditContext audit);
+    void RemoveDraftChange(long draftId, string settingKey, AuditContext audit);
     void CommitDraft(long draftId, IReadOnlyDictionary<string, SettingDefinition> catalog, AuditContext audit);
     void DiscardDraft(long draftId, AuditContext audit);
     void DirectSave(int organizationId, string formCode, long expectedVersion, IReadOnlyList<SettingMutation> changes, IReadOnlyDictionary<string, SettingDefinition> catalog, AuditContext audit);
@@ -74,6 +76,7 @@ public interface ISettingsAdministrationRepository
     void RevokePreviewLink(long previewLinkId, AuditContext audit);
     void TogglePreviewLiveSubmission(long previewLinkId, bool allowLiveSubmission, AuditContext audit);
     IReadOnlyList<FormCodeMetadata> GetFormCodes(int libraryId, int systemOrganizationId);
+    IReadOnlyList<LegacyFormCodeRow> GetLegacyFormCodes();
     void SaveFormCode(FormCodeMetadata metadata, bool isCreate, AuditContext audit);
     FormCodeImpact GetFormCodeImpact(int ownerOrganizationId, string formCode, IReadOnlyCollection<int> affectedOrganizations);
     void DeleteFormCode(int ownerOrganizationId, string formCode, IReadOnlyCollection<int> affectedOrganizations, AuditContext audit);
@@ -191,6 +194,22 @@ if @@ROWCOUNT=0
         transaction.Commit();
     }
 
+    public void RemoveDraftChange(long draftId, string settingKey, AuditContext audit)
+    {
+        using var connection = Open();
+        using var transaction = connection.BeginTransaction(IsolationLevel.Serializable);
+        EnsureActiveDraft(connection, transaction, draftId);
+        var removed = connection.Execute(
+            "delete dbo.RegistrationSettingDraftChanges where DraftId=@draftId and SettingKey=@settingKey",
+            new { draftId, settingKey }, transaction);
+        if (removed != 1)
+        {
+            throw new DBConcurrencyException("The staged draft mutation no longer exists.");
+        }
+        InsertAudit(connection, transaction, "DraftChangeRemoved", true, audit, draftId: draftId, settingKey: settingKey);
+        transaction.Commit();
+    }
+
     public void DirectSave(int organizationId, string formCode, long expectedVersion, IReadOnlyList<SettingMutation> changes, IReadOnlyDictionary<string, SettingDefinition> catalog, AuditContext audit)
     {
         using var connection = Open();
@@ -296,10 +315,17 @@ where p.DraftId=@draftId order by p.PreviewLinkId desc", new { draftId }).ToList
     {
         using var connection = Open();
         using var transaction = connection.BeginTransaction();
-        connection.Execute(@"
+        var updated = connection.Execute(@"
 update dbo.RegistrationSettingPreviewLinks
 set RevokedAtUtc=coalesce(RevokedAtUtc,SYSUTCDATETIME()),RevokedBy=coalesce(RevokedBy,@actor),ModifiedAtUtc=SYSUTCDATETIME(),ModifiedBy=@actor
-where PreviewLinkId=@previewLinkId", new { previewLinkId, actor = audit.ActorName ?? "unknown" }, transaction);
+where PreviewLinkId=@previewLinkId and RevokedAtUtc is null
+ and exists(select 1 from dbo.RegistrationSettingDrafts d where d.DraftId=dbo.RegistrationSettingPreviewLinks.DraftId and d.Status='Active')", new { previewLinkId, actor = audit.ActorName ?? "unknown" }, transaction);
+        if (updated != 1)
+        {
+            InsertAudit(connection, transaction, "PreviewLinkRevocationFailed", false, audit, "The preview link was already revoked or invalidated.", previewLinkId: previewLinkId);
+            transaction.Commit();
+            throw new DBConcurrencyException("The preview link was already revoked or invalidated.");
+        }
         InsertAudit(connection, transaction, "PreviewLinkRevoked", true, audit, previewLinkId: previewLinkId);
         transaction.Commit();
     }
@@ -308,10 +334,17 @@ where PreviewLinkId=@previewLinkId", new { previewLinkId, actor = audit.ActorNam
     {
         using var connection = Open();
         using var transaction = connection.BeginTransaction();
-        connection.Execute(@"
+        var updated = connection.Execute(@"
 update dbo.RegistrationSettingPreviewLinks set AllowLiveSubmission=@allowLiveSubmission,ModifiedAtUtc=SYSUTCDATETIME(),ModifiedBy=@actor
-where PreviewLinkId=@previewLinkId and RevokedAtUtc is null",
+where PreviewLinkId=@previewLinkId and RevokedAtUtc is null
+ and exists(select 1 from dbo.RegistrationSettingDrafts d where d.DraftId=dbo.RegistrationSettingPreviewLinks.DraftId and d.Status='Active')",
             new { previewLinkId, allowLiveSubmission, actor = audit.ActorName ?? "unknown" }, transaction);
+        if (updated != 1)
+        {
+            InsertAudit(connection, transaction, "PreviewLiveSubmissionToggleFailed", false, audit, "The preview link was revoked or invalidated.", previewLinkId: previewLinkId);
+            transaction.Commit();
+            throw new DBConcurrencyException("The preview link was revoked or invalidated.");
+        }
         InsertAudit(connection, transaction, "PreviewLiveSubmissionToggled", true, audit, previewLinkId: previewLinkId, metadataJson: $"{{\"enabled\":{allowLiveSubmission.ToString().ToLowerInvariant()}}}");
         transaction.Commit();
     }
@@ -324,6 +357,16 @@ select OrganizationId,FormCode,DisplayName,Description,CreatedAtUtc,CreatedBy,Mo
 from dbo.RegistrationFormCodeMetadata where OrganizationId in (@libraryId,@systemOrganizationId)
 order by FormCode,case when OrganizationId=@libraryId then 0 else 1 end",
             new { libraryId, systemOrganizationId }).ToList();
+    }
+
+    public IReadOnlyList<LegacyFormCodeRow> GetLegacyFormCodes()
+    {
+        using var connection = Open();
+        return connection.Query<LegacyFormCodeRow>(@"
+select distinct OrganizationID OrganizationId,FormCode
+from dbo.RegistrationFormSettings
+where FormCode is not null and len(FormCode)>0
+order by FormCode,OrganizationID").ToList();
     }
 
     public void SaveFormCode(FormCodeMetadata metadata, bool isCreate, AuditContext audit)
@@ -459,8 +502,8 @@ if @@ROWCOUNT=0 insert dbo.RegistrationFormSettings(OrganizationID,Setting,FormC
             InsertAudit(connection, transaction,
                 change.Operation == DraftOperation.RemoveOverride ? "OverrideRemoved" : old is null ? "OverrideCreated" : "OverrideUpdated",
                 true, audit, draftId: draftId, settingKey: change.Key,
-                previousValue: definition.IsSensitive ? SensitiveValueMasker.Mask(old) : old,
-                newValue: definition.IsSensitive ? SensitiveValueMasker.Mask(change.Value) : change.Value,
+                previousValue: AuditValueFormatter.Format(old, definition.IsSensitive),
+                newValue: AuditValueFormatter.Format(change.Value, definition.IsSensitive),
                 isSensitive: definition.IsSensitive);
         }
     }

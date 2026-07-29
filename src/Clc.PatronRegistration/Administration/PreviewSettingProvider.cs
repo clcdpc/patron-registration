@@ -7,21 +7,10 @@ namespace Clc.PatronRegistration.Administration;
 public sealed class PreviewSettingProvider : DbSettingProvider
 {
     private readonly IReadOnlyList<RegistrationFormSetting> overlaidSettings;
-    private readonly int resolutionLibraryId;
 
-    public PreviewSettingProvider(SettingDraft draft, ICache cache, int systemOrganizationId, int? operationalLibraryId = null)
-        : base(
-            draft.OrganizationId,
-            cache,
-            draft.FormCode,
-            systemOrganizationId,
-            draft.OrganizationId == systemOrganizationId ? systemOrganizationId : null)
+    public PreviewSettingProvider(SettingDraft draft, int operationalBranchId, ICache cache, int systemOrganizationId)
+        : base(operationalBranchId, cache, draft.FormCode, systemOrganizationId)
     {
-        resolutionLibraryId = draft.OrganizationId == systemOrganizationId ? systemOrganizationId : LibraryId;
-        if (operationalLibraryId.HasValue)
-        {
-            LibraryId = operationalLibraryId.Value;
-        }
         var rows = cache.SettingsCache
             .Where(row => !(row.OrganizationID == draft.OrganizationId &&
                             row.FormCode.Equals(draft.FormCode, StringComparison.OrdinalIgnoreCase) &&
@@ -45,7 +34,7 @@ public sealed class PreviewSettingProvider : DbSettingProvider
             overlaidSettings,
             name,
             OrganizationId,
-            resolutionLibraryId,
+            LibraryId,
             FormCode,
             SystemOrganizationId).EffectiveValue;
         return ConvertToType(value, defaultValue);

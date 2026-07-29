@@ -5,7 +5,7 @@ using Clc.PatronRegistration.Web.Settings;
 namespace Clc.PatronRegistration.Web.Models;
 
 public sealed record ScopeOption(int OrganizationId, string DisplayName);
-public sealed record FormCodeOption(string FormCode, string DisplayName, string? Description, int OwnerOrganizationId);
+public sealed record FormCodeOption(string FormCode, string DisplayName, string? Description, int OwnerOrganizationId, bool IsRegistered = true);
 
 public sealed class SettingsIndexViewModel
 {
@@ -28,7 +28,8 @@ public sealed record SettingRowViewModel(
     SettingDefinition Definition,
     ResolvedSetting Resolution,
     string? DraftValue,
-    DraftOperation? DraftOperation);
+    DraftOperation? DraftOperation,
+    long? DraftId);
 
 public sealed class SaveSettingsRequest
 {
@@ -66,6 +67,7 @@ public sealed class FormsViewModel
     public int SystemOrganizationId { get; set; }
     public bool IsGlobal { get; set; }
     public IReadOnlyList<FormCodeMetadata> Forms { get; set; } = [];
+    public IReadOnlyList<FormCodeOption> LegacyForms { get; set; } = [];
 }
 
 public sealed class FormCodeRequest

@@ -36,6 +36,12 @@ public static class SensitiveValueMasker
     }
 }
 
+public static class AuditValueFormatter
+{
+    public static string? Format(string? value, bool isSensitive) =>
+        isSensitive ? SensitiveValueMasker.Mask(value) : value;
+}
+
 public enum DraftStatus { Active, Committed, Discarded, Invalidated }
 public enum DraftOperation { Upsert, RemoveOverride }
 public sealed record SettingMutation(string Key, DraftOperation Operation, string? Value);

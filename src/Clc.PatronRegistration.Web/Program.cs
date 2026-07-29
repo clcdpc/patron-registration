@@ -63,6 +63,7 @@ namespace Clc.PatronRegistration.Web
             builder.Services.AddSingleton<ISettingsAuthorizationService, SettingsAuthorizationService>();
             builder.Services.AddSingleton<ISettingsAdministrationRepository, SettingsAdministrationRepository>();
             builder.Services.AddSingleton<ISettingsCacheInvalidator, SettingsCacheInvalidator>();
+            builder.Services.AddSingleton<IPreviewBranchEligibilityService, PreviewBranchEligibilityService>();
             builder.Services.AddHostedService<SettingsCacheGenerationWorker>();
 
             builder.Services

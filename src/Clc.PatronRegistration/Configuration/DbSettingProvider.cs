@@ -148,6 +148,7 @@ namespace Clc.PatronRegistration.Configuration
         public string WelcomeEmailSubject => GetSetting<string>("welcome_email_subject");
         public string WelcomeEmailAddress => GetSetting<string>("welcome_email_from_address");
         public string EcardWelcomeEmailSubject => GetSetting<string>("ecard_welcome_email_subject");
+        [JsonIgnore]
         public string PostmarkApiKey => GetSetting<string>("postmark_api_key");
         public bool DisplayPreferredPickupLocation => GetSetting<bool>("display_preferred_pickup_location");
         public bool RequirePreferredPickupLocation => GetSetting<bool>("require_preferred_pickup_location");
@@ -156,6 +157,7 @@ namespace Clc.PatronRegistration.Configuration
         public bool UseFirstNameForDuplicateWorkaround => GetSetting<bool>("use_first_name_for_duplicate_workaround");
         public bool UpdatePatronRecordWithMelissaAddress => GetSetting<bool>("update_patron_record_with_melissa_address");
         public string WelcomeEmailFromAddress => GetSetting<string>("welcome_email_from_address");
+        [JsonIgnore]
         public string MelissaDataApiKey => GetSetting<string>("melissa_data_api_key");
         public string ValidAddressRegistrationText => GetSetting<string>("valid_address_registration_text");
         public string ValidAddressPlusNameRegistrationText => GetSetting<string>("valid_address_plus_name_registration_text");
