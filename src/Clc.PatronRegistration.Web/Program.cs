@@ -13,6 +13,8 @@ using Microsoft.AspNetCore.Mvc.DataAnnotations;
 using Microsoft.AspNetCore.Mvc.Infrastructure;
 using Microsoft.Extensions.Primitives;
 using Microsoft.Identity.Web;
+using Clc.PatronRegistration.Administration;
+using Clc.PatronRegistration.Web.Settings;
 
 namespace Clc.PatronRegistration.Web
 {
@@ -55,6 +57,11 @@ namespace Clc.PatronRegistration.Web
                 .AddSingleton<IDbHelper, DbHelper>();
 
             builder.Services.AddSingleton<ICache, MemoryCache>();
+            builder.Services.Configure<SettingsAdministrationOptions>(builder.Configuration.GetSection(SettingsAdministrationOptions.SectionName));
+            builder.Services.AddSingleton<ISettingCatalog, SettingCatalog>();
+            builder.Services.AddSingleton<IPreviewTokenService, PreviewTokenService>();
+            builder.Services.AddScoped<ISettingsAuthorizationService, SettingsAuthorizationService>();
+            builder.Services.AddScoped<ISettingsAdministrationRepository, SettingsAdministrationRepository>();
 
             builder.Services
                 .AddSingleton<IActionContextAccessor, ActionContextAccessor>()
@@ -103,6 +110,7 @@ namespace Clc.PatronRegistration.Web
             app.UseHttpsRedirection();
             app.UseStaticFiles();
             app.UseRouting();
+            app.UseAuthentication();
             app.UseAuthorization();
 
             app.MapControllers();

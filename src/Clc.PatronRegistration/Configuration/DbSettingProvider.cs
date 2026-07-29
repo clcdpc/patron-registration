@@ -4,6 +4,7 @@ using Clc.Polaris.Api;
 using Clc.Polaris.Api.Models;
 using Newtonsoft.Json;
 using System.Xml.Linq;
+using System.Globalization;
 
 namespace Clc.PatronRegistration.Configuration
 {
@@ -28,20 +29,15 @@ namespace Clc.PatronRegistration.Configuration
 
         public T GetSetting<T>(string name, T defaultValue = default!)
         {
-            bool filterSetting(RegistrationFormSetting s) =>
-                new[] { OrganizationId, LibraryId, 1 }.Contains(s.OrganizationID)
-                && s.Setting.Equals(name, StringComparison.OrdinalIgnoreCase)
-                && new[] { "", FormCode }.Contains(s.FormCode, StringComparer.OrdinalIgnoreCase);
-
-            var dbValue = Cache.SettingsCache.Where(filterSetting).OrderByDescending(s => s.OrganizationID).OrderByDescending(s => s.FormCode.Length).FirstOrDefault()?.Value;
+            var dbValue = new SettingsResolver().Resolve(Cache.SettingsCache, name, OrganizationId, LibraryId, FormCode).EffectiveValue;
             return ConvertToType(dbValue, defaultValue);
         }
 
-        public static T ConvertToType<T>(string value, T defaultValue = default!)
+        public static T ConvertToType<T>(string? value, T defaultValue = default!)
         {
             var t = typeof(T);
 
-            if (string.IsNullOrEmpty(value))
+            if (value is null)
             {
                 if (t == typeof(string))
                 {
@@ -59,10 +55,10 @@ namespace Clc.PatronRegistration.Configuration
 
             return Type.GetTypeCode(t) switch
             {
-                TypeCode.Int32 => (T)(object)int.Parse(value),
-                TypeCode.Decimal => (T)(object)decimal.Parse(value),
+                TypeCode.Int32 => (T)(object)int.Parse(value, NumberStyles.Integer, CultureInfo.InvariantCulture),
+                TypeCode.Decimal => (T)(object)decimal.Parse(value, NumberStyles.Number, CultureInfo.InvariantCulture),
                 TypeCode.Boolean => (T)(object)bool.Parse(value),
-                TypeCode.DateTime => (T)(object)DateTime.Parse(value),
+                TypeCode.DateTime => (T)(object)DateTime.Parse(value, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
                 TypeCode.String => (T)(object)value,
                 _ => throw new NotSupportedException($"Conversion to type {t!.Name} is not supported."),
             };

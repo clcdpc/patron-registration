@@ -1,0 +1,17 @@
+@using Clc.PatronRegistration.Administration
+@model KeyValuePair<int, Clc.PatronRegistration.Web.Models.SettingRowViewModel>
+@{ var i=Model.Key; var row=Model.Value; var d=row.Definition; var r=row.Resolution; var value=row.DraftOperation==DraftOperation.Upsert?row.DraftValue:(r.OwnsOverride?r.CurrentOverrideValue:r.EffectiveValue) ?? ""; }
+<article class="setting-row" data-search="@($"{d.DisplayName} {d.Key} {d.Description} {(d.IsSensitive?"":r.EffectiveValue)}".ToLowerInvariant())">
+ <h3>@d.DisplayName <code>@d.Key</code></h3><p>@d.Description</p>
+ <p><strong>Effective:</strong> @(d.IsSensitive?"••••••••":r.EffectiveValue ?? "Not configured") <small>from @r.SourceOrganizationType @r.SourceOrganizationId, form “@(r.SourceFormCode.Length==0?"default":r.SourceFormCode)”</small></p>
+ <input type="hidden" name="Changes[@i].Key" value="@d.Key" /><label>Operation <select name="Changes[@i].Operation" class="operation"><option value="Upsert">@(r.OwnsOverride?"Update override":"Add override")</option><option value="RemoveOverride" disabled="@(!r.OwnsOverride)">Remove override</option></select></label>
+ <label>Value
+ @if(d.ValueType==SettingValueType.Boolean){<select name="Changes[@i].Value" class="setting-value"><option value="true" selected="@(value.Equals("true",StringComparison.OrdinalIgnoreCase))">True</option><option value="false" selected="@(value.Equals("false",StringComparison.OrdinalIgnoreCase))">False</option></select>}
+ else if(d.ValueType is SettingValueType.Integer or SettingValueType.NullableInteger or SettingValueType.Decimal){<input name="Changes[@i].Value" class="setting-value" type="number" step="@(d.ValueType==SettingValueType.Decimal?"any":"1")" value="@value" />}
+ else if(d.ValueType is SettingValueType.Date or SettingValueType.NullableDate){<input name="Changes[@i].Value" class="setting-value" type="date" value="@value" />}
+ else if(d.ValueType==SettingValueType.EmailAddress){<input name="Changes[@i].Value" class="setting-value" type="email" value="@value" />}
+ else if(d.ValueType==SettingValueType.Uri){<input name="Changes[@i].Value" class="setting-value" type="url" value="@value" />}
+ else if(d.ValueType is SettingValueType.LongString or SettingValueType.Html or SettingValueType.EmailTemplate){<textarea name="Changes[@i].Value" class="setting-value" rows="4">@value</textarea>@if(d.ValueType is SettingValueType.Html or SettingValueType.EmailTemplate){<iframe sandbox="" title="Isolated preview for @d.DisplayName" class="html-preview"></iframe>}}
+ else {<input name="Changes[@i].Value" class="setting-value" type="@(d.IsSensitive?"password":"text")" value="@value" autocomplete="@(d.IsSensitive?"new-password":"off")" />}
+ </label><p class="override-state">@(row.DraftOperation is null ? (r.OwnsOverride?"Current scope owns an override.":"Inherited; saving adds an override.") : $"Draft: {row.DraftOperation}.")</p>
+</article>

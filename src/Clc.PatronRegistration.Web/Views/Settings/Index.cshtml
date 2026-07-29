@@ -1,0 +1,22 @@
+@using Clc.PatronRegistration.Administration
+@model Clc.PatronRegistration.Web.Models.SettingsIndexViewModel
+@{ ViewData["Title"] = "Registration settings"; }
+<h1>Registration settings</h1>
+<nav aria-label="Settings administration"><a asp-action="Audit">Audit history</a> · <a asp-action="Forms">Form codes</a></nav>
+<section class="settings-scope" aria-labelledby="scope-heading">
+ <h2 id="scope-heading">Scope</h2>
+ <form method="get"><label>Organization <input name="organizationId" type="number" value="@Model.OrganizationId" @(Model.IsGlobal ? "" : "readonly") /></label>
+ <label>Form code <input name="formCode" value="@Model.FormCode" placeholder="Default form" /></label><button type="submit">Load scope</button></form>
+ <p>Library @Model.LibraryId / organization @Model.OrganizationId / <strong>@(Model.FormCode.Length == 0 ? "Default form" : Model.FormCode)</strong>. Live version @Model.ScopeVersion.</p>
+ <p class="draft-state">@(Model.ActiveDraftId is null ? "No active draft." : $"Active shared draft #{Model.ActiveDraftId}.")</p>
+</section>
+<label for="setting-search">Search settings</label> <input id="setting-search" type="search" autocomplete="off" placeholder="Name, key, description, or value" />
+<form asp-action="DirectSave" method="post" id="settings-form">
+ @Html.AntiForgeryToken()<input type="hidden" name="OrganizationId" value="@Model.OrganizationId" /><input type="hidden" name="FormCode" value="@Model.FormCode" /><input type="hidden" name="ExpectedVersion" value="@Model.ScopeVersion" />
+ <h2>Settings</h2><div class="settings-list">@{ var ordinary = Model.Settings.Where(x => x.Definition.Group == SettingGroup.Ordinary).ToList(); }@for(var i=0;i<ordinary.Count;i++){ <partial name="_SettingRow" model="@(new KeyValuePair<int, Clc.PatronRegistration.Web.Models.SettingRowViewModel>(i, ordinary[i]))" /> }</div>
+ @{ var offset=ordinary.Count; }
+ @foreach(var group in new[]{SettingGroup.Alert,SettingGroup.Label,SettingGroup.Require}) { var rows=Model.Settings.Where(x=>x.Definition.Group==group).ToList(); <details class="dynamic-settings"><summary>@group.ToString().ToLowerInvariant().* field settings (@rows.Count)</summary>@for(var j=0;j<rows.Count;j++){<partial name="_SettingRow" model="@(new KeyValuePair<int, Clc.PatronRegistration.Web.Models.SettingRowViewModel>(offset+j, rows[j]))" />} </details> offset += rows.Count; }
+ <div class="settings-actions"><button type="submit">Review and direct-save changes</button> <button type="button" disabled title="Available after an active draft is created">Create preview link</button></div>
+</form>
+<dialog id="save-confirm"><h2>Confirm exact changes</h2><p>Target: organization @Model.OrganizationId, form code “@(Model.FormCode.Length==0?"default":Model.FormCode)”.</p><ul></ul><button id="confirm-save">Save changes</button> <button type="button" id="cancel-save">Cancel</button></dialog>
+<script src="~/js/settings.js" asp-append-version="true"></script>
