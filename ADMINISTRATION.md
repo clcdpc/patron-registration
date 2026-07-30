@@ -4,7 +4,7 @@ The MVC administration interface is rooted at `/settings`. It uses the existing 
 
 ## Authorization and scope
 
-Access requires authentication, the configurable `SettingsAdministration:RequiredRole` (default `Clc.CardReg.ManageSettings`), and an integer organization claim. The application's claims transformer currently adds this claim as `Clc.OrganizationId`; the legacy names `organization`, `organization_id`, and `extension_Organization` remain supported for compatibility. Claim-type matching is case-insensitive. The configured global organization (default `-1`) can select system, library, and branch scopes. A library administrator can select only its library and branches. Scope and form-code authorization is repeated for every read and write; selector values are not treated as authorization.
+Access requires authentication, the configurable `SettingsAdministration:RequiredRole` (default `Clc.CardReg.ManageSettings`), and the integer organization claim `Clc.OrganizationId`. The existing `ClcAzureAdClaimsTransformer` adds this claim, whose type is matched case-insensitively. The configured global organization (default `-1`) can select system, library, and branch scopes. A library administrator can select only its library and branches. Scope and form-code authorization is repeated for every read and write; selector values are not treated as authorization.
 
 The single configured system organization, `SettingsAdministration:SystemOrganizationId`, defaults to `1`. That same options value is passed to live `DbSettingProvider`, administration resolution, and preview overlays; there is no separate registration system-ID setting. Non-global administrators never receive sensitive catalog definitions, values, hidden fields, or search data.
 

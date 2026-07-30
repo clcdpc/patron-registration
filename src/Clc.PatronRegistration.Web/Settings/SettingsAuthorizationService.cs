@@ -17,13 +17,7 @@ public sealed class SettingsAuthorizationService(
     ICache cache,
     IOptions<SettingsAdministrationOptions> options) : ISettingsAuthorizationService
 {
-    private static readonly string[] OrganizationClaimTypes =
-    [
-        "Clc.OrganizationId",
-        "organization",
-        "organization_id",
-        "extension_Organization"
-    ];
+    private const string OrganizationClaimType = "Clc.OrganizationId";
 
     private readonly SettingsAdministrationOptions config = options.Value;
 
@@ -31,7 +25,7 @@ public sealed class SettingsAuthorizationService(
     {
         var hasRole = user.IsInRole(config.RequiredRole);
         var organizationClaim = user.Claims
-            .FirstOrDefault(claim => OrganizationClaimTypes.Contains(claim.Type, StringComparer.OrdinalIgnoreCase))
+            .FirstOrDefault(claim => string.Equals(claim.Type, OrganizationClaimType, StringComparison.OrdinalIgnoreCase))
             ?.Value;
         int? organizationId = int.TryParse(organizationClaim, out var value) ? value : null;
         return new SettingsPrincipal(hasRole, organizationId, organizationId == config.GlobalOrganizationId);
