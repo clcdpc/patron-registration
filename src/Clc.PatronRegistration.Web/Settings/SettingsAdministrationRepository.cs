@@ -268,6 +268,7 @@ output inserted.DraftId values(@organizationId,@formCode,@version,'Active',@acto
 
     public void SaveDraftChanges(long draftId, IReadOnlyList<SettingMutation> changes, IReadOnlyDictionary<string, SettingDefinition> catalog, AuditContext audit)
     {
+        DraftOperationValidation.RequireSupported(changes);
         using var connection = Open();
         using var transaction = connection.BeginTransaction(IsolationLevel.Serializable);
         EnsureActiveDraft(connection, transaction, draftId);
@@ -338,6 +339,7 @@ if @@ROWCOUNT=0
 
     public void DirectSave(int organizationId, string formCode, long expectedVersion, IReadOnlyList<SettingMutation> changes, IReadOnlyDictionary<string, SettingDefinition> catalog, AuditContext audit)
     {
+        DraftOperationValidation.RequireSupported(changes);
         formCode = FormCodeNormalizer.Normalize(formCode);
         using var connection = Open();
         using var transaction = connection.BeginTransaction(IsolationLevel.Serializable);
@@ -363,6 +365,7 @@ if @@ROWCOUNT=0
         EnsureActiveDraft(connection, transaction, draftId);
         var draft = ReadDraft(connection, draftId, transaction) ??
             throw new DBConcurrencyException("The shared draft no longer exists. Reload the settings page.");
+        DraftOperationValidation.RequireSupported(draft.Changes);
         EnsureCanManageRestrictedDraft(connection, transaction, draftId, catalog, canManageSensitive);
 
         EnsureVersionRow(connection, transaction, draft.OrganizationId, draft.FormCode);
@@ -805,6 +808,8 @@ order by TimestampUtc desc", new { libraryId, includeSensitive, pattern }).ToLis
 
     private static void ApplyChanges(SqlConnection connection, IDbTransaction transaction, int organizationId, string formCode, IReadOnlyList<SettingMutation> changes, IReadOnlyDictionary<string, SettingDefinition> catalog, AuditContext audit, long? draftId = null)
     {
+        // Validate the complete batch before the first query, write, audit, or version change.
+        DraftOperationValidation.RequireSupported(changes);
         foreach (var change in changes)
         {
             if (!catalog.TryGetValue(change.Key, out var definition))

@@ -688,6 +688,73 @@ public class SettingsAdministrationTests
         Assert.IsNull(DbSettingProvider.ConvertToType<DateTime?>(string.Empty));
     }
 
+    [TestMethod]
+    public void EmptyScalarConversions_ReturnCallerDefaults_WhileStringRemainsEmpty()
+    {
+        var date = new DateTime(2025, 2, 3, 4, 5, 6, DateTimeKind.Utc);
+
+        Assert.IsTrue(DbSettingProvider.ConvertToType(string.Empty, true));
+        Assert.AreEqual(30, DbSettingProvider.ConvertToType(string.Empty, 30));
+        Assert.AreEqual(1.5m, DbSettingProvider.ConvertToType(string.Empty, 1.5m));
+        Assert.AreEqual(date, DbSettingProvider.ConvertToType(string.Empty, date));
+        Assert.AreEqual(7, DbSettingProvider.ConvertToType<int?>(string.Empty, 7));
+        Assert.AreEqual(date, DbSettingProvider.ConvertToType<DateTime?>(string.Empty, date));
+        Assert.AreEqual(string.Empty, DbSettingProvider.ConvertToType(string.Empty, "fallback"));
+    }
+
+    [TestMethod]
+    public void NullAndNonemptyScalarConversions_PreserveExistingBehavior()
+    {
+        var date = new DateTime(2025, 2, 3, 4, 5, 6, DateTimeKind.Utc);
+
+        Assert.AreEqual(42, DbSettingProvider.ConvertToType<int>(null, 42));
+        Assert.AreEqual(string.Empty, DbSettingProvider.ConvertToType<string>(null));
+        Assert.IsTrue(DbSettingProvider.ConvertToType("true", false));
+        Assert.AreEqual(31, DbSettingProvider.ConvertToType("31", 0));
+        Assert.AreEqual(2.75m, DbSettingProvider.ConvertToType("2.75", 0m));
+        Assert.AreEqual(date, DbSettingProvider.ConvertToType(date.ToString("O"), DateTime.MinValue));
+        Assert.ThrowsException<FormatException>(() => DbSettingProvider.ConvertToType("not-a-boolean", false));
+        Assert.ThrowsException<FormatException>(() => DbSettingProvider.ConvertToType("not-an-integer", 0));
+    }
+
+    [TestMethod]
+    public void EmptyLegacySettingRow_IsConsumedUsingConfiguredScalarDefault()
+    {
+        var cache = new TestCache
+        {
+            SettingsCache = [new() { OrganizationID = 3, FormCode = string.Empty, Setting = "legacy_bool", Value = string.Empty }]
+        };
+        var provider = new DbSettingProvider(3, cache);
+
+        Assert.IsTrue(provider.GetSetting("legacy_bool", true));
+    }
+
+    [TestMethod]
+    public void DraftOperationValidation_RejectsUndefinedValuesBeforeRepositoryWork()
+    {
+        foreach (var operation in new[] { (DraftOperation)2, (DraftOperation)999 })
+        {
+            Assert.ThrowsException<InvalidOperationException>(() => DraftOperationValidation.RequireSupported(
+                [new SettingMutation("registration_text", operation, "value")]));
+        }
+
+        DraftOperationValidation.RequireSupported(
+            [new SettingMutation("registration_text", DraftOperation.Upsert, "value"),
+             new SettingMutation("warning_text", DraftOperation.RemoveOverride, null)]);
+    }
+
+    [DataTestMethod]
+    [DataRow("Upsert", true, DraftOperation.Upsert)]
+    [DataRow("RemoveOverride", true, DraftOperation.RemoveOverride)]
+    [DataRow("2", false, DraftOperation.Upsert)]
+    [DataRow("999", false, DraftOperation.Upsert)]
+    [DataRow("Unknown", false, DraftOperation.Upsert)]
+    public void DraftOperationParsing_AcceptsOnlySupportedNames(string input, bool expected, DraftOperation expectedOperation)
+    {
+        Assert.AreEqual(expected, DraftOperationValidation.TryParseSupported(input, out var operation));
+        if (expected) Assert.AreEqual(expectedOperation, operation);
+    }
+
     [DataTestMethod]
     [DataRow("a")]
     [DataRow("secret")]

@@ -735,7 +735,7 @@ public sealed class SettingsController(
                 ModelState.AddModelError("setting", "One or more submitted settings are unrecognized or inaccessible.");
                 continue;
             }
-            if (!Enum.TryParse<DraftOperation>(input.Operation, out var operation))
+            if (!DraftOperationValidation.TryParseSupported(input.Operation, out var operation))
             {
                 ModelState.AddModelError(input.Key, "Invalid operation.");
                 continue;
@@ -744,6 +744,7 @@ public sealed class SettingsController(
             if (error is not null)
             {
                 ModelState.AddModelError(input.Key, error);
+                continue;
             }
             result.Add(new SettingMutation(input.Key, operation, operation == DraftOperation.RemoveOverride ? null : input.Value));
         }

@@ -17,7 +17,7 @@ namespace Clc.PatronRegistration.Validators
 
             if (!reg.UseLegalName) { return ValidationResult.Success!; }
 
-            return !string.IsNullOrWhiteSpace(value?.ToString())
+            return string.IsNullOrWhiteSpace(value?.ToString())
                 ? new ValidationResult($"{settings.GetFieldLabel(context.MemberName ?? "")} is required.")
                 : ValidationResult.Success!;
         }

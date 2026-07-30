@@ -45,4 +45,33 @@ public static class AuditValueFormatter
 public enum DraftStatus { Active, Committed, Discarded, Invalidated }
 public enum DraftOperation { Upsert, RemoveOverride }
 public sealed record SettingMutation(string Key, DraftOperation Operation, string? Value);
+public static class DraftOperationValidation
+{
+    public static bool IsSupported(DraftOperation operation) =>
+        operation is DraftOperation.Upsert or DraftOperation.RemoveOverride;
+
+    public static bool TryParseSupported(string? value, out DraftOperation operation)
+    {
+        if (value == nameof(DraftOperation.Upsert))
+        {
+            operation = DraftOperation.Upsert;
+            return true;
+        }
+        if (value == nameof(DraftOperation.RemoveOverride))
+        {
+            operation = DraftOperation.RemoveOverride;
+            return true;
+        }
+        operation = default;
+        return false;
+    }
+
+    public static void RequireSupported(IEnumerable<SettingMutation> changes)
+    {
+        if (changes.Any(change => !IsSupported(change.Operation)))
+        {
+            throw new InvalidOperationException("A submitted setting operation is invalid.");
+        }
+    }
+}
 public sealed record SettingDraft(long DraftId, int OrganizationId, string FormCode, long BaselineVersion, DraftStatus Status, IReadOnlyList<SettingMutation> Changes);

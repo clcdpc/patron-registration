@@ -19,6 +19,30 @@ namespace Clc.PatronRegistration.Tests;
 [TestClass]
 public class SettingsControllerTests
 {
+    [DataTestMethod]
+    [DataRow("2")]
+    [DataRow("999")]
+    [DataRow("Unknown")]
+    public void DirectSave_RejectsUnsupportedOperationWithoutCreatingMutation(string operation)
+    {
+        var repository = new Mock<ISettingsAdministrationRepository>();
+        var controller = CreateController(repository, LibraryAuthorization());
+        var request = new SaveSettingsRequest
+        {
+            OrganizationId = 3,
+            Changes = [new SettingMutationInput { Key = "registration_text", Operation = operation, Value = "value" }]
+        };
+
+        var result = controller.DirectSave(request);
+
+        Assert.IsInstanceOfType<RedirectToActionResult>(result);
+        Assert.IsTrue(controller.ModelState.ContainsKey("registration_text"));
+        StringAssert.Contains(controller.ModelState["registration_text"]!.Errors.Single().ErrorMessage, "Invalid operation");
+        repository.Verify(service => service.DirectSave(It.IsAny<int>(), It.IsAny<string>(), It.IsAny<long>(),
+            It.IsAny<IReadOnlyList<SettingMutation>>(), It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(),
+            It.IsAny<AuditContext>()), Times.Never);
+    }
+
     [TestMethod]
     public void GlobalScopeOptions_AreGroupedSortedAndIncludeParentLibraryNames()
     {
