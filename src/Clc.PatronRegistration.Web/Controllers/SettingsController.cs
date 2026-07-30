@@ -74,7 +74,8 @@ public sealed class SettingsController(
                 definition.IsSensitive ? SanitizeSensitiveResolution(resolution) : resolution,
                 definition.IsSensitive ? null : draftChange?.Value,
                 draftChange?.Operation,
-                draft?.DraftId));
+                draft?.DraftId,
+                DescribeSource(resolution)));
         }
 
         var model = new SettingsIndexViewModel
@@ -95,6 +96,20 @@ public sealed class SettingsController(
             Settings = rows
         };
         return View(model);
+    }
+
+    private string DescribeSource(ResolvedSetting resolution)
+    {
+        if (!resolution.SourceOrganizationId.HasValue)
+        {
+            return "No value is configured";
+        }
+        if (resolution.SourceOrganizationId == settingsOptions.SystemOrganizationId)
+        {
+            return "System defaults";
+        }
+        var formName = resolution.SourceFormCode.Length == 0 ? "Default form" : $"{resolution.SourceFormCode} form";
+        return $"{GetOrganizationName(resolution.SourceOrganizationId.Value)} — {formName}";
     }
 
     private static ResolvedSetting SanitizeSensitiveResolution(ResolvedSetting resolution) => resolution with

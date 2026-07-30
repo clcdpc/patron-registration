@@ -16,8 +16,16 @@
     editorValue = Clc.PatronRegistration.Web.Models.SettingEditorDefaults.ValueFor(definition, editorValue);
     var safeEffective = definition.IsSensitive ? string.Empty : resolution.EffectiveValue;
     var searchText = $"{definition.DisplayName} {definition.Key} {definition.Description} {safeEffective}".ToLowerInvariant();
+    var displayValue = definition.IsSensitive
+        ? (resolution.SourceOrganizationId.HasValue ? "Hidden" : "Not configured")
+        : definition.ValueType == SettingValueType.Boolean
+            ? (bool.TryParse(resolution.EffectiveValue, out var booleanValue) ? (booleanValue ? "Yes" : "No") : "Not configured")
+            : definition.ValueType is SettingValueType.LongString or SettingValueType.Html or SettingValueType.EmailTemplate
+                ? (string.IsNullOrEmpty(resolution.EffectiveValue) ? "Not configured" : "Configured")
+                : resolution.EffectiveValue ?? "Not configured";
+    var status = hasDraftOperation ? "Draft change" : resolution.OwnsOverride ? "Customized here" : "Using inherited value";
 }
-<article class="setting-row"
+<details class="setting-row" open="@hasDraftOperation"
          data-search="@searchText"
          data-display-name="@definition.DisplayName"
          data-setting-key="@definition.Key"
@@ -26,41 +34,43 @@
     <input class="change-index" type="hidden" name="Changes.Index" value="@token" disabled />
     <input class="change-key" type="hidden" name="Changes[@token].Key" value="@definition.Key" disabled />
 
-    <header>
-        <h3>@definition.DisplayName</h3>
-        <code>@definition.Key</code>
-    </header>
+    <summary>
+        <span class="setting-name">@definition.DisplayName</span>
+        <span class="summary-value" title="@displayValue">@displayValue</span>
+        <span class="setting-status">@status</span>
+    </summary>
+    <div class="setting-content">
     <p>@definition.Description</p>
     <dl class="setting-source">
         <div>
-            <dt>Effective value</dt>
-            <dd>@(definition.IsSensitive ? resolution.SourceOrganizationId.HasValue ? "Configured (hidden)" : "Not configured" : resolution.EffectiveValue ?? "Not configured")</dd>
+            <dt>Current value</dt>
+            <dd>@displayValue</dd>
         </div>
         <div>
-            <dt>Inherited source</dt>
-            <dd>@resolution.SourceOrganizationType @resolution.SourceOrganizationId · @(resolution.SourceFormCode.Length == 0 ? "default form" : resolution.SourceFormCode)</dd>
+            <dt>Comes from</dt>
+            <dd>@Model.SourceDescription</dd>
         </div>
         <div>
-            <dt>Override state</dt>
-            <dd>@(resolution.OwnsOverride ? "This scope owns an override." : "Inherited; saving adds an override.")</dd>
+            <dt>Status</dt>
+            <dd>@(resolution.OwnsOverride ? "Customized here" : "Using inherited value")</dd>
         </div>
         @if (hasDraftOperation)
         {
             <div>
-                <dt>Draft state</dt>
-                <dd>@Model.DraftOperation @(isDraftUpsert && definition.IsSensitive ? "••••••••" : Model.DraftValue)</dd>
+                <dt>Draft change</dt>
+                <dd>@(isRemoveOverride ? "Use inherited value" : isDraftUpsert && definition.IsSensitive ? "Set a hidden value" : $"Set “{Model.DraftValue}”")</dd>
             </div>
         }
     </dl>
 
     <div class="setting-editor">
         <div>
-            <label for="@operationId">Operation</label>
+            <label for="@operationId">Change</label>
             <select id="@operationId" class="operation" name="Changes[@token].Operation" disabled>
-                <option value="Upsert" selected="@isUpsert">@(resolution.OwnsOverride ? "Update override" : "Add override")</option>
+                <option value="Upsert" selected="@isUpsert">Set a value here</option>
                 @if (resolution.OwnsOverride)
                 {
-                    <option value="RemoveOverride" selected="@isRemoveOverride">Remove override</option>
+                    <option value="RemoveOverride" selected="@isRemoveOverride">Use inherited value</option>
                 }
             </select>
         </div>
@@ -71,8 +81,8 @@
                 bool isTrueValue = editorValue.Equals("true", StringComparison.OrdinalIgnoreCase);
                 bool isFalseValue = editorValue.Equals("false", StringComparison.OrdinalIgnoreCase);
                 <select id="@inputId" class="setting-value" name="Changes[@token].Value" disabled>
-                    <option value="true" selected="@isTrueValue">True</option>
-                    <option value="false" selected="@isFalseValue">False</option>
+                    <option value="true" selected="@isTrueValue">Yes</option>
+                    <option value="false" selected="@isFalseValue">No</option>
                 </select>
             }
             else if (definition.ValueType is SettingValueType.Integer or SettingValueType.NullableInteger or SettingValueType.Decimal)
@@ -109,7 +119,7 @@
                 }
             }
         </div>
-        <button type="button" class="edit-setting">Edit this setting</button>
+        <button type="button" class="edit-setting">Change</button>
         @if (hasDraftOperation && Model.DraftId.HasValue)
         {
             <button type="submit"
@@ -118,8 +128,10 @@
                     value="@definition.Key"
                     data-submit-kind="draft"
                     formnovalidate>
-                Remove staged draft change
+                Remove draft change
             </button>
         }
     </div>
-</article>
+    <details class="technical-details"><summary>Technical details</summary><p>Setting key: <code>@definition.Key</code></p></details>
+    </div>
+</details>

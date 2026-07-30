@@ -10,6 +10,35 @@ namespace Clc.PatronRegistration.Tests;
 [TestClass]
 public class SettingsAdministrationTests
 {
+    [TestMethod]
+    public void OrdinaryCatalog_HasOrderedStaffFacingPresentationMetadata()
+    {
+        var ordinary = new SettingCatalog().All.Where(setting => setting.Group == SettingGroup.Ordinary).ToList();
+        Assert.IsTrue(ordinary.All(setting => setting.Category.HasValue));
+        Assert.IsTrue(ordinary.All(setting => !string.IsNullOrWhiteSpace(setting.DisplayName)));
+        Assert.IsTrue(ordinary.All(setting => !string.IsNullOrWhiteSpace(setting.Description)));
+        Assert.IsFalse(ordinary.Any(setting => setting.Description == $"Registration setting {setting.Key}."));
+        CollectionAssert.AreEqual(Enum.GetValues<SettingCategory>(), SettingCategoryPresentation.Ordered.ToArray());
+        foreach (var category in SettingCategoryPresentation.Ordered)
+        {
+            var names = ordinary.Where(setting => setting.Category == category).Select(setting => setting.DisplayName).ToArray();
+            CollectionAssert.AreEqual(names.OrderBy(name => name, StringComparer.OrdinalIgnoreCase).ToArray(), names);
+        }
+    }
+
+    [TestMethod]
+    public void Catalog_UsesStaffFriendlyAcronymsAndAlphabetizesDynamicGroups()
+    {
+        var catalog = new SettingCatalog().All;
+        foreach (var expected in new[] { "CSS file", "Header image URL", "Polaris record set ID", "PAPI duplicate check", "E-card patron code" })
+            Assert.IsTrue(catalog.Any(setting => setting.DisplayName == expected), expected);
+        foreach (var group in new[] { SettingGroup.Alert, SettingGroup.Label, SettingGroup.Require })
+        {
+            var names = catalog.Where(setting => setting.Group == group).Select(setting => setting.DisplayName).ToArray();
+            CollectionAssert.AreEqual(names.OrderBy(name => name, StringComparer.OrdinalIgnoreCase).ToArray(), names);
+        }
+    }
+
     [DataTestMethod]
     [DataRow("<img src=x onerror=alert(1)>")]
     [DataRow("<script>alert(1)</script>")]

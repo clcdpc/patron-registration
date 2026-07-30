@@ -42,7 +42,8 @@ public sealed record SettingRowViewModel(
     ResolvedSetting Resolution,
     string? DraftValue,
     DraftOperation? DraftOperation,
-    long? DraftId);
+    long? DraftId,
+    string SourceDescription = "No value is configured");
 
 public sealed class SaveSettingsRequest
 {
