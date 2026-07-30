@@ -27,11 +27,57 @@ public class SettingsAuthorizationAndCacheTests
     public void LibraryAdministrator_CanManageOwnBranchButNotSystemOrSensitiveSettings()
     {
         var service = new SettingsAuthorizationService(new TestCache(), Options.Create(new SettingsAdministrationOptions()));
-        var user = Principal(2, includeRole: true);
+        var user = Principal("Clc.OrganizationId", "2", includeRole: true);
 
+        Assert.AreEqual(new SettingsPrincipal(true, 2, false), service.Describe(user));
         Assert.IsTrue(service.CanManage(user, 3));
         Assert.IsFalse(service.CanManage(user, 1));
         Assert.IsFalse(service.CanManage(user, 3, sensitive: true));
+    }
+
+    [DataTestMethod]
+    [DataRow("organization")]
+    [DataRow("organization_id")]
+    [DataRow("extension_Organization")]
+    public void LegacyOrganizationClaims_RemainSupported(string claimType)
+    {
+        var service = AuthorizationService();
+
+        Assert.AreEqual(
+            new SettingsPrincipal(true, 2, false),
+            service.Describe(Principal(claimType, "2", includeRole: true)));
+    }
+
+    [TestMethod]
+    public void OrganizationClaimTypeMatching_IsCaseInsensitive()
+    {
+        var service = AuthorizationService();
+
+        Assert.AreEqual(
+            new SettingsPrincipal(true, 2, false),
+            service.Describe(Principal("cLc.oRgAnIzAtIoNiD", "2", includeRole: true)));
+    }
+
+    [DataTestMethod]
+    [DataRow("not-an-integer")]
+    [DataRow("")]
+    public void MalformedOrganizationClaim_IsDenied(string claimValue)
+    {
+        var service = AuthorizationService();
+        var user = Principal("Clc.OrganizationId", claimValue, includeRole: true);
+
+        Assert.IsNull(service.Describe(user).OrganizationId);
+        Assert.IsFalse(service.CanManage(user, 2));
+    }
+
+    [TestMethod]
+    public void MissingOrganizationClaim_IsDenied()
+    {
+        var service = AuthorizationService();
+        var user = Principal(null, null, includeRole: true);
+
+        Assert.IsNull(service.Describe(user).OrganizationId);
+        Assert.IsFalse(service.CanManage(user, 2));
     }
 
     [TestMethod]
@@ -39,7 +85,10 @@ public class SettingsAuthorizationAndCacheTests
     {
         var service = new SettingsAuthorizationService(new TestCache(), Options.Create(new SettingsAdministrationOptions()));
 
-        Assert.IsFalse(service.CanManage(Principal(2, includeRole: false), 2));
+        var user = Principal("Clc.OrganizationId", "2", includeRole: false);
+
+        Assert.IsFalse(service.Describe(user).HasRole);
+        Assert.IsFalse(service.CanManage(user, 2));
     }
 
     [TestMethod]
@@ -148,9 +197,19 @@ public class SettingsAuthorizationAndCacheTests
             OrganizationCache.Where(organization => organization.ParentOrganizationID == orgId).ToList();
     }
 
-    private static ClaimsPrincipal Principal(int organizationId, bool includeRole)
+    private static SettingsAuthorizationService AuthorizationService() =>
+        new(new TestCache(), Options.Create(new SettingsAdministrationOptions()));
+
+    private static ClaimsPrincipal Principal(int organizationId, bool includeRole) =>
+        Principal("organization", organizationId.ToString(), includeRole);
+
+    private static ClaimsPrincipal Principal(string? claimType, string? claimValue, bool includeRole)
     {
-        var claims = new List<Claim> { new("organization", organizationId.ToString()) };
+        var claims = new List<Claim>();
+        if (claimType is not null)
+        {
+            claims.Add(new Claim(claimType, claimValue ?? string.Empty));
+        }
         if (includeRole)
         {
             claims.Add(new Claim(ClaimTypes.Role, "Clc.CardReg.ManageSettings"));
