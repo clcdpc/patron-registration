@@ -245,7 +245,7 @@ public class PreviewRequestContextTests
     {
         var context = CreateResolver().Resolve("token")!;
         var accessor = new PreviewRequestContextAccessor { IsPreviewRequest = true, Current = context };
-        var resolver = new RequestSettingProviderResolver(accessor, new TestCache(), Options.Create(new SettingsAdministrationOptions()), new RegistrationConfiguration());
+        var resolver = new RequestSettingProviderResolver(accessor, new SettingsPageBrandingContextAccessor(), new TestCache(), Options.Create(new SettingsAdministrationOptions()), new RegistrationConfiguration());
 
         Assert.AreSame(context.Settings, resolver.Resolve(new DefaultHttpContext()));
 
@@ -256,7 +256,7 @@ public class PreviewRequestContextTests
     [TestMethod]
     public void RequestSettingResolver_NormalRegistrationUsesRouteOrganizationAndFormCode()
     {
-        var resolver = new RequestSettingProviderResolver(new PreviewRequestContextAccessor(), new TestCache(), Options.Create(new SettingsAdministrationOptions()), new RegistrationConfiguration());
+        var resolver = new RequestSettingProviderResolver(new PreviewRequestContextAccessor(), new SettingsPageBrandingContextAccessor(), new TestCache(), Options.Create(new SettingsAdministrationOptions()), new RegistrationConfiguration());
         var httpContext = new DefaultHttpContext();
         httpContext.Request.RouteValues["orgId"] = "3";
         httpContext.Request.RouteValues["formCode"] = "kids";
@@ -265,6 +265,61 @@ public class PreviewRequestContextTests
 
         Assert.AreEqual(3, settings.OrganizationId);
         Assert.AreEqual("kids", settings.FormCode);
+    }
+
+    [DataTestMethod]
+    [DataRow(2, 2)]
+    [DataRow(3, 2)]
+    public void RequestSettingResolver_SettingsBrandingUsesAuthenticatedScopeAndDefaultForm(int organizationId, int libraryId)
+    {
+        var branding = new SettingsPageBrandingContextAccessor();
+        branding.Set(organizationId, libraryId);
+        var cache = new TestCache
+        {
+            SettingsCache =
+            [
+                new() { OrganizationID = organizationId, FormCode = string.Empty, Setting = "header_image_url", Value = "branding-header" },
+                new() { OrganizationID = organizationId, FormCode = string.Empty, Setting = "css_file", Value = "branding-css" },
+                new() { OrganizationID = 3, FormCode = "kids", Setting = "header_image_url", Value = "editing-header" }
+            ]
+        };
+        var resolver = new RequestSettingProviderResolver(new PreviewRequestContextAccessor(), branding, cache,
+            Options.Create(new SettingsAdministrationOptions()), new RegistrationConfiguration());
+        var request = new DefaultHttpContext();
+        request.Request.RouteValues["orgId"] = "3";
+        request.Request.RouteValues["formCode"] = "kids";
+
+        var settings = resolver.Resolve(request);
+
+        Assert.AreEqual(organizationId, settings.OrganizationId);
+        Assert.AreEqual(libraryId, ((DbSettingProvider)settings).LibraryId);
+        Assert.AreEqual(string.Empty, settings.FormCode);
+        Assert.AreEqual("branding-header", settings.HeaderImageUrl);
+        Assert.AreEqual("branding-css", settings.CssFile);
+    }
+
+    [TestMethod]
+    public void RequestSettingResolver_PreviewTakesPriorityOverSettingsBranding()
+    {
+        var preview = CreateResolver().Resolve("token")!;
+        var branding = new SettingsPageBrandingContextAccessor();
+        branding.Set(2, 2);
+        var resolver = new RequestSettingProviderResolver(
+            new PreviewRequestContextAccessor { IsPreviewRequest = true, Current = preview }, branding,
+            new TestCache(), Options.Create(new SettingsAdministrationOptions()), new RegistrationConfiguration());
+
+        Assert.AreSame(preview.Settings, resolver.Resolve(new DefaultHttpContext()));
+    }
+
+    [TestMethod]
+    public void SettingsBrandingAccessor_StateIsNotSharedByDifferentScopes()
+    {
+        var firstRequest = new SettingsPageBrandingContextAccessor();
+        var secondRequest = new SettingsPageBrandingContextAccessor();
+        firstRequest.Set(3, 2);
+
+        Assert.AreEqual(new SettingsPageBrandingContext(3, 2), firstRequest.Current);
+        Assert.IsNull(secondRequest.Current);
     }
 
     [TestMethod]
