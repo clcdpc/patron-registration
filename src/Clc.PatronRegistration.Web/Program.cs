@@ -1,5 +1,3 @@
-using Clc.Auth.AzureAd.Security;
-using Clc.Configuration;
 using Clc.Melissa;
 using Clc.PatronRegistration.Configuration;
 using Clc.PatronRegistration.Data;
@@ -15,6 +13,7 @@ using Microsoft.Extensions.Primitives;
 using Microsoft.Identity.Web;
 using Clc.PatronRegistration.Administration;
 using Clc.PatronRegistration.Web.Settings;
+using Clc.PatronRegistration.Security;
 
 namespace Clc.PatronRegistration.Web
 {
