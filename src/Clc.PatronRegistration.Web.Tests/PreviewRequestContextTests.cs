@@ -218,7 +218,7 @@ public class PreviewRequestContextTests
     [TestMethod]
     public void LivePreview_StagedRequiredFieldModelStateBlocksAllExternalCalls()
     {
-        var draft = ActiveDraft(new("require.PhoneVoice1", DraftOperation.Upsert, "true"));
+        var draft = ActiveDraft(new SettingMutation("require.PhoneVoice1", DraftOperation.Upsert, "true"));
         var context = CreateResolver(draft: draft, link: Link("Active", allowLiveSubmission: true)).Resolve("token")!;
         var repository = new Mock<ISettingsAdministrationRepository>();
         var papi = new Mock<IPapiClient>();
