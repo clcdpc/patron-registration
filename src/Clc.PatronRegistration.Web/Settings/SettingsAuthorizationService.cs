@@ -17,13 +17,21 @@ public sealed class SettingsAuthorizationService(
     ICache cache,
     IOptions<SettingsAdministrationOptions> options) : ISettingsAuthorizationService
 {
+    private static readonly string[] OrganizationClaimTypes =
+    [
+        "Clc.OrganizationId",
+        "organization",
+        "organization_id",
+        "extension_Organization"
+    ];
+
     private readonly SettingsAdministrationOptions config = options.Value;
 
     public SettingsPrincipal Describe(ClaimsPrincipal user)
     {
         var hasRole = user.IsInRole(config.RequiredRole);
         var organizationClaim = user.Claims
-            .FirstOrDefault(claim => claim.Type is "organization" or "organization_id" or "extension_Organization")
+            .FirstOrDefault(claim => OrganizationClaimTypes.Contains(claim.Type, StringComparer.OrdinalIgnoreCase))
             ?.Value;
         int? organizationId = int.TryParse(organizationClaim, out var value) ? value : null;
         return new SettingsPrincipal(hasRole, organizationId, organizationId == config.GlobalOrganizationId);

@@ -81,7 +81,11 @@ namespace Clc.PatronRegistration.Web
                 .AddScoped<IEmailSender>(s => RegistrationClientProvider.CreateEmail(s.GetRequiredService<ISettingProvider>(), s.GetRequiredService<IEmailSenderFactory>()))
                 .AddScoped<IMelissaRestClient>(s => RegistrationClientProvider.CreateMelissa(s.GetRequiredService<ISettingProvider>(), s.GetRequiredService<IMelissaClientFactory>()));
 
-            builder.Services.ConfigureApplicationCookie(o => { o.LogoutPath = "/"; });
+            builder.Services.ConfigureApplicationCookie(o =>
+            {
+                o.AccessDeniedPath = "/Account/AccessDenied";
+                o.LogoutPath = "/";
+            });
 
             builder.Services.AddSingleton(x => builder.Configuration.GetSection("Clc").Get<AppSettings>()!);
             builder.Services.AddSingleton<IAuthorizationHandler, IsClcUserCheckHandler>();
