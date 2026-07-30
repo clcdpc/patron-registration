@@ -155,7 +155,7 @@ public class SettingsAdministrationTests
     public void LabelCatalog_ExactlyMatchesDbConfiguredDisplayNameMetadata()
     {
         var metadataFields = typeof(RegistrationMetadata).GetProperties()
-            .Where(property => property.GetCustomAttributes(typeof(DbConfiguredDisplayName), true).Any())
+            .Where(property => property.GetCustomAttributes(typeof(DbConfiguredDisplayNameAttribute), true).Any())
             .Select(property => property.Name)
             .OrderBy(name => name)
             .ToArray();
