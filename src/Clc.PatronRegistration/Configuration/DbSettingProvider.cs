@@ -53,7 +53,9 @@ namespace Clc.PatronRegistration.Configuration
                 return defaultValue;
             }
 
-            if (value.Length == 0 && t.IsGenericType && t.GetGenericTypeDefinition() == typeof(Nullable<>))
+            // Empty string is a meaningful configured value for strings, but legacy rows
+            // containing an empty scalar value are equivalent to an unconfigured scalar.
+            if (value.Length == 0 && t != typeof(string))
             {
                 return defaultValue;
             }
