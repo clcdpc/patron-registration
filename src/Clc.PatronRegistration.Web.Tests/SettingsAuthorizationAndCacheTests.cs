@@ -39,13 +39,13 @@ public class SettingsAuthorizationAndCacheTests
     [DataRow("organization")]
     [DataRow("organization_id")]
     [DataRow("extension_Organization")]
-    public void LegacyOrganizationClaims_RemainSupported(string claimType)
+    public void FormerOrganizationClaimNames_AreDenied(string claimType)
     {
         var service = AuthorizationService();
+        var user = Principal(claimType, "2", includeRole: true);
 
-        Assert.AreEqual(
-            new SettingsPrincipal(true, 2, false),
-            service.Describe(Principal(claimType, "2", includeRole: true)));
+        Assert.IsNull(service.Describe(user).OrganizationId);
+        Assert.IsFalse(service.CanManage(user, 2));
     }
 
     [TestMethod]
@@ -61,6 +61,8 @@ public class SettingsAuthorizationAndCacheTests
     [DataTestMethod]
     [DataRow("not-an-integer")]
     [DataRow("")]
+    [DataRow("   ")]
+    [DataRow("2147483648")]
     public void MalformedOrganizationClaim_IsDenied(string claimValue)
     {
         var service = AuthorizationService();
@@ -201,7 +203,7 @@ public class SettingsAuthorizationAndCacheTests
         new(new TestCache(), Options.Create(new SettingsAdministrationOptions()));
 
     private static ClaimsPrincipal Principal(int organizationId, bool includeRole) =>
-        Principal("organization", organizationId.ToString(), includeRole);
+        Principal("Clc.OrganizationId", organizationId.ToString(), includeRole);
 
     private static ClaimsPrincipal Principal(string? claimType, string? claimValue, bool includeRole)
     {

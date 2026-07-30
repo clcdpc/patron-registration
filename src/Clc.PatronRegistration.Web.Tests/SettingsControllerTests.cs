@@ -754,7 +754,7 @@ public class SettingsControllerTests
                 User = new ClaimsPrincipal(new ClaimsIdentity(
                 [
                     new Claim(ClaimTypes.Name, "admin@example.org"),
-                    new Claim("organization", "2")
+                    new Claim("Clc.OrganizationId", "2")
                 ], "test"))
             }
         };
