@@ -6,7 +6,11 @@
     var token = Model.Token;
     var inputId = $"{token}-value";
     var operationId = $"{token}-operation";
-    var editorValue = definition.IsSensitive ? string.Empty : Model.DraftOperation == DraftOperation.Upsert
+    bool hasDraftOperation = Model.DraftOperation.HasValue;
+    bool isRemoveOverride = Model.DraftOperation == DraftOperation.RemoveOverride;
+    bool isUpsert = !isRemoveOverride;
+    bool isDraftUpsert = Model.DraftOperation == DraftOperation.Upsert;
+    var editorValue = definition.IsSensitive ? string.Empty : isDraftUpsert
         ? Model.DraftValue
         : resolution.OwnsOverride ? resolution.CurrentOverrideValue : resolution.EffectiveValue;
     editorValue = Clc.PatronRegistration.Web.Models.SettingEditorDefaults.ValueFor(definition, editorValue);
@@ -40,11 +44,11 @@
             <dt>Override state</dt>
             <dd>@(resolution.OwnsOverride ? "This scope owns an override." : "Inherited; saving adds an override.")</dd>
         </div>
-        @if (Model.DraftOperation is not null)
+        @if (hasDraftOperation)
         {
             <div>
                 <dt>Draft state</dt>
-                <dd>@Model.DraftOperation @(Model.DraftOperation == DraftOperation.Upsert && definition.IsSensitive ? "••••••••" : Model.DraftValue)</dd>
+                <dd>@Model.DraftOperation @(isDraftUpsert && definition.IsSensitive ? "••••••••" : Model.DraftValue)</dd>
             </div>
         }
     </dl>
@@ -53,10 +57,10 @@
         <div>
             <label for="@operationId">Operation</label>
             <select id="@operationId" class="operation" name="Changes[@token].Operation" disabled>
-                <option value="Upsert" selected="@(Model.DraftOperation != DraftOperation.RemoveOverride)">@(resolution.OwnsOverride ? "Update override" : "Add override")</option>
+                <option value="Upsert" selected="@isUpsert">@(resolution.OwnsOverride ? "Update override" : "Add override")</option>
                 @if (resolution.OwnsOverride)
                 {
-                    <option value="RemoveOverride" selected="@(Model.DraftOperation == DraftOperation.RemoveOverride)">Remove override</option>
+                    <option value="RemoveOverride" selected="@isRemoveOverride">Remove override</option>
                 }
             </select>
         </div>
@@ -64,9 +68,11 @@
             <label for="@inputId">Value</label>
             @if (definition.ValueType == SettingValueType.Boolean)
             {
+                bool isTrueValue = editorValue.Equals("true", StringComparison.OrdinalIgnoreCase);
+                bool isFalseValue = editorValue.Equals("false", StringComparison.OrdinalIgnoreCase);
                 <select id="@inputId" class="setting-value" name="Changes[@token].Value" disabled>
-                    <option value="true" selected="@editorValue.Equals("true", StringComparison.OrdinalIgnoreCase)">True</option>
-                    <option value="false" selected="@editorValue.Equals("false", StringComparison.OrdinalIgnoreCase)">False</option>
+                    <option value="true" selected="@isTrueValue">True</option>
+                    <option value="false" selected="@isFalseValue">False</option>
                 </select>
             }
             else if (definition.ValueType is SettingValueType.Integer or SettingValueType.NullableInteger or SettingValueType.Decimal)
@@ -104,7 +110,7 @@
             }
         </div>
         <button type="button" class="edit-setting">Edit this setting</button>
-        @if (Model.DraftOperation is not null && Model.DraftId.HasValue)
+        @if (hasDraftOperation && Model.DraftId.HasValue)
         {
             <button type="submit"
                     formaction="@Url.Action("RemoveDraftChange", new { draftId = Model.DraftId })"

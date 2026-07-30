@@ -11,6 +11,9 @@
     };
     var settingsError = TempData["SettingsError"] as string;
     var settingsErrorGroup = TempData["SettingsErrorGroup"] as string;
+    bool hasRestrictedDraftChanges = Model.HasRestrictedDraftChanges == true;
+    bool canManageRestrictedDraft = Model.CanManageRestrictedDraft == true;
+    bool canManageDraftLifecycle = !hasRestrictedDraftChanges || canManageRestrictedDraft;
 }
 <link rel="stylesheet" href="~/css/settings.css" asp-append-version="true" />
 
@@ -37,7 +40,8 @@
             <select id="organization-scope" name="organizationId">
                 @foreach (var scope in Model.Scopes)
                 {
-                    <option value="@scope.OrganizationId" selected="@(scope.OrganizationId == Model.OrganizationId)">@scope.DisplayName</option>
+                    bool isSelectedScope = scope.OrganizationId == Model.OrganizationId;
+                    <option value="@scope.OrganizationId" selected="@isSelectedScope">@scope.DisplayName</option>
                 }
             </select>
         </div>
@@ -46,7 +50,8 @@
             <select id="form-code-scope" name="formCode">
                 @foreach (var form in Model.FormCodes)
                 {
-                    <option value="@form.FormCode" selected="@(form.FormCode == Model.FormCode)">@form.DisplayName</option>
+                    bool isSelectedForm = form.FormCode == Model.FormCode;
+                    <option value="@form.FormCode" selected="@isSelectedForm">@form.DisplayName</option>
                 }
             </select>
         </div>
@@ -73,12 +78,12 @@
         else
         {
             <p><strong>Active shared draft #@Model.ActiveDraft.DraftId</strong>, based on live version @Model.ActiveDraft.BaselineVersion.</p>
-            @if (Model.HasRestrictedDraftChanges && !Model.CanManageRestrictedDraft)
+            @if (hasRestrictedDraftChanges && !canManageRestrictedDraft)
             {
                 <p class="validation-summary" role="status">Restricted changes exist. A global administrator must commit, discard, preview, or remove those restricted changes.</p>
             }
             <div class="button-row">
-            @if (!Model.HasRestrictedDraftChanges || Model.CanManageRestrictedDraft)
+            @if (canManageDraftLifecycle)
             {
                 <form asp-action="CommitDraft" asp-route-draftId="@Model.ActiveDraft.DraftId" method="post">
                     @Html.AntiForgeryToken()
@@ -104,7 +109,8 @@
                         }
                         @foreach (var branch in Model.PreviewBranches)
                         {
-                            <option value="@branch.OrganizationId" selected="@(Model.PreviewBranches.Count == 1)">@branch.DisplayName</option>
+                            bool isSelectedOperationalBranch = Model.PreviewBranches.Count == 1;
+                            <option value="@branch.OrganizationId" selected="@isSelectedOperationalBranch">@branch.DisplayName</option>
                         }
                     </select>
                     <label class="inline-check"><input type="checkbox" name="AllowLiveSubmission" value="true" /> Allow real live submission</label>
@@ -119,12 +125,11 @@
                     @foreach (var link in Model.PreviewLinks)
                     {
                         var operationalBranch = Model.PreviewBranches.FirstOrDefault(branch => branch.OrganizationId == link.OperationalBranchId);
-                        var allowsLiveSubmission = Clc.PatronRegistration.Web.Models.PreviewLinkMode
-                            .AllowsLiveSubmission(link.AllowLiveSubmission);
-                        var isRevoked = link.RevokedAtUtc.HasValue;
+                        bool allowsLiveSubmission = link.AllowLiveSubmission;
+                        bool isRevoked = link.RevokedAtUtc.HasValue;
                         <li>
                             Link #@link.PreviewLinkId — @(operationalBranch?.DisplayName ?? $"branch {link.OperationalBranchId}") — @(isRevoked ? "Revoked" : allowsLiveSubmission ? "Active live preview" : "Active safe preview")
-                            @if (!isRevoked && (!Model.HasRestrictedDraftChanges || Model.CanManageRestrictedDraft))
+                            @if (!isRevoked && canManageDraftLifecycle)
                             {
                                 <form asp-action="ReplacePreviewLinkMode" asp-route-previewLinkId="@link.PreviewLinkId" method="post">
                                     @Html.AntiForgeryToken()
@@ -170,7 +175,9 @@
     @foreach (var group in groups)
     {
         var rows = Model.Settings.Where(row => row.Definition.Group == group.Item1).ToList();
-        <details class="dynamic-settings" open="@(rows.Any(row => row.DraftOperation is not null) || group.Item1.ToString().Equals(settingsErrorGroup, StringComparison.OrdinalIgnoreCase))">
+        bool isDynamicGroupOpen = rows.Any(row => row.DraftOperation is not null) ||
+            string.Equals(group.Item1.ToString(), settingsErrorGroup, StringComparison.OrdinalIgnoreCase);
+        <details class="dynamic-settings" open="@isDynamicGroupOpen">
             <summary>@group.Item2 <span>(@rows.Count)</span></summary>
             <div class="settings-list">
                 @foreach (var row in rows)

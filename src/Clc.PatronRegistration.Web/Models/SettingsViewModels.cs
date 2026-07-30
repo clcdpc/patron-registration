@@ -7,11 +7,6 @@ namespace Clc.PatronRegistration.Web.Models;
 public sealed record ScopeOption(int OrganizationId, string DisplayName);
 public sealed record FormCodeOption(string FormCode, string DisplayName, string? Description, int OwnerOrganizationId, bool IsRegistered = true);
 
-public static class PreviewLinkMode
-{
-    public static bool AllowsLiveSubmission(bool? value) => value == true;
-}
-
 public static class SettingEditorDefaults
 {
     public static string ValueFor(SettingDefinition definition, string? value) =>
