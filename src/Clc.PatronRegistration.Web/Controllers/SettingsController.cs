@@ -36,7 +36,7 @@ public sealed class SettingsController(
     {
         Response.Headers.CacheControl = "no-store, no-cache, max-age=0";
         Response.Headers.Pragma = "no-cache";
-        Response.Headers.ReferrerPolicy = "no-referrer";
+        Response.Headers["Referrer-Policy"] = "no-referrer";
         base.OnActionExecuting(context);
     }
 
@@ -604,7 +604,7 @@ public sealed class SettingsController(
     {
         Response.Headers.CacheControl = "no-store, no-cache, max-age=0";
         Response.Headers.Pragma = "no-cache";
-        Response.Headers.ReferrerPolicy = "no-referrer";
+        Response.Headers["Referrer-Policy"] = "no-referrer";
     }
 
     private FormsViewModel BuildFormsViewModel(int libraryId, bool isGlobal) => new()

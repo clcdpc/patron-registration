@@ -119,14 +119,17 @@
                     @foreach (var link in Model.PreviewLinks)
                     {
                         var operationalBranch = Model.PreviewBranches.FirstOrDefault(branch => branch.OrganizationId == link.OperationalBranchId);
+                        var allowsLiveSubmission = Clc.PatronRegistration.Web.Models.PreviewLinkMode
+                            .AllowsLiveSubmission(link.AllowLiveSubmission);
+                        var isRevoked = link.RevokedAtUtc.HasValue;
                         <li>
-                            Link #@link.PreviewLinkId — @(operationalBranch?.DisplayName ?? $"branch {link.OperationalBranchId}") — @(link.RevokedAtUtc.HasValue ? "Revoked" : link.AllowLiveSubmission ? "Active live preview" : "Active safe preview")
-                            @if (!link.RevokedAtUtc.HasValue && (!Model.HasRestrictedDraftChanges || Model.CanManageRestrictedDraft))
+                            Link #@link.PreviewLinkId — @(operationalBranch?.DisplayName ?? $"branch {link.OperationalBranchId}") — @(isRevoked ? "Revoked" : allowsLiveSubmission ? "Active live preview" : "Active safe preview")
+                            @if (!isRevoked && (!Model.HasRestrictedDraftChanges || Model.CanManageRestrictedDraft))
                             {
                                 <form asp-action="ReplacePreviewLinkMode" asp-route-previewLinkId="@link.PreviewLinkId" method="post">
                                     @Html.AntiForgeryToken()
-                                    <input type="hidden" name="allowLiveSubmission" value="@(!link.AllowLiveSubmission)" />
-                                    <button type="submit">Replace with @(link.AllowLiveSubmission ? "safe" : "live") link</button>
+                                    <input type="hidden" name="allowLiveSubmission" value="@(!allowsLiveSubmission)" />
+                                    <button type="submit">Replace with @(allowsLiveSubmission ? "safe" : "live") link</button>
                                     <small>Changing mode revokes this URL and displays a new URL once.</small>
                                 </form>
                                 <form asp-action="RevokePreviewLink" asp-route-previewLinkId="@link.PreviewLinkId" method="post">

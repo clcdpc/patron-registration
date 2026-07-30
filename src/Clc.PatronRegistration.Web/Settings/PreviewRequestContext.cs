@@ -77,7 +77,7 @@ public sealed class PreviewRequestContextMiddleware(RequestDelegate next)
         {
             httpContext.Response.StatusCode = StatusCodes.Status404NotFound;
             httpContext.Response.Headers.CacheControl = "no-store";
-            httpContext.Response.Headers.ReferrerPolicy = "no-referrer";
+            httpContext.Response.Headers["Referrer-Policy"] = "no-referrer";
             return;
         }
         await next(httpContext);

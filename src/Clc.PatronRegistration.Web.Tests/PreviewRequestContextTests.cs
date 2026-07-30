@@ -19,6 +19,52 @@ namespace Clc.PatronRegistration.Tests;
 public class PreviewRequestContextTests
 {
     [TestMethod]
+    public void PreviewController_InvalidResponseSetsPortableSecurityHeaders()
+    {
+        var controller = new PreviewController(
+            Mock.Of<ISettingsAdministrationRepository>(),
+            new PreviewRequestContextAccessor { IsPreviewRequest = true },
+            new TestCache(),
+            Mock.Of<IDbHelper>(),
+            Mock.Of<IPapiClient>(),
+            Mock.Of<IMelissaRestClient>(),
+            Mock.Of<IEmailSender>())
+        {
+            ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() }
+        };
+
+        var result = controller.Submit("invalid", new Registration(Mock.Of<ISettingProvider>()));
+
+        Assert.IsInstanceOfType<NotFoundObjectResult>(result);
+        Assert.AreEqual("no-referrer", controller.Response.Headers["Referrer-Policy"].ToString());
+        Assert.AreEqual("no-store, no-cache, max-age=0", controller.Response.Headers.CacheControl.ToString());
+        Assert.AreEqual("no-cache", controller.Response.Headers.Pragma.ToString());
+    }
+
+    [TestMethod]
+    public async Task InvalidPreviewMiddlewareResponseSetsPortableSecurityHeaders()
+    {
+        var nextCalled = false;
+        var middleware = new PreviewRequestContextMiddleware(_ =>
+        {
+            nextCalled = true;
+            return Task.CompletedTask;
+        });
+        var httpContext = new DefaultHttpContext();
+        httpContext.Request.RouteValues["controller"] = "Preview";
+        httpContext.Request.RouteValues["token"] = "invalid-token";
+        var resolver = new Mock<IPreviewContextResolver>();
+        resolver.Setup(service => service.Resolve("invalid-token")).Returns((PreviewRequestContext?)null);
+
+        await middleware.InvokeAsync(httpContext, new PreviewRequestContextAccessor(), resolver.Object);
+
+        Assert.IsFalse(nextCalled);
+        Assert.AreEqual(StatusCodes.Status404NotFound, httpContext.Response.StatusCode);
+        Assert.AreEqual("no-store", httpContext.Response.Headers.CacheControl.ToString());
+        Assert.AreEqual("no-referrer", httpContext.Response.Headers["Referrer-Policy"].ToString());
+    }
+
+    [TestMethod]
     public void PreviewMiddleware_RedactsTokenFromApplicationRequestDiagnostics()
     {
         const string token = "recognizable-preview-token-for-redaction";

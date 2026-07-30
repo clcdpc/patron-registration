@@ -166,7 +166,7 @@ public sealed class PreviewController(
 
     private void SetSecurityHeaders()
     {
-        Response.Headers.ReferrerPolicy = "no-referrer";
+        Response.Headers["Referrer-Policy"] = "no-referrer";
         Response.Headers.CacheControl = "no-store, no-cache, max-age=0";
         Response.Headers.Pragma = "no-cache";
     }

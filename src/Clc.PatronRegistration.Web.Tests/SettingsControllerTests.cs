@@ -8,6 +8,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Routing;
 using Microsoft.AspNetCore.Mvc.ViewFeatures;
+using Microsoft.AspNetCore.Mvc.Filters;
 using System.Reflection;
 using Microsoft.Extensions.Options;
 using Moq;
@@ -17,6 +18,15 @@ namespace Clc.PatronRegistration.Tests;
 [TestClass]
 public class SettingsControllerTests
 {
+    [DataTestMethod]
+    [DataRow(true, true)]
+    [DataRow(false, false)]
+    [DataRow(null, false)]
+    public void PreviewLinkMode_NormalizesNullableValuesToSafeDefault(bool? storedValue, bool expected)
+    {
+        Assert.AreEqual(expected, PreviewLinkMode.AllowsLiveSubmission(storedValue));
+    }
+
     [TestMethod]
     public void GlobalSettingsModel_RemovesEffectiveOverrideAndStagedSecretValues()
     {
@@ -78,15 +88,20 @@ public class SettingsControllerTests
     [TestMethod]
     public void SettingsController_UsesNoStoreResponsePolicy()
     {
+        var controller = CreateController(new Mock<ISettingsAdministrationRepository>(), LibraryAuthorization());
         var responseCache = typeof(SettingsController).GetCustomAttribute<ResponseCacheAttribute>();
 
         Assert.IsNotNull(responseCache);
         Assert.IsTrue(responseCache.NoStore);
         Assert.AreEqual(ResponseCacheLocation.None, responseCache.Location);
-        var source = File.ReadAllText(Path.Combine(FindRepositoryRoot(),
-            "src/Clc.PatronRegistration.Web/Controllers/SettingsController.cs"));
-        StringAssert.Contains(source, "no-store, no-cache, max-age=0");
-        StringAssert.Contains(source, "no-referrer");
+        controller.OnActionExecuting(new ActionExecutingContext(
+            controller.ControllerContext,
+            [],
+            new Dictionary<string, object?>(),
+            controller));
+        Assert.AreEqual("no-store, no-cache, max-age=0", controller.Response.Headers.CacheControl.ToString());
+        Assert.AreEqual("no-cache", controller.Response.Headers.Pragma.ToString());
+        Assert.AreEqual("no-referrer", controller.Response.Headers["Referrer-Policy"].ToString());
     }
 
     [TestMethod]
@@ -270,7 +285,7 @@ public class SettingsControllerTests
         Assert.IsInstanceOfType<ViewResult>(result);
         Assert.AreEqual("no-store, no-cache, max-age=0", controller.Response.Headers.CacheControl.ToString());
         Assert.AreEqual("no-cache", controller.Response.Headers.Pragma.ToString());
-        Assert.AreEqual("no-referrer", controller.Response.Headers.ReferrerPolicy.ToString());
+        Assert.AreEqual("no-referrer", controller.Response.Headers["Referrer-Policy"].ToString());
         Assert.IsNotNull(typeof(SettingsController).GetMethod(nameof(SettingsController.CreatePreviewLink))!
             .GetCustomAttributes(typeof(ResponseCacheAttribute), true)
             .Cast<ResponseCacheAttribute>()
@@ -706,17 +721,6 @@ public class SettingsControllerTests
         authorization.Setup(service => service.CanManage(It.IsAny<ClaimsPrincipal>(), 3, It.IsAny<bool>()))
             .Returns((ClaimsPrincipal user, int organizationId, bool sensitive) => !sensitive);
         return authorization;
-    }
-
-    private static string FindRepositoryRoot()
-    {
-        var directory = new DirectoryInfo(AppContext.BaseDirectory);
-        while (directory is not null && !Directory.Exists(Path.Combine(directory.FullName,
-                   "src/Clc.PatronRegistration.Web")))
-        {
-            directory = directory.Parent;
-        }
-        return directory?.FullName ?? throw new DirectoryNotFoundException("Could not locate the repository root.");
     }
 
     private static SettingsController CreateController(
