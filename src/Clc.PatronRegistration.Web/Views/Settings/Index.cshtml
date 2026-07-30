@@ -123,10 +123,11 @@
                             Link #@link.PreviewLinkId — @(operationalBranch?.DisplayName ?? $"branch {link.OperationalBranchId}") — @(link.RevokedAtUtc.HasValue ? "Revoked" : link.AllowLiveSubmission ? "Active live preview" : "Active safe preview")
                             @if (!link.RevokedAtUtc.HasValue && (!Model.HasRestrictedDraftChanges || Model.CanManageRestrictedDraft))
                             {
-                                <form asp-action="ToggleLiveSubmission" asp-route-previewLinkId="@link.PreviewLinkId" method="post">
+                                <form asp-action="ReplacePreviewLinkMode" asp-route-previewLinkId="@link.PreviewLinkId" method="post">
                                     @Html.AntiForgeryToken()
                                     <input type="hidden" name="allowLiveSubmission" value="@(!link.AllowLiveSubmission)" />
-                                    <button type="submit">@(link.AllowLiveSubmission ? "Disable live submission" : "Enable live submission")</button>
+                                    <button type="submit">Replace with @(link.AllowLiveSubmission ? "safe" : "live") link</button>
+                                    <small>Changing mode revokes this URL and displays a new URL once.</small>
                                 </form>
                                 <form asp-action="RevokePreviewLink" asp-route-previewLinkId="@link.PreviewLinkId" method="post">
                                     @Html.AntiForgeryToken()

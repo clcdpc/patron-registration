@@ -11,6 +11,66 @@ namespace Clc.PatronRegistration.Tests;
 public class SettingsAdministrationTests
 {
     [DataTestMethod]
+    [DataRow("<img src=x onerror=alert(1)>")]
+    [DataRow("<script>alert(1)</script>")]
+    [DataRow("Name onerror=alert(1)")]
+    [DataRow("Line one\nLine two")]
+    [DataRow("Tab\tlabel")]
+    public void LabelCatalog_RejectsMarkupAndControlCharacters(string value)
+    {
+        var definition = new SettingCatalog().All.Single(setting => setting.Key == "label.NameFirst");
+
+        Assert.IsNotNull(definition.Validate(value));
+    }
+
+    [DataTestMethod]
+    [DataRow("Children's name & pronouns")]
+    [DataRow("Téléphone — résidence")]
+    [DataRow("姓・名")]
+    public void LabelCatalog_AcceptsPunctuationAndNonAsciiText(string value)
+    {
+        var definition = new SettingCatalog().All.Single(setting => setting.Key == "label.NameFirst");
+
+        Assert.IsNull(definition.Validate(value));
+    }
+
+    [TestMethod]
+    public void SensitiveUpsert_RequiresCompleteNonemptyReplacement()
+    {
+        var definition = new SettingCatalog().All.Single(setting => setting.Key == "postmark_api_key");
+
+        Assert.IsNotNull(definition.Validate(string.Empty));
+        Assert.IsNull(definition.Validate("complete-replacement-secret"));
+    }
+
+    [TestMethod]
+    public void SensitiveEditor_IsAlwaysEmptyAndOnlyRevealsNewlyTypedValue()
+    {
+        var root = FindRepositoryRoot();
+        var partial = File.ReadAllText(Path.Combine(root,
+            "src/Clc.PatronRegistration.Web/Views/Settings/_SettingRow.cshtml"));
+
+        StringAssert.Contains(partial, "definition.IsSensitive ? string.Empty");
+        StringAssert.Contains(partial, "Enter a new value to replace the existing secret");
+        StringAssert.Contains(partial, "Existing values are write-only and cannot be revealed");
+    }
+
+    [TestMethod]
+    public void ValidationErrorDomSinks_UseTextContent()
+    {
+        var root = FindRepositoryRoot();
+        var registrationView = File.ReadAllText(Path.Combine(root,
+            "src/Clc.PatronRegistration.Web/Views/Registration/Create.cshtml"));
+        var validationScript = File.ReadAllText(Path.Combine(root,
+            "src/Clc.PatronRegistration.Web/wwwroot/js/aspnet-validation.js"));
+
+        StringAssert.Contains(registrationView, "li.textContent = element.value");
+        Assert.IsFalse(registrationView.Contains("li.innerHTML = element.value", StringComparison.Ordinal));
+        StringAssert.Contains(validationScript, "li.textContent = this.summary[key]");
+        StringAssert.Contains(validationScript, "spans[i].textContent = message");
+        Assert.IsFalse(validationScript.Contains("li.innerHTML = this.summary[key]", StringComparison.Ordinal));
+    }
+    [DataTestMethod]
     [DataRow("metadata")]
     [DataRow("setting-added")]
     [DataRow("setting-removed")]
@@ -231,6 +291,26 @@ public class SettingsAdministrationTests
                 PreviewLockStep.DraftChanges
             },
             PreviewLockOrder.Required.ToArray());
+    }
+
+    [TestMethod]
+    public void PreviewModeReplacement_UsesDraftThenLinkLockAndNeverUpdatesModeInPlace()
+    {
+        var root = FindRepositoryRoot();
+        var source = File.ReadAllText(Path.Combine(root,
+            "src/Clc.PatronRegistration.Web/Settings/SettingsAdministrationRepository.cs"));
+        var start = source.IndexOf("public long? ReplacePreviewLinkMode", StringComparison.Ordinal);
+        var end = source.IndexOf("public IReadOnlyList<FormCodeMetadata>", start, StringComparison.Ordinal);
+        var method = source[start..end];
+
+        var draftAndLinkLock = method.IndexOf("LockPreviewLinkDraft", StringComparison.Ordinal);
+        var revoke = method.IndexOf("set RevokedAtUtc=SYSUTCDATETIME()", StringComparison.Ordinal);
+        var replacementInsert = method.IndexOf("insert dbo.RegistrationSettingPreviewLinks", StringComparison.Ordinal);
+        Assert.IsTrue(draftAndLinkLock >= 0 && revoke > draftAndLinkLock && replacementInsert > revoke);
+        Assert.IsFalse(method.Contains("set AllowLiveSubmission=", StringComparison.OrdinalIgnoreCase));
+        StringAssert.Contains(method, "replacementTokenHash");
+        StringAssert.Contains(method, "current.OperationalBranchId");
+        StringAssert.Contains(method, "current.ExpiresAtUtc");
     }
 
     [DataTestMethod]

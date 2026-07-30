@@ -8,12 +8,14 @@ using Clc.PatronRegistration.Web.Settings;
 using Clc.Polaris.Api;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc.Filters;
 using Microsoft.Extensions.Options;
 using Microsoft.Data.SqlClient;
 
 namespace Clc.PatronRegistration.Web.Controllers;
 
 [Authorize]
+[ResponseCache(NoStore = true, Location = ResponseCacheLocation.None)]
 [Route("settings")]
 public sealed class SettingsController(
     ISettingsAuthorizationService authorization,
@@ -29,6 +31,14 @@ public sealed class SettingsController(
     private readonly SettingsAdministrationOptions settingsOptions = options.Value;
     private IReadOnlyDictionary<string, SettingDefinition> CatalogByKey =>
         catalog.All.ToDictionary(setting => setting.Key, StringComparer.OrdinalIgnoreCase);
+
+    public override void OnActionExecuting(ActionExecutingContext context)
+    {
+        Response.Headers.CacheControl = "no-store, no-cache, max-age=0";
+        Response.Headers.Pragma = "no-cache";
+        Response.Headers.ReferrerPolicy = "no-referrer";
+        base.OnActionExecuting(context);
+    }
 
     [HttpGet("")]
     public IActionResult Index(int? organizationId, string formCode = "")
@@ -56,11 +66,13 @@ public sealed class SettingsController(
         {
             var definition = visibleSettings[index];
             var draftChange = draft?.Changes.FirstOrDefault(change => change.Key.Equals(definition.Key, StringComparison.OrdinalIgnoreCase));
+            var resolution = resolver.Resolve(cache.SettingsCache, definition.Key, target, libraryId, formCode,
+                settingsOptions.SystemOrganizationId);
             rows.Add(new SettingRowViewModel(
                 $"setting-{index}",
                 definition,
-                resolver.Resolve(cache.SettingsCache, definition.Key, target, libraryId, formCode, settingsOptions.SystemOrganizationId),
-                draftChange?.Value,
+                definition.IsSensitive ? SanitizeSensitiveResolution(resolution) : resolution,
+                definition.IsSensitive ? null : draftChange?.Value,
                 draftChange?.Operation,
                 draft?.DraftId));
         }
@@ -73,7 +85,7 @@ public sealed class SettingsController(
             FormCode = formCode,
             IsGlobal = principal.IsGlobal,
             ScopeVersion = repository.GetVersion(target, formCode),
-            ActiveDraft = draft,
+            ActiveDraft = draft is null ? null : SanitizeDraftForView(draft, principal.IsGlobal),
             HasRestrictedDraftChanges = draft is not null && DraftContainsSensitiveChanges(draft),
             CanManageRestrictedDraft = principal.IsGlobal,
             PreviewLinks = draft is null ? [] : repository.GetPreviewLinks(draft.DraftId),
@@ -84,6 +96,23 @@ public sealed class SettingsController(
         };
         return View(model);
     }
+
+    private static ResolvedSetting SanitizeSensitiveResolution(ResolvedSetting resolution) => resolution with
+    {
+        EffectiveValue = null,
+        CurrentOverrideValue = null
+    };
+
+    private SettingDraft SanitizeDraftForView(SettingDraft draft, bool includeSensitiveMetadata) => draft with
+    {
+        Changes = draft.Changes
+            .Where(change => includeSensitiveMetadata ||
+                !catalog.TryGet(change.Key, out var definition) || !definition.IsSensitive)
+            .Select(change => catalog.TryGet(change.Key, out var definition) && definition.IsSensitive
+                ? change with { Value = null }
+                : change)
+            .ToList()
+    };
 
     [HttpPost("direct-save")]
     [ValidateAntiForgeryToken]
@@ -173,6 +202,12 @@ public sealed class SettingsController(
         catch (DBConcurrencyException exception)
         {
             return Conflict(exception.Message);
+        }
+        catch (InvalidOperationException exception)
+        {
+            repository.WriteAudit("ValidationFailed", false,
+                CreateAudit(request.OrganizationId, request.FormCode), "Draft changes were invalid.", draftId);
+            return BadRequest(exception.Message);
         }
         return RedirectToAction(nameof(Index), new { organizationId = request.OrganizationId, formCode = request.FormCode });
     }
@@ -351,7 +386,7 @@ public sealed class SettingsController(
 
     [HttpPost("preview-links/{previewLinkId:long}/live-submission")]
     [ValidateAntiForgeryToken]
-    public IActionResult ToggleLiveSubmission(long previewLinkId, bool allowLiveSubmission)
+    public IActionResult ReplacePreviewLinkMode(long previewLinkId, bool allowLiveSubmission)
     {
         var link = repository.GetPreviewLink(previewLinkId);
         if (link is null)
@@ -363,10 +398,20 @@ public sealed class SettingsController(
             AuditRestrictedDraftRejection(link.OrganizationId, link.FormCode, "Preview live-submission change was rejected.");
             return Forbid();
         }
+        if (link.AllowLiveSubmission == allowLiveSubmission)
+        {
+            return RedirectToAction(nameof(Index), new { organizationId = link.OrganizationId, formCode = link.FormCode });
+        }
+        var replacementToken = previewTokens.Create();
         try
         {
-            repository.TogglePreviewLiveSubmission(previewLinkId, allowLiveSubmission, CatalogByKey,
-                authorization.Describe(User).IsGlobal, CreateAudit(link.OrganizationId, link.FormCode));
+            var replacementId = repository.ReplacePreviewLinkMode(previewLinkId, replacementToken.Hash,
+                allowLiveSubmission, CatalogByKey, authorization.Describe(User).IsGlobal,
+                CreateAudit(link.OrganizationId, link.FormCode));
+            if (!replacementId.HasValue)
+            {
+                return RedirectToAction(nameof(Index), new { organizationId = link.OrganizationId, formCode = link.FormCode });
+            }
         }
         catch (UnauthorizedAccessException)
         {
@@ -377,7 +422,9 @@ public sealed class SettingsController(
         {
             return Conflict(exception.Message);
         }
-        return RedirectToAction(nameof(Index), new { organizationId = link.OrganizationId, formCode = link.FormCode });
+        var previewUrl = Url.Action("Index", "Preview", new { token = replacementToken.Plaintext }, Request.Scheme)!;
+        SetPreviewTokenResponseHeaders();
+        return View("PreviewLinkCreated", model: previewUrl);
     }
 
     [HttpGet("audit")]

@@ -932,7 +932,7 @@ var ValidationService = /** @class */ (function () {
                 var spans = _this.getMessageFor(input);
                 if (spans) {
                     for (var i = 0; i < spans.length; i++) {
-                        spans[i].innerHTML = '';
+                        spans[i].textContent = '';
                     }
                 }
                 delete _this.summary[uid];
@@ -1045,7 +1045,7 @@ var ValidationService = /** @class */ (function () {
                 continue;
             }
             var li = document.createElement('li');
-            li.innerHTML = this.summary[key];
+            li.textContent = this.summary[key];
             ul.appendChild(li);
             renderedMessages.push(this.summary[key]);
         }
@@ -1095,7 +1095,7 @@ var ValidationService = /** @class */ (function () {
         if (spans) {
             for (var i = 0; i < spans.length; i++) {
                 var span = spans[i];
-                spans[i].innerHTML = message;
+                spans[i].textContent = message;
                 this.swapClasses(spans[i], this.ValidationMessageCssClassName, this.ValidationMessageValidCssClassName);
             }
         }
@@ -1119,7 +1119,7 @@ var ValidationService = /** @class */ (function () {
         var spans = this.getMessageFor(input);
         if (spans) {
             for (var i = 0; i < spans.length; i++) {
-                spans[i].innerHTML = '';
+                spans[i].textContent = '';
                 this.swapClasses(spans[i], this.ValidationMessageValidCssClassName, this.ValidationMessageCssClassName);
             }
         }

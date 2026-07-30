@@ -664,7 +664,7 @@
                     messageDiv.appendChild(ul);
                     data.errors.forEach((element) => {
                         var li = document.createElement('li');
-                        li.innerHTML = element.value;
+                        li.textContent = element.value;
                         ul.appendChild(li);
                     });
                 }

@@ -104,6 +104,50 @@ public class SettingsAuthorizationAndCacheTests
         cache.Verify(service => service.RebuildCache(), Times.Exactly(2));
     }
 
+    [TestMethod]
+    public void CacheHelper_ReadsCurrentCollectionsFromConfiguredCacheProvider()
+    {
+        var cache = new MutableCache
+        {
+            OrganizationCache =
+            [
+                new() { OrganizationID = 2, OrganizationCodeID = 2, Name = "Library" },
+                new() { OrganizationID = 3, OrganizationCodeID = 3, ParentOrganizationID = 2, Name = "Old branch" }
+            ],
+            SettingsCache = [new() { OrganizationID = 2, Setting = "registration_text", Value = "old" }]
+        };
+        CacheHelper.Configure(cache);
+        var originalOrganizations = CacheHelper.OrganizationCache;
+        var originalSettings = CacheHelper.SettingsCache;
+
+        cache.OrganizationCache =
+        [
+            new() { OrganizationID = 2, OrganizationCodeID = 2, Name = "Library" },
+            new() { OrganizationID = 4, OrganizationCodeID = 3, ParentOrganizationID = 2, Name = "New branch" }
+        ];
+        cache.SettingsCache = [new() { OrganizationID = 2, Setting = "registration_text", Value = "new" }];
+
+        Assert.AreNotSame(originalOrganizations, CacheHelper.OrganizationCache);
+        Assert.AreNotSame(originalSettings, CacheHelper.SettingsCache);
+        Assert.AreSame(cache.OrganizationCache, CacheHelper.OrganizationCache);
+        Assert.AreSame(cache.SettingsCache, CacheHelper.SettingsCache);
+        Assert.AreEqual("New branch", CacheHelper.GetOrg(4).Name);
+        Assert.AreEqual(4, CacheHelper.GetBranches(2).Single().OrganizationID);
+        Assert.AreEqual("new", CacheHelper.SettingsCache.Single().Value);
+    }
+
+    private sealed class MutableCache : ICache
+    {
+        public List<Clc.PatronRegistration.Configuration.RegistrationFormSetting> SettingsCache { get; set; } = [];
+        public List<Clc.Polaris.Api.Models.OrganizationsGetRow> OrganizationCache { get; set; } = [];
+        public bool IsInitialized => true;
+        public void RebuildCache() { }
+        public Clc.Polaris.Api.Models.OrganizationsGetRow GetOrg(int orgId) =>
+            OrganizationCache.Single(organization => organization.OrganizationID == orgId);
+        public List<Clc.Polaris.Api.Models.OrganizationsGetRow> GetBranches(int orgId) =>
+            OrganizationCache.Where(organization => organization.ParentOrganizationID == orgId).ToList();
+    }
+
     private static ClaimsPrincipal Principal(int organizationId, bool includeRole)
     {
         var claims = new List<Claim> { new("organization", organizationId.ToString()) };

@@ -7,6 +7,8 @@ using Clc.PatronRegistration.Web.Settings;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Routing;
+using Microsoft.AspNetCore.Mvc.ViewFeatures;
+using System.Reflection;
 using Microsoft.Extensions.Options;
 using Moq;
 
@@ -15,6 +17,107 @@ namespace Clc.PatronRegistration.Tests;
 [TestClass]
 public class SettingsControllerTests
 {
+    [TestMethod]
+    public void GlobalSettingsModel_RemovesEffectiveOverrideAndStagedSecretValues()
+    {
+        const string effectiveSecret = "effective-postmark-secret-value";
+        const string stagedSecret = "staged-postmark-secret-value";
+        var cache = new TestCache
+        {
+            SettingsCache =
+            [
+                new() { OrganizationID = 1, FormCode = string.Empty, Setting = "postmark_api_key", Value = effectiveSecret }
+            ]
+        };
+        var repository = new Mock<ISettingsAdministrationRepository>();
+        repository.Setup(service => service.GetActiveDraft(1, string.Empty)).Returns(new SettingDraft(
+            42, 1, string.Empty, 0, DraftStatus.Active,
+            [new SettingMutation("postmark_api_key", DraftOperation.Upsert, stagedSecret)]));
+        var authorization = new Mock<ISettingsAuthorizationService>();
+        authorization.Setup(service => service.Describe(It.IsAny<ClaimsPrincipal>()))
+            .Returns(new SettingsPrincipal(true, -1, true));
+        authorization.Setup(service => service.CanManage(It.IsAny<ClaimsPrincipal>(), 1, It.IsAny<bool>())).Returns(true);
+        var controller = CreateController(repository, authorization, cache);
+
+        var result = (ViewResult)controller.Index(1);
+        var model = (SettingsIndexViewModel)result.Model!;
+        var row = model.Settings.Single(setting => setting.Definition.Key == "postmark_api_key");
+
+        Assert.IsNull(row.Resolution.EffectiveValue);
+        Assert.IsNull(row.Resolution.CurrentOverrideValue);
+        Assert.IsNull(row.DraftValue);
+        Assert.IsNull(model.ActiveDraft!.Changes.Single(change => change.Key == "postmark_api_key").Value);
+        Assert.IsTrue(row.Resolution.SourceOrganizationId.HasValue);
+    }
+
+    [TestMethod]
+    public void ReplacingPreviewMode_ReturnsOneTimeReplacementUrl()
+    {
+        var repository = new Mock<ISettingsAdministrationRepository>();
+        var draft = NonSensitiveDraft();
+        repository.Setup(service => service.GetDraft(draft.DraftId)).Returns(draft);
+        repository.Setup(service => service.GetPreviewLink(12)).Returns(PreviewLink(draft));
+        repository.Setup(service => service.ReplacePreviewLinkMode(12, It.IsAny<byte[]>(), true,
+                It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), false, It.IsAny<AuditContext>()))
+            .Returns(13);
+        var controller = CreateController(repository, LibraryAuthorization());
+        var url = new Mock<IUrlHelper>();
+        url.Setup(helper => helper.Action(It.IsAny<UrlActionContext>())).Returns("https://example.test/preview/replacement");
+        controller.Url = url.Object;
+
+        var result = controller.ReplacePreviewLinkMode(12, true);
+
+        var view = (ViewResult)result;
+        Assert.AreEqual("PreviewLinkCreated", view.ViewName);
+        Assert.AreEqual("https://example.test/preview/replacement", view.Model);
+        repository.Verify(service => service.ReplacePreviewLinkMode(12,
+            It.Is<byte[]>(hash => hash.Length == 32), true,
+            It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), false, It.IsAny<AuditContext>()), Times.Once);
+    }
+
+    [TestMethod]
+    public void SettingsController_UsesNoStoreResponsePolicy()
+    {
+        var responseCache = typeof(SettingsController).GetCustomAttribute<ResponseCacheAttribute>();
+
+        Assert.IsNotNull(responseCache);
+        Assert.IsTrue(responseCache.NoStore);
+        Assert.AreEqual(ResponseCacheLocation.None, responseCache.Location);
+        var source = File.ReadAllText(Path.Combine(FindRepositoryRoot(),
+            "src/Clc.PatronRegistration.Web/Controllers/SettingsController.cs"));
+        StringAssert.Contains(source, "no-store, no-cache, max-age=0");
+        StringAssert.Contains(source, "no-referrer");
+    }
+
+    [TestMethod]
+    public void DirectAndDraftSave_RejectTheSameMarkupLabel()
+    {
+        const string maliciousLabel = "<img src=x onerror=alert(1)>";
+        var repository = new Mock<ISettingsAdministrationRepository>();
+        repository.Setup(service => service.GetDraft(24)).Returns(NonSensitiveDraft());
+        var controller = CreateController(repository, LibraryAuthorization());
+        var direct = new SaveSettingsRequest
+        {
+            OrganizationId = 3,
+            Changes = [new SettingMutationInput { Key = "label.NameFirst", Value = maliciousLabel }]
+        };
+        var draft = new DraftChangesRequest
+        {
+            OrganizationId = 3,
+            Changes = [new SettingMutationInput { Key = "label.NameFirst", Value = maliciousLabel }]
+        };
+
+        Assert.IsInstanceOfType<RedirectToActionResult>(controller.DirectSave(direct));
+        controller.ModelState.Clear();
+        Assert.IsInstanceOfType<RedirectToActionResult>(controller.SaveDraft(24, draft));
+        repository.Verify(service => service.DirectSave(
+            It.IsAny<int>(), It.IsAny<string>(), It.IsAny<long>(), It.IsAny<IReadOnlyList<SettingMutation>>(),
+            It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), It.IsAny<AuditContext>()), Times.Never);
+        repository.Verify(service => service.SaveDraftChanges(
+            It.IsAny<long>(), It.IsAny<IReadOnlyList<SettingMutation>>(),
+            It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), It.IsAny<AuditContext>()), Times.Never);
+    }
+
     [TestMethod]
     public void CreateDraft_ConcurrentRepositoryChangeReturnsConflict()
     {
@@ -394,7 +497,7 @@ public class SettingsControllerTests
         Assert.IsInstanceOfType<ForbidResult>(controller.CommitDraft(draft.DraftId, 3));
         Assert.IsInstanceOfType<ForbidResult>(controller.DiscardDraft(draft.DraftId, 3));
         Assert.IsInstanceOfType<ForbidResult>(controller.CreatePreviewLink(draft.DraftId, new PreviewLinkRequest { OrganizationId = 3, OperationalBranchId = 3 }));
-        Assert.IsInstanceOfType<ForbidResult>(controller.ToggleLiveSubmission(12, true));
+        Assert.IsInstanceOfType<ForbidResult>(controller.ReplacePreviewLinkMode(12, true));
         Assert.IsInstanceOfType<ForbidResult>(controller.RevokePreviewLink(12));
         Assert.IsInstanceOfType<ForbidResult>(controller.RemoveDraftChange(draft.DraftId, 3, string.Empty, "postmark_api_key"));
 
@@ -416,6 +519,8 @@ public class SettingsControllerTests
         Assert.IsFalse(model.CanManageRestrictedDraft);
         Assert.IsFalse(model.Settings.Any(row => row.Definition.IsSensitive));
         Assert.IsFalse(model.Settings.Any(row => row.Definition.Key.Contains("postmark", StringComparison.OrdinalIgnoreCase)));
+        Assert.IsFalse(model.ActiveDraft!.Changes.Any(change =>
+            change.Key.Contains("postmark", StringComparison.OrdinalIgnoreCase)));
     }
 
     [TestMethod]
@@ -436,7 +541,7 @@ public class SettingsControllerTests
         Assert.IsInstanceOfType<RedirectToActionResult>(controller.CommitDraft(draft.DraftId, 3));
         Assert.IsInstanceOfType<RedirectToActionResult>(controller.DiscardDraft(draft.DraftId, 3));
         Assert.IsInstanceOfType<ViewResult>(controller.CreatePreviewLink(draft.DraftId, new PreviewLinkRequest { OrganizationId = 3, OperationalBranchId = 3 }));
-        Assert.IsInstanceOfType<RedirectToActionResult>(controller.ToggleLiveSubmission(12, true));
+        Assert.IsInstanceOfType<RedirectToActionResult>(controller.ReplacePreviewLinkMode(12, true));
         Assert.IsInstanceOfType<RedirectToActionResult>(controller.RevokePreviewLink(12));
         Assert.IsInstanceOfType<RedirectToActionResult>(controller.RemoveDraftChange(draft.DraftId, 3, string.Empty, "postmark_api_key"));
     }
@@ -498,7 +603,7 @@ public class SettingsControllerTests
         repository.Setup(service => service.CreatePreviewLink(24, It.IsAny<byte[]>(), false, 3,
                 It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), false, It.IsAny<AuditContext>()))
             .Throws(new UnauthorizedAccessException());
-        repository.Setup(service => service.TogglePreviewLiveSubmission(12, true,
+        repository.Setup(service => service.ReplacePreviewLinkMode(12, It.IsAny<byte[]>(), true,
                 It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), false, It.IsAny<AuditContext>()))
             .Throws(new UnauthorizedAccessException());
         repository.Setup(service => service.RevokePreviewLink(12,
@@ -511,7 +616,7 @@ public class SettingsControllerTests
 
         Assert.IsInstanceOfType<ForbidResult>(controller.CreatePreviewLink(24,
             new PreviewLinkRequest { OrganizationId = 3, OperationalBranchId = 3 }));
-        Assert.IsInstanceOfType<ForbidResult>(controller.ToggleLiveSubmission(12, true));
+        Assert.IsInstanceOfType<ForbidResult>(controller.ReplacePreviewLinkMode(12, true));
         Assert.IsInstanceOfType<ForbidResult>(controller.RevokePreviewLink(12));
     }
 
@@ -566,7 +671,7 @@ public class SettingsControllerTests
     {
         var repository = RaceRepository();
         repository.Setup(service => service.GetPreviewLink(12)).Returns(PreviewLink(NonSensitiveDraft()));
-        repository.Setup(service => service.TogglePreviewLiveSubmission(12, true,
+        repository.Setup(service => service.ReplacePreviewLinkMode(12, It.IsAny<byte[]>(), true,
                 It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), false, It.IsAny<AuditContext>()))
             .Throws(new System.Data.DBConcurrencyException("The preview link was revoked."));
         repository.Setup(service => service.RevokePreviewLink(12,
@@ -574,7 +679,7 @@ public class SettingsControllerTests
             .Throws(new System.Data.DBConcurrencyException("The preview link was revoked."));
         var controller = CreateController(repository, LibraryAuthorization());
 
-        Assert.IsInstanceOfType<ConflictObjectResult>(controller.ToggleLiveSubmission(12, true));
+        Assert.IsInstanceOfType<ConflictObjectResult>(controller.ReplacePreviewLinkMode(12, true));
         Assert.IsInstanceOfType<ConflictObjectResult>(controller.RevokePreviewLink(12));
     }
 
@@ -603,9 +708,21 @@ public class SettingsControllerTests
         return authorization;
     }
 
+    private static string FindRepositoryRoot()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null && !Directory.Exists(Path.Combine(directory.FullName,
+                   "src/Clc.PatronRegistration.Web")))
+        {
+            directory = directory.Parent;
+        }
+        return directory?.FullName ?? throw new DirectoryNotFoundException("Could not locate the repository root.");
+    }
+
     private static SettingsController CreateController(
         Mock<ISettingsAdministrationRepository> repository,
-        Mock<ISettingsAuthorizationService> authorization)
+        Mock<ISettingsAuthorizationService> authorization,
+        ICache? suppliedCache = null)
     {
         repository.Setup(service => service.GetCacheGeneration()).Returns(1);
         var invalidator = new Mock<ISettingsCacheInvalidator>();
@@ -614,12 +731,13 @@ public class SettingsControllerTests
         branchEligibility.Setup(service => service.IsEligible(It.IsAny<int>(), It.IsAny<int>(), It.IsAny<int>()))
             .Returns((int scopeId, int branchId, int systemId) => branchId == 3);
         var options = Options.Create(new SettingsAdministrationOptions());
-        var formCodeAvailability = new FormCodeAvailabilityService(repository.Object, new TestCache(), options);
+        var cache = suppliedCache ?? new TestCache();
+        var formCodeAvailability = new FormCodeAvailabilityService(repository.Object, cache, options);
         var controller = new SettingsController(
             authorization.Object,
             repository.Object,
             new SettingCatalog(),
-            new TestCache(),
+            cache,
             new PreviewTokenService(),
             branchEligibility.Object,
             formCodeAvailability,
@@ -636,6 +754,10 @@ public class SettingsControllerTests
                 ], "test"))
             }
         };
+        var tempDataProvider = new Mock<ITempDataProvider>();
+        tempDataProvider.Setup(provider => provider.LoadTempData(It.IsAny<HttpContext>()))
+            .Returns(new Dictionary<string, object>());
+        controller.TempData = new TempDataDictionary(controller.HttpContext, tempDataProvider.Object);
         return controller;
     }
 }

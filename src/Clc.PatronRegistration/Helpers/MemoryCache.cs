@@ -15,30 +15,37 @@ namespace Clc.PatronRegistration.Helpers
 {
     public class MemoryCache(IPapiClient papi, IDbHelper db) : ICache
     {
+        private sealed record CacheSnapshot(
+            List<RegistrationFormSetting> Settings,
+            List<OrganizationsGetRow> Organizations);
+
         private readonly object rebuildLock = new();
-        public bool IsInitialized => _settingsCache is not null;
-        private List<RegistrationFormSetting> _settingsCache = null!;
+        private CacheSnapshot? snapshot;
+        public bool IsInitialized => Volatile.Read(ref snapshot) is not null;
         public List<RegistrationFormSetting> SettingsCache
         {
             get
             {
-                if (_settingsCache == null)
+                var current = Volatile.Read(ref snapshot);
+                if (current is null)
                 {
                     RebuildCache();
+                    current = Volatile.Read(ref snapshot);
                 }
-                return _settingsCache ?? [];
+                return current?.Settings ?? [];
             }
         }
-        private List<OrganizationsGetRow> _organizationCache = null!;
         public List<OrganizationsGetRow> OrganizationCache
         {
             get
             {
-                if (_organizationCache == null)
+                var current = Volatile.Read(ref snapshot);
+                if (current is null)
                 {
                     RebuildCache();
+                    current = Volatile.Read(ref snapshot);
                 }
-                return _organizationCache ?? [];
+                return current?.Organizations ?? [];
             }
         }
 
@@ -47,8 +54,9 @@ namespace Clc.PatronRegistration.Helpers
             lock (rebuildLock)
             {
                 var orgResult = papi.OrganizationsGet(OrganizationType.All);
-                _organizationCache = orgResult.Data.OrganizationsGetRows;
-                _settingsCache = db.GetAllSettings().ToList();
+                var organizations = orgResult.Data.OrganizationsGetRows.ToList();
+                var settings = db.GetAllSettings().ToList();
+                Volatile.Write(ref snapshot, new CacheSnapshot(settings, organizations));
             }
         }
         public OrganizationsGetRow GetOrg(int orgId) => OrganizationCache.Single(o => o.OrganizationID == orgId);

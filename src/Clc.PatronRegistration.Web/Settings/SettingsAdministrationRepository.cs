@@ -155,7 +155,7 @@ public interface ISettingsAdministrationRepository
     PreviewLinkRecord? GetPreviewLink(long previewLinkId);
     IReadOnlyList<PreviewLinkRecord> GetPreviewLinks(long draftId);
     void RevokePreviewLink(long previewLinkId, IReadOnlyDictionary<string, SettingDefinition> catalog, bool canManageSensitive, AuditContext audit);
-    void TogglePreviewLiveSubmission(long previewLinkId, bool allowLiveSubmission, IReadOnlyDictionary<string, SettingDefinition> catalog, bool canManageSensitive, AuditContext audit);
+    long? ReplacePreviewLinkMode(long previewLinkId, byte[] replacementTokenHash, bool allowLiveSubmission, IReadOnlyDictionary<string, SettingDefinition> catalog, bool canManageSensitive, AuditContext audit);
     IReadOnlyList<FormCodeMetadata> GetFormCodes(int libraryId, int systemOrganizationId);
     IReadOnlyList<LegacyFormCodeRow> GetLegacyFormCodes();
     void SaveFormCode(FormCodeMetadata metadata, bool isCreate, AuditContext audit);
@@ -256,6 +256,15 @@ output inserted.DraftId values(@organizationId,@formCode,@version,'Active',@acto
         var containedSensitiveChanges = DraftContainsSensitiveChanges(connection, transaction, draftId, catalog);
         foreach (var change in changes)
         {
+            if (!catalog.TryGetValue(change.Key, out var definition))
+            {
+                throw new InvalidOperationException("A submitted draft setting is not recognized.");
+            }
+            var validationError = change.Operation == DraftOperation.Upsert ? definition.Validate(change.Value) : null;
+            if (validationError is not null)
+            {
+                throw new InvalidOperationException($"{definition.DisplayName}: {validationError}");
+            }
             connection.Execute(@"
 update dbo.RegistrationSettingDraftChanges
 set Operation=@operation,Value=@value,ModifiedAtUtc=SYSUTCDATETIME(),ModifiedBy=@actor
@@ -474,26 +483,54 @@ where PreviewLinkId=@previewLinkId and RevokedAtUtc is null
         transaction.Commit();
     }
 
-    public void TogglePreviewLiveSubmission(long previewLinkId, bool allowLiveSubmission, IReadOnlyDictionary<string, SettingDefinition> catalog, bool canManageSensitive, AuditContext audit)
+    public long? ReplacePreviewLinkMode(long previewLinkId, byte[] replacementTokenHash, bool allowLiveSubmission,
+        IReadOnlyDictionary<string, SettingDefinition> catalog, bool canManageSensitive, AuditContext audit)
     {
         using var connection = Open();
         var candidateDraftId = FindPreviewLinkDraftCandidate(connection, previewLinkId);
         using var transaction = connection.BeginTransaction(IsolationLevel.Serializable);
         var draftId = LockPreviewLinkDraft(connection, transaction, previewLinkId, candidateDraftId, DateTime.UtcNow);
         EnsureCanManageRestrictedDraft(connection, transaction, draftId, catalog, canManageSensitive);
-        var updated = connection.Execute(@"
-update dbo.RegistrationSettingPreviewLinks set AllowLiveSubmission=@allowLiveSubmission,ModifiedAtUtc=SYSUTCDATETIME(),ModifiedBy=@actor
-where PreviewLinkId=@previewLinkId and RevokedAtUtc is null
- and exists(select 1 from dbo.RegistrationSettingDrafts d where d.DraftId=dbo.RegistrationSettingPreviewLinks.DraftId and d.Status='Active')",
-            new { previewLinkId, allowLiveSubmission, actor = audit.ActorName ?? "unknown" }, transaction);
-        if (updated != 1)
+        var current = connection.QuerySingle<PreviewLinkModeRow>(@"
+select AllowLiveSubmission,OperationalBranchId,ExpiresAtUtc
+from dbo.RegistrationSettingPreviewLinks with(updlock,holdlock)
+where PreviewLinkId=@previewLinkId and DraftId=@draftId and RevokedAtUtc is null",
+            new { previewLinkId, draftId }, transaction);
+        if (current.AllowLiveSubmission == allowLiveSubmission)
         {
-            InsertAudit(connection, transaction, "PreviewLiveSubmissionToggleFailed", false, audit, "The preview link was revoked or invalidated.", previewLinkId: previewLinkId);
             transaction.Commit();
+            return null;
+        }
+
+        var actor = audit.ActorName ?? "unknown";
+        var revoked = connection.Execute(@"
+update dbo.RegistrationSettingPreviewLinks
+set RevokedAtUtc=SYSUTCDATETIME(),RevokedBy=@actor,ModifiedAtUtc=SYSUTCDATETIME(),ModifiedBy=@actor
+where PreviewLinkId=@previewLinkId and DraftId=@draftId and RevokedAtUtc is null",
+            new { previewLinkId, draftId, actor }, transaction);
+        if (revoked != 1)
+        {
             throw new DBConcurrencyException("The preview link was revoked or invalidated.");
         }
-        InsertAudit(connection, transaction, "PreviewLiveSubmissionToggled", true, audit, previewLinkId: previewLinkId, metadataJson: $"{{\"enabled\":{allowLiveSubmission.ToString().ToLowerInvariant()}}}");
+        var replacementId = connection.QuerySingle<long>(@"
+insert dbo.RegistrationSettingPreviewLinks(
+ DraftId,TokenHash,AllowLiveSubmission,OperationalBranchId,CreatedBy,ModifiedBy,ExpiresAtUtc)
+output inserted.PreviewLinkId
+values(@draftId,@replacementTokenHash,@allowLiveSubmission,@operationalBranchId,@actor,@actor,@expiresAtUtc)",
+            new
+            {
+                draftId,
+                replacementTokenHash,
+                allowLiveSubmission,
+                current.OperationalBranchId,
+                actor,
+                current.ExpiresAtUtc
+            }, transaction);
+        InsertAudit(connection, transaction, "PreviewLinkModeReplaced", true, audit, draftId: draftId,
+            previewLinkId: replacementId,
+            metadataJson: $"{{\"replacedPreviewLinkId\":{previewLinkId},\"liveSubmission\":{allowLiveSubmission.ToString().ToLowerInvariant()}}}");
         transaction.Commit();
+        return replacementId;
     }
 
     public IReadOnlyList<FormCodeMetadata> GetFormCodes(int libraryId, int systemOrganizationId)
@@ -934,4 +971,5 @@ values(
 
     private sealed record DraftRow(long DraftId, int OrganizationId, string FormCode, long BaselineVersion, string Status);
     private sealed record DraftChangeRow(string SettingKey, string Operation, string? Value);
+    private sealed record PreviewLinkModeRow(bool AllowLiveSubmission, int OperationalBranchId, DateTime? ExpiresAtUtc);
 }

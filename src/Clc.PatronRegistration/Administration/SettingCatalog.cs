@@ -61,7 +61,21 @@ public sealed record SettingDefinition(string Key, string DisplayName, string De
         }
         if (value.Length == 0)
         {
-            return AllowEmpty ? null : "An empty override is not valid for this setting type. Remove the override to inherit instead.";
+            return AllowEmpty && !IsSensitive
+                ? null
+                : "An empty override is not valid for this setting. Remove the override to inherit instead.";
+        }
+        if (Group == SettingGroup.Label)
+        {
+            if (value.Length > 200)
+            {
+                return "Labels cannot exceed 200 characters.";
+            }
+            if (value.Contains('<') || value.Contains('>') || value.Any(char.IsControl) ||
+                Regex.IsMatch(value, @"\b(?:on[a-z]+|style|src|href)\s*=", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+            {
+                return "Labels must be single-line plain text without markup or control characters.";
+            }
         }
         return ValueType switch
         {

@@ -6,7 +6,7 @@
     var token = Model.Token;
     var inputId = $"{token}-value";
     var operationId = $"{token}-operation";
-    var editorValue = Model.DraftOperation == DraftOperation.Upsert
+    var editorValue = definition.IsSensitive ? string.Empty : Model.DraftOperation == DraftOperation.Upsert
         ? Model.DraftValue
         : resolution.OwnsOverride ? resolution.CurrentOverrideValue : resolution.EffectiveValue;
     editorValue = Clc.PatronRegistration.Web.Models.SettingEditorDefaults.ValueFor(definition, editorValue);
@@ -30,7 +30,7 @@
     <dl class="setting-source">
         <div>
             <dt>Effective value</dt>
-            <dd>@(definition.IsSensitive ? "••••••••" : resolution.EffectiveValue ?? "Not configured")</dd>
+            <dd>@(definition.IsSensitive ? resolution.SourceOrganizationId.HasValue ? "Configured (hidden)" : "Not configured" : resolution.EffectiveValue ?? "Not configured")</dd>
         </div>
         <div>
             <dt>Inherited source</dt>
@@ -95,10 +95,11 @@
             }
             else
             {
-                <input id="@inputId" class="setting-value" name="Changes[@token].Value" type="@(definition.IsSensitive ? "password" : "text")" value="@editorValue" autocomplete="@(definition.IsSensitive ? "new-password" : "off")" disabled />
+                <input id="@inputId" class="setting-value" name="Changes[@token].Value" type="@(definition.IsSensitive ? "password" : "text")" value="@(definition.IsSensitive ? string.Empty : editorValue)" placeholder="@(definition.IsSensitive ? "Enter a new value to replace the existing secret" : null)" autocomplete="@(definition.IsSensitive ? "new-password" : "off")" disabled />
                 @if (definition.IsSensitive)
                 {
                     <button type="button" class="reveal-secret" aria-controls="@inputId" aria-expanded="false" aria-label="Reveal @definition.DisplayName">Reveal secret</button>
+                    <small>Existing values are write-only and cannot be revealed. Enter a complete replacement.</small>
                 }
             }
         </div>
