@@ -5,6 +5,67 @@
     flex-wrap: wrap
 }
 
+.settings-help {
+    margin-inline: auto;
+    max-width: 58rem
+}
+
+.settings-help section, .settings-help-toc {
+    scroll-margin-top: 1rem;
+    margin-block: 1.5rem
+}
+
+.settings-help-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: .75rem 1.25rem;
+    align-items: center
+}
+
+.settings-help-back {
+    border: 2px solid currentColor;
+    border-radius: .25rem;
+    font-weight: 700;
+    padding: .45rem .7rem
+}
+
+.settings-help-toc {
+    background: #f3f3f3;
+    border: 1px solid #c8c8c8;
+    border-radius: .35rem;
+    padding: .75rem 1rem
+}
+
+.settings-help-toc h2 { margin-top: 0 }
+.settings-help-toc ul { columns: 2; margin-bottom: 0 }
+.settings-help-toc li { break-inside: avoid; margin-block: .3rem }
+
+.settings-help-note, .settings-help-warning {
+    border-left: .35rem solid #4b6475;
+    padding: .7rem 1rem
+}
+
+.settings-help-warning {
+    background: #fff4dc;
+    border-color: #8a5700
+}
+
+.settings-help-warning h3 { margin-top: 0 }
+.settings-help-table-wrap { overflow-x: auto }
+.settings-help-status-table { width: 100% }
+.settings-help-status-table th, .settings-help-status-table td { vertical-align: top }
+
+@media (max-width: 40rem) {
+    .settings-help-toc ul { columns: 1 }
+}
+
+@media print {
+    .settings-help { max-width: none }
+    .settings-help-actions, .settings-help-toc { display: none }
+    .settings-help section { break-inside: avoid }
+    .settings-help a { color: inherit; text-decoration: underline }
+}
+
 .settings-header {
     justify-content: space-between;
     margin-bottom: .5rem

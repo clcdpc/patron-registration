@@ -19,6 +19,65 @@ namespace Clc.PatronRegistration.Tests;
 [TestClass]
 public class SettingsControllerTests
 {
+    [TestMethod]
+    public void Help_AllowsManagerAndPreservesAuthorizedDefaultFormWithoutRepositoryAccess()
+    {
+        var repository = new Mock<ISettingsAdministrationRepository>(MockBehavior.Strict);
+        repository.Setup(service => service.GetCacheGeneration()).Returns(1);
+        var controller = CreateController(repository, LibraryAuthorization());
+
+        var result = (ViewResult)controller.Help(3, null);
+        var model = (SettingsHelpViewModel)result.Model!;
+
+        Assert.AreEqual(3, model.OrganizationId);
+        Assert.AreEqual(string.Empty, model.FormCode);
+        repository.Verify(service => service.GetCacheGeneration(), Times.Never);
+        repository.VerifyNoOtherCalls();
+    }
+
+    [TestMethod]
+    public void Help_DropsUnauthorizedReturnContext()
+    {
+        var repository = new Mock<ISettingsAdministrationRepository>();
+        var result = (ViewResult)CreateController(repository, LibraryAuthorization()).Help(99, "kids");
+        var model = (SettingsHelpViewModel)result.Model!;
+
+        Assert.IsNull(model.OrganizationId);
+        Assert.AreEqual(string.Empty, model.FormCode);
+        repository.Verify(service => service.GetFormCodes(It.IsAny<int>(), It.IsAny<int>()), Times.Never);
+    }
+
+    [TestMethod]
+    public void Help_DropsUnavailableNamedForm()
+    {
+        var repository = new Mock<ISettingsAdministrationRepository>();
+        repository.Setup(service => service.GetFormCodes(It.IsAny<int>(), It.IsAny<int>())).Returns([]);
+        repository.Setup(service => service.GetLegacyFormCodes()).Returns([]);
+        var result = (ViewResult)CreateController(repository, LibraryAuthorization()).Help(3, "missing");
+        Assert.IsNull(((SettingsHelpViewModel)result.Model!).OrganizationId);
+    }
+
+    [TestMethod]
+    public void Help_ForbidsUserWithoutSettingsRole()
+    {
+        var authorization = new Mock<ISettingsAuthorizationService>();
+        authorization.Setup(service => service.Describe(It.IsAny<ClaimsPrincipal>())).Returns(new SettingsPrincipal(false, 2, false));
+
+        Assert.IsInstanceOfType<ForbidResult>(CreateController(new Mock<ISettingsAdministrationRepository>(), authorization).Help(null));
+    }
+
+    [TestMethod]
+    public void Help_AllowsGlobalAdministratorWithoutResolvingSentinelOrganization()
+    {
+        var authorization = new Mock<ISettingsAuthorizationService>();
+        authorization.Setup(service => service.Describe(It.IsAny<ClaimsPrincipal>())).Returns(new SettingsPrincipal(true, -1, true));
+        var cache = new Mock<ICache>(MockBehavior.Strict);
+        var result = CreateController(new Mock<ISettingsAdministrationRepository>(), authorization, cache.Object).Help(null);
+
+        Assert.IsInstanceOfType<ViewResult>(result);
+        cache.VerifyNoOtherCalls();
+    }
+
     [DataTestMethod]
     [DataRow("2")]
     [DataRow("999")]

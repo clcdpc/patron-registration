@@ -148,6 +148,24 @@ public sealed class SettingsController(
         return $"{GetOrganizationName(resolution.SourceOrganizationId.Value)} — {formName}";
     }
 
+    [HttpGet("help")]
+    public IActionResult Help(int? organizationId, string? formCode = null)
+    {
+        if (RequireManager() is null)
+        {
+            return Forbid();
+        }
+
+        var normalizedFormCode = FormCodeNormalizer.Normalize(formCode);
+        var hasValidReturnContext = organizationId.HasValue &&
+            authorization.CanManage(User, organizationId.Value) &&
+            formCodeAvailability.IsAvailable(organizationId.Value, normalizedFormCode);
+
+        return View(new SettingsHelpViewModel(
+            hasValidReturnContext ? organizationId : null,
+            hasValidReturnContext ? normalizedFormCode : string.Empty));
+    }
+
     private static ResolvedSetting SanitizeSensitiveResolution(ResolvedSetting resolution) => resolution with
     {
         EffectiveValue = null,
