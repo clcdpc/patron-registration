@@ -35,9 +35,11 @@
     <input class="change-key" type="hidden" name="Changes[@token].Key" value="@definition.Key" disabled />
 
     <summary>
-        <span class="setting-name">@definition.DisplayName</span>
-        <span class="summary-value" title="@displayValue">@displayValue</span>
-        <span class="setting-status">@status</span>
+        <span class="setting-summary-content">
+            <span class="setting-name">@definition.DisplayName</span>
+            <span class="summary-value" title="@displayValue">@displayValue</span>
+            <span class="setting-status">@status</span>
+        </span>
     </summary>
     <div class="setting-content">
     <p>@definition.Description</p>

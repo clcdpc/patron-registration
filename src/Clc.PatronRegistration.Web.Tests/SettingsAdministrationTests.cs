@@ -30,7 +30,7 @@ public class SettingsAdministrationTests
     public void Catalog_UsesStaffFriendlyAcronymsAndAlphabetizesDynamicGroups()
     {
         var catalog = new SettingCatalog().All;
-        foreach (var expected in new[] { "CSS file", "Header image URL", "Polaris record set ID", "PAPI duplicate check", "E-card patron code" })
+        foreach (var expected in new[] { "CSS file", "Header image URL", "Custom form footer HTML", "Polaris record set ID", "PAPI duplicate check", "E-card patron code" })
             Assert.IsTrue(catalog.Any(setting => setting.DisplayName == expected), expected);
         foreach (var group in new[] { SettingGroup.Alert, SettingGroup.Label, SettingGroup.Require })
         {

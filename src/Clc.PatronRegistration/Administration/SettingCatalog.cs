@@ -308,6 +308,7 @@ public sealed class SettingCatalog : ISettingCatalog
     private static readonly IReadOnlyDictionary<string, string> DisplayNames = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
     {
         ["css_file"] = "CSS file", ["header_image_url"] = "Header image URL",
+        ["custom_form_footer_html"] = "Custom form footer HTML",
         ["perform_papi_duplicate_bypass"] = "PAPI duplicate check",
         ["ecard_patron_code_id"] = "E-card patron code", ["display_ecard_checkbox"] = "Show e-card option",
         ["ecard_checkbox_label"] = "E-card option label", ["ecard_registration_text"] = "E-card registration text",
@@ -436,11 +437,13 @@ public sealed class SettingCatalog : ISettingCatalog
     private static string Friendly(string key)
     {
         var words = Regex.Replace(key.Replace('_', ' '), "(?<=[a-z0-9])(?=[A-Z])", " ");
-        return CultureInfo.InvariantCulture.TextInfo.ToTitleCase(words)
-            .Replace(" Url", " URL", StringComparison.Ordinal).Replace(" Id", " ID", StringComparison.Ordinal)
-            .Replace(" Api", " API", StringComparison.Ordinal).Replace(" Sms", " SMS", StringComparison.Ordinal)
-            .Replace(" Ecard", "E-card", StringComparison.Ordinal).Replace(" Papi", "PAPI", StringComparison.Ordinal)
-            .Replace(" Css", "CSS", StringComparison.Ordinal);
+        var titled = CultureInfo.InvariantCulture.TextInfo.ToTitleCase(words);
+        return Regex.Replace(titled, @"\b(?:Html|Css|Url|Id|Api|Sms|Papi|Ecard)\b", match => match.Value switch
+        {
+            "Html" => "HTML", "Css" => "CSS", "Url" => "URL", "Id" => "ID",
+            "Api" => "API", "Sms" => "SMS", "Papi" => "PAPI", "Ecard" => "E-card",
+            _ => match.Value
+        });
     }
 
     private static string DescriptionFor(string displayName, SettingValueType type) => type switch
