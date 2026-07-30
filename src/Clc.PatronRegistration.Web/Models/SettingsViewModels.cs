@@ -1,6 +1,7 @@
 using Clc.PatronRegistration.Administration;
 using Clc.PatronRegistration.Configuration;
 using Clc.PatronRegistration.Web.Settings;
+using System.Text.RegularExpressions;
 
 namespace Clc.PatronRegistration.Web.Models;
 
@@ -16,6 +17,57 @@ public static class SettingEditorDefaults
 {
     public static string ValueFor(SettingDefinition definition, string? value) =>
         definition.ValueType == SettingValueType.Boolean && string.IsNullOrEmpty(value) ? "false" : value ?? string.Empty;
+}
+
+public static class SettingValuePresentation
+{
+    public static string Format(SettingDefinition definition, string? value, bool hasValue)
+    {
+        if (!hasValue)
+        {
+            return "Not configured";
+        }
+        if (definition.IsSensitive)
+        {
+            return "Hidden";
+        }
+        if (value is null)
+        {
+            return "Not configured";
+        }
+        if (value.Length == 0)
+        {
+            return "Blank";
+        }
+        return definition.ValueType switch
+        {
+            SettingValueType.Boolean when bool.TryParse(value, out var booleanValue) => booleanValue ? "Yes" : "No",
+            SettingValueType.LongString => Preview(value),
+            SettingValueType.Html => "HTML configured",
+            SettingValueType.EmailTemplate => "Email template configured",
+            _ => value
+        };
+    }
+
+    public static string ForRow(SettingRowViewModel row)
+    {
+        if (row.DraftOperation == DraftOperation.Upsert)
+        {
+            return Format(row.Definition, row.DraftValue, true);
+        }
+        if (row.DraftOperation == DraftOperation.RemoveOverride)
+        {
+            return "Use inherited value";
+        }
+        return Format(row.Definition, row.Resolution.EffectiveValue, row.Resolution.SourceOrganizationId.HasValue);
+    }
+
+    private static string Preview(string value)
+    {
+        const int maximumLength = 160;
+        var normalized = Regex.Replace(value, @"\s+", " ").Trim();
+        return normalized.Length <= maximumLength ? normalized : $"{normalized[..maximumLength].TrimEnd()}…";
+    }
 }
 
 public sealed class SettingsIndexViewModel

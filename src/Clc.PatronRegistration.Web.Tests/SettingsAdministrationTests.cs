@@ -39,6 +39,55 @@ public class SettingsAdministrationTests
         }
     }
 
+    [TestMethod]
+    public void SettingValuePresentation_FormatsMissingBlankBooleanAndDirectValues()
+    {
+        var text = new SettingDefinition("text", "Text", "Text", SettingValueType.ShortString);
+        var boolean = new SettingDefinition("boolean", "Boolean", "Boolean", SettingValueType.Boolean);
+
+        Assert.AreEqual("Not configured", SettingValuePresentation.Format(text, null, false));
+        Assert.AreEqual("Blank", SettingValuePresentation.Format(text, string.Empty, true));
+        Assert.AreEqual("Yes", SettingValuePresentation.Format(boolean, "true", true));
+        Assert.AreEqual("No", SettingValuePresentation.Format(boolean, "false", true));
+        Assert.AreEqual("Leave this page", SettingValuePresentation.Format(text, "Leave this page", true));
+    }
+
+    [TestMethod]
+    public void SettingValuePresentation_UsesSafeTypeSpecificSummaries()
+    {
+        var longText = new SettingDefinition("long", "Long", "Long", SettingValueType.LongString);
+        var html = new SettingDefinition("html", "HTML", "HTML", SettingValueType.Html);
+        var template = new SettingDefinition("template", "Template", "Template", SettingValueType.EmailTemplate);
+        var sensitive = new SettingDefinition("secret", "Secret", "Secret", SettingValueType.ShortString, IsSensitive: true);
+
+        Assert.AreEqual("Several words on one line", SettingValuePresentation.Format(longText, " Several\n words   on\tone line ", true));
+        Assert.AreEqual("HTML configured", SettingValuePresentation.Format(html, "<strong>private markup</strong>", true));
+        Assert.AreEqual("Email template configured", SettingValuePresentation.Format(template, "Hello {{name}}", true));
+        Assert.AreEqual("Hidden", SettingValuePresentation.Format(sensitive, "recognizable-secret", true));
+        Assert.AreEqual("Not configured", SettingValuePresentation.Format(sensitive, null, false));
+    }
+
+    [TestMethod]
+    public void SettingValuePresentation_DraftUpsertUsesStagedValue()
+    {
+        var definition = new SettingDefinition("message", "Message", "Message", SettingValueType.LongString);
+        var resolution = new ResolvedSetting("message", "Live value", 1, "System", string.Empty, false, null, true);
+        var row = new SettingRowViewModel("token", definition, resolution, "Staged\n value", DraftOperation.Upsert, 1);
+
+        Assert.AreEqual("Staged value", SettingValuePresentation.ForRow(row));
+    }
+
+    [TestMethod]
+    public void SettingsView_HasValueHeadingsAndNoBareConfiguredFallback()
+    {
+        var root = FindRepositoryRoot();
+        var index = File.ReadAllText(Path.Combine(root, "src/Clc.PatronRegistration.Web/Views/Settings/Index.cshtml"));
+        var row = File.ReadAllText(Path.Combine(root, "src/Clc.PatronRegistration.Web/Views/Settings/_SettingRow.cshtml"));
+
+        StringAssert.Contains(index, "<span>Setting</span><span>Value</span><span>Status</span>");
+        Assert.IsFalse(row.Contains(">Configured<", StringComparison.Ordinal));
+    }
+
     [DataTestMethod]
     [DataRow("<img src=x onerror=alert(1)>")]
     [DataRow("<script>alert(1)</script>")]

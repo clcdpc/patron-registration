@@ -16,13 +16,9 @@
     editorValue = Clc.PatronRegistration.Web.Models.SettingEditorDefaults.ValueFor(definition, editorValue);
     var safeEffective = definition.IsSensitive ? string.Empty : resolution.EffectiveValue;
     var searchText = $"{definition.DisplayName} {definition.Key} {definition.Description} {safeEffective}".ToLowerInvariant();
-    var displayValue = definition.IsSensitive
-        ? (resolution.SourceOrganizationId.HasValue ? "Hidden" : "Not configured")
-        : definition.ValueType == SettingValueType.Boolean
-            ? (bool.TryParse(resolution.EffectiveValue, out var booleanValue) ? (booleanValue ? "Yes" : "No") : "Not configured")
-            : definition.ValueType is SettingValueType.LongString or SettingValueType.Html or SettingValueType.EmailTemplate
-                ? (string.IsNullOrEmpty(resolution.EffectiveValue) ? "Not configured" : "Configured")
-                : resolution.EffectiveValue ?? "Not configured";
+    var displayValue = Clc.PatronRegistration.Web.Models.SettingValuePresentation.ForRow(Model);
+    var currentDisplayValue = Clc.PatronRegistration.Web.Models.SettingValuePresentation.Format(
+        definition, resolution.EffectiveValue, resolution.SourceOrganizationId.HasValue);
     var status = hasDraftOperation ? "Draft change" : resolution.OwnsOverride ? "Customized here" : "Using inherited value";
 }
 <details class="setting-row" open="@hasDraftOperation"
@@ -46,7 +42,7 @@
     <dl class="setting-source">
         <div>
             <dt>Current value</dt>
-            <dd>@displayValue</dd>
+            <dd>@currentDisplayValue</dd>
         </div>
         <div>
             <dt>Comes from</dt>

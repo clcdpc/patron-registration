@@ -170,6 +170,7 @@
             bool categoryOpen = rows.Any(row => row.DraftOperation is not null);
             <details class="setting-category" open="@categoryOpen">
                 <summary>@category.DisplayName() <span>(@rows.Count)</span></summary>
+                <div class="settings-column-headings"><span>Setting</span><span>Value</span><span>Status</span></div>
                 <div class="settings-list">
                 @foreach (var row in rows) { <partial name="_SettingRow" model="row" /> }
                 </div>
@@ -188,6 +189,7 @@
             {
                 <p class="group-introduction">These messages are saved for future use but are not currently shown on registration forms.</p>
             }
+            <div class="settings-column-headings"><span>Setting</span><span>Value</span><span>Status</span></div>
             <div class="settings-list">
                 @foreach (var row in rows)
                 {
