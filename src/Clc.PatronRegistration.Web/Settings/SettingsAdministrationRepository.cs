@@ -8,15 +8,30 @@ using Microsoft.Data.SqlClient;
 
 namespace Clc.PatronRegistration.Web.Settings;
 
-public sealed record AuditContext(
-    string? ActorId,
-    string? ActorName,
-    int? ActorOrganizationId,
-    int TargetOrganizationId,
-    int TargetLibraryId,
-    string FormCode,
-    string? CorrelationId,
-    string? IpAddress);
+public sealed record AuditContext
+{
+    public AuditContext(string? actorId, string? actorName, int? actorOrganizationId, int targetOrganizationId,
+        int targetLibraryId, string? formCode, string? correlationId, string? ipAddress)
+    {
+        ActorId = actorId;
+        ActorName = actorName;
+        ActorOrganizationId = actorOrganizationId;
+        TargetOrganizationId = targetOrganizationId;
+        TargetLibraryId = targetLibraryId;
+        FormCode = FormCodeNormalizer.Normalize(formCode);
+        CorrelationId = correlationId;
+        IpAddress = ipAddress;
+    }
+
+    public string? ActorId { get; }
+    public string? ActorName { get; }
+    public int? ActorOrganizationId { get; }
+    public int TargetOrganizationId { get; }
+    public int TargetLibraryId { get; }
+    public string FormCode { get; }
+    public string? CorrelationId { get; }
+    public string? IpAddress { get; }
+}
 
 public sealed record FormCodeMetadata(
     int OrganizationId,
@@ -177,6 +192,7 @@ public sealed class SettingsAdministrationRepository(IDbHelperSettings settings)
 
     public long GetVersion(int organizationId, string formCode)
     {
+        formCode = FormCodeNormalizer.Normalize(formCode);
         using var connection = Open();
         return connection.QuerySingleOrDefault<long>(
             "select Version from dbo.RegistrationSettingScopeVersions where OrganizationId=@organizationId and FormCode=@formCode",
@@ -191,6 +207,7 @@ public sealed class SettingsAdministrationRepository(IDbHelperSettings settings)
 
     public SettingDraft? GetActiveDraft(int organizationId, string formCode)
     {
+        formCode = FormCodeNormalizer.Normalize(formCode);
         using var connection = Open();
         var draftId = connection.QuerySingleOrDefault<long?>(
             "select DraftId from dbo.RegistrationSettingDrafts where OrganizationId=@organizationId and FormCode=@formCode and Status='Active'",
@@ -224,6 +241,7 @@ public sealed class SettingsAdministrationRepository(IDbHelperSettings settings)
 
     public long CreateDraft(int organizationId, string formCode, AuditContext audit)
     {
+        formCode = FormCodeNormalizer.Normalize(formCode);
         using var connection = Open();
         using var transaction = connection.BeginTransaction(IsolationLevel.Serializable);
         var existing = connection.QuerySingleOrDefault<long?>(
@@ -320,6 +338,7 @@ if @@ROWCOUNT=0
 
     public void DirectSave(int organizationId, string formCode, long expectedVersion, IReadOnlyList<SettingMutation> changes, IReadOnlyDictionary<string, SettingDefinition> catalog, AuditContext audit)
     {
+        formCode = FormCodeNormalizer.Normalize(formCode);
         using var connection = Open();
         using var transaction = connection.BeginTransaction(IsolationLevel.Serializable);
         EnsureVersionRow(connection, transaction, organizationId, formCode);
@@ -954,7 +973,7 @@ values(
                 audit.ActorOrganizationId,
                 audit.TargetOrganizationId,
                 audit.TargetLibraryId,
-                audit.FormCode,
+                FormCode = FormCodeNormalizer.Normalize(audit.FormCode),
                 settingKey,
                 previousValue,
                 newValue,

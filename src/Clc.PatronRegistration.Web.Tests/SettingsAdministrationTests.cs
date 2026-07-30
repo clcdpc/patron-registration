@@ -11,6 +11,31 @@ namespace Clc.PatronRegistration.Tests;
 public class SettingsAdministrationTests
 {
     [TestMethod]
+    public void FormCodeNormalizer_CanonicalizesOnlyNullAndEmptyDefaults()
+    {
+        Assert.AreEqual(string.Empty, FormCodeNormalizer.Normalize(null));
+        Assert.AreEqual(string.Empty, FormCodeNormalizer.Normalize(string.Empty));
+        Assert.AreEqual(" Adult Form ", FormCodeNormalizer.Normalize(" Adult Form "));
+    }
+
+    [TestMethod]
+    public void SettingsRequests_CanonicalizeNullDefaultFormCodes()
+    {
+        Assert.AreEqual(string.Empty, new SaveSettingsRequest { FormCode = null! }.FormCode);
+        Assert.AreEqual(string.Empty, new DraftChangesRequest { FormCode = null! }.FormCode);
+        Assert.AreEqual(string.Empty, new PreviewLinkRequest { FormCode = null! }.FormCode);
+        Assert.AreEqual(string.Empty, new FormCodeRequest { FormCode = null! }.FormCode);
+    }
+
+    [TestMethod]
+    public void AuditContext_CanonicalizesNullDefaultFormCode()
+    {
+        var audit = new AuditContext(null, null, null, 1, 1, null, null, null);
+
+        Assert.AreEqual(string.Empty, audit.FormCode);
+    }
+
+    [TestMethod]
     public void OrdinaryCatalog_HasOrderedStaffFacingPresentationMetadata()
     {
         var ordinary = new SettingCatalog().All.Where(setting => setting.Group == SettingGroup.Ordinary).ToList();

@@ -43,6 +43,7 @@ public sealed class SettingsController(
     [HttpGet("")]
     public IActionResult Index(int? organizationId, string formCode = "")
     {
+        formCode = FormCodeNormalizer.Normalize(formCode);
         var principal = RequireManager();
         if (principal is null)
         {
@@ -174,6 +175,7 @@ public sealed class SettingsController(
     [ValidateAntiForgeryToken]
     public IActionResult CreateDraft(int organizationId, string formCode = "")
     {
+        formCode = FormCodeNormalizer.Normalize(formCode);
         if (!ValidateScope(organizationId, formCode))
         {
             return Forbid();
@@ -231,6 +233,7 @@ public sealed class SettingsController(
     [ValidateAntiForgeryToken]
     public IActionResult RemoveDraftChange(long draftId, int organizationId, string formCode, string settingKey)
     {
+        formCode = FormCodeNormalizer.Normalize(formCode);
         if (AuthorizedActiveDraft(draftId, organizationId, formCode) is null)
         {
             return DraftUnavailableResult(draftId, organizationId, formCode);
@@ -261,6 +264,7 @@ public sealed class SettingsController(
     [ValidateAntiForgeryToken]
     public IActionResult CommitDraft(long draftId, int organizationId, string formCode = "")
     {
+        formCode = FormCodeNormalizer.Normalize(formCode);
         var draft = AuthorizedActiveDraft(draftId, organizationId, formCode);
         if (draft is null)
         {
@@ -301,6 +305,7 @@ public sealed class SettingsController(
     [ValidateAntiForgeryToken]
     public IActionResult DiscardDraft(long draftId, int organizationId, string formCode = "")
     {
+        formCode = FormCodeNormalizer.Normalize(formCode);
         var draft = AuthorizedActiveDraft(draftId, organizationId, formCode);
         if (draft is null)
         {
@@ -821,7 +826,7 @@ public sealed class SettingsController(
             actor.OrganizationId,
             organizationId,
             targetLibraryId,
-            formCode,
+            FormCodeNormalizer.Normalize(formCode),
             HttpContext.TraceIdentifier,
             Request.GetTrueClientIP());
     }

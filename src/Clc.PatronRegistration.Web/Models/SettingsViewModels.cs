@@ -117,8 +117,9 @@ public sealed record SettingRowViewModel(
 
 public sealed class SaveSettingsRequest
 {
+    private string formCode = string.Empty;
     public int OrganizationId { get; set; }
-    public string FormCode { get; set; } = string.Empty;
+    public string FormCode { get => formCode; set => formCode = FormCodeNormalizer.Normalize(value); }
     public long ExpectedVersion { get; set; }
     public List<SettingMutationInput> Changes { get; set; } = [];
 }
@@ -132,15 +133,17 @@ public sealed class SettingMutationInput
 
 public sealed class DraftChangesRequest
 {
+    private string formCode = string.Empty;
     public int OrganizationId { get; set; }
-    public string FormCode { get; set; } = string.Empty;
+    public string FormCode { get => formCode; set => formCode = FormCodeNormalizer.Normalize(value); }
     public List<SettingMutationInput> Changes { get; set; } = [];
 }
 
 public sealed class PreviewLinkRequest
 {
+    private string formCode = string.Empty;
     public int OrganizationId { get; set; }
-    public string FormCode { get; set; } = string.Empty;
+    public string FormCode { get => formCode; set => formCode = FormCodeNormalizer.Normalize(value); }
     public bool AllowLiveSubmission { get; set; }
     public int? OperationalBranchId { get; set; }
 }
@@ -156,8 +159,9 @@ public sealed class FormsViewModel
 
 public sealed class FormCodeRequest
 {
+    private string formCode = string.Empty;
     public int OrganizationId { get; set; }
-    public string FormCode { get; set; } = string.Empty;
+    public string FormCode { get => formCode; set => formCode = FormCodeNormalizer.Normalize(value); }
     public string DisplayName { get; set; } = string.Empty;
     public string? Description { get; set; }
 }
