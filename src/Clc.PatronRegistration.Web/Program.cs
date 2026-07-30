@@ -65,6 +65,7 @@ namespace Clc.PatronRegistration.Web
             builder.Services.AddSingleton<IPreviewBranchEligibilityService, PreviewBranchEligibilityService>();
             builder.Services.AddSingleton<IFormCodeAvailabilityService, FormCodeAvailabilityService>();
             builder.Services.AddScoped<IPreviewRequestContextAccessor, PreviewRequestContextAccessor>();
+            builder.Services.AddScoped<ISettingsPageBrandingContextAccessor, SettingsPageBrandingContextAccessor>();
             builder.Services.AddScoped<IRequestSettingProviderResolver, RequestSettingProviderResolver>();
             builder.Services.AddSingleton<IPreviewContextResolver, PreviewContextResolver>();
             builder.Services.AddScoped<IEmailSenderFactory, EmailSenderFactory>();

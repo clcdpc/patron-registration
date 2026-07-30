@@ -145,6 +145,61 @@ public class SettingsControllerTests
         Assert.AreEqual("no-referrer", controller.Response.Headers["Referrer-Policy"].ToString());
     }
 
+    [DataTestMethod]
+    [DataRow(1, "named-form")]
+    [DataRow(3, "")]
+    public void SettingsController_BrandingUsesAuthenticatedOrganizationNotEditingTarget(int selectedOrganizationId, string selectedFormCode)
+    {
+        var branding = new SettingsPageBrandingContextAccessor();
+        var controller = CreateController(new Mock<ISettingsAdministrationRepository>(), LibraryAuthorization(), brandingAccessor: branding);
+        controller.ControllerContext.HttpContext.Request.QueryString =
+            new QueryString($"?organizationId={selectedOrganizationId}&formCode={selectedFormCode}");
+
+        controller.OnActionExecuting(new ActionExecutingContext(
+            controller.ControllerContext, [], new Dictionary<string, object?>(), controller));
+
+        Assert.AreEqual(new SettingsPageBrandingContext(2, 2), branding.Current);
+    }
+
+    [TestMethod]
+    public void GlobalAdministrator_BrandingStillUsesTheirClaimOrganization()
+    {
+        var organizations = new List<OrganizationsGetRow>
+        {
+            new() { OrganizationID = 1, OrganizationCodeID = 1, Name = "System" },
+            new() { OrganizationID = -1, OrganizationCodeID = 2, Name = "Global administrator's library" },
+            new() { OrganizationID = 3, OrganizationCodeID = 3, ParentOrganizationID = 2, Name = "Selected branch" }
+        };
+        var cache = new Mock<ICache>();
+        cache.SetupGet(value => value.OrganizationCache).Returns(organizations);
+        cache.SetupGet(value => value.SettingsCache).Returns([]);
+        var authorization = new Mock<ISettingsAuthorizationService>();
+        authorization.Setup(service => service.Describe(It.IsAny<ClaimsPrincipal>()))
+            .Returns(new SettingsPrincipal(true, -1, true));
+        var branding = new SettingsPageBrandingContextAccessor();
+        var controller = CreateController(new Mock<ISettingsAdministrationRepository>(), authorization, cache.Object, branding);
+
+        controller.OnActionExecuting(new ActionExecutingContext(
+            controller.ControllerContext, [], new Dictionary<string, object?> { ["organizationId"] = 3 }, controller));
+
+        Assert.AreEqual(new SettingsPageBrandingContext(-1, -1), branding.Current);
+    }
+
+    [TestMethod]
+    public void MissingOrganizationClaim_DoesNotCreateSystemBrandingFallback()
+    {
+        var authorization = new Mock<ISettingsAuthorizationService>();
+        authorization.Setup(service => service.Describe(It.IsAny<ClaimsPrincipal>()))
+            .Returns(new SettingsPrincipal(true, null, false));
+        var branding = new SettingsPageBrandingContextAccessor();
+        var controller = CreateController(new Mock<ISettingsAdministrationRepository>(), authorization, brandingAccessor: branding);
+
+        controller.OnActionExecuting(new ActionExecutingContext(
+            controller.ControllerContext, [], new Dictionary<string, object?> { ["organizationId"] = 1 }, controller));
+
+        Assert.IsNull(branding.Current);
+    }
+
     [TestMethod]
     public void DirectAndDraftSave_RejectTheSameMarkupLabel()
     {
@@ -767,7 +822,8 @@ public class SettingsControllerTests
     private static SettingsController CreateController(
         Mock<ISettingsAdministrationRepository> repository,
         Mock<ISettingsAuthorizationService> authorization,
-        ICache? suppliedCache = null)
+        ICache? suppliedCache = null,
+        ISettingsPageBrandingContextAccessor? brandingAccessor = null)
     {
         repository.Setup(service => service.GetCacheGeneration()).Returns(1);
         var invalidator = new Mock<ISettingsCacheInvalidator>();
@@ -787,9 +843,12 @@ public class SettingsControllerTests
             branchEligibility.Object,
             formCodeAvailability,
             invalidator.Object,
+            brandingAccessor ?? new SettingsPageBrandingContextAccessor(),
             options);
         controller.ControllerContext = new ControllerContext
         {
+            RouteData = new Microsoft.AspNetCore.Routing.RouteData(),
+            ActionDescriptor = new Microsoft.AspNetCore.Mvc.Controllers.ControllerActionDescriptor(),
             HttpContext = new DefaultHttpContext
             {
                 User = new ClaimsPrincipal(new ClaimsIdentity(

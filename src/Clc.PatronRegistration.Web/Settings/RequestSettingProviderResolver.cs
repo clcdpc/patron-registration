@@ -12,6 +12,7 @@ public interface IRequestSettingProviderResolver
 
 public sealed class RequestSettingProviderResolver(
     IPreviewRequestContextAccessor previewContext,
+    ISettingsPageBrandingContextAccessor settingsPageBrandingContext,
     ICache cache,
     IOptions<SettingsAdministrationOptions> options,
     IRegistrationConfiguration registrationConfiguration) : IRequestSettingProviderResolver
@@ -22,6 +23,16 @@ public sealed class RequestSettingProviderResolver(
         {
             return previewContext.Current?.Settings
                 ?? throw new InvalidOperationException("An invalid preview request cannot resolve live settings.");
+        }
+
+        if (settingsPageBrandingContext.Current is { } branding)
+        {
+            return new DbSettingProvider(
+                branding.OrganizationId,
+                cache,
+                string.Empty,
+                options.Value.SystemOrganizationId,
+                branding.LibraryId);
         }
 
         var routeValues = httpContext.Request.RouteValues;

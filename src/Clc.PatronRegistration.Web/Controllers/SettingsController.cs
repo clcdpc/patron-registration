@@ -26,6 +26,7 @@ public sealed class SettingsController(
     IPreviewBranchEligibilityService previewBranchEligibility,
     IFormCodeAvailabilityService formCodeAvailability,
     ISettingsCacheInvalidator cacheInvalidator,
+    ISettingsPageBrandingContextAccessor settingsPageBrandingContext,
     IOptions<SettingsAdministrationOptions> options) : Controller
 {
     private readonly SettingsAdministrationOptions settingsOptions = options.Value;
@@ -37,6 +38,20 @@ public sealed class SettingsController(
         Response.Headers.CacheControl = "no-store, no-cache, max-age=0";
         Response.Headers.Pragma = "no-cache";
         Response.Headers["Referrer-Policy"] = "no-referrer";
+
+        var principal = authorization.Describe(User);
+        if (User.Identity?.IsAuthenticated == true && principal.HasRole && principal.OrganizationId is { } organizationId)
+        {
+            try
+            {
+                var libraryId = cache.OrganizationCache.GetLibrary(organizationId).OrganizationID;
+                settingsPageBrandingContext.Set(organizationId, libraryId);
+            }
+            catch (InvalidOperationException)
+            {
+                context.Result = Forbid();
+            }
+        }
         base.OnActionExecuting(context);
     }
 
