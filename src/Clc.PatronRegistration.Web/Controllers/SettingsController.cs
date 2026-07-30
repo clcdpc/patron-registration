@@ -40,19 +40,39 @@ public sealed class SettingsController(
         Response.Headers["Referrer-Policy"] = "no-referrer";
 
         var principal = authorization.Describe(User);
-        if (User.Identity?.IsAuthenticated == true && principal.HasRole && principal.OrganizationId is { } organizationId)
+        if (User.Identity?.IsAuthenticated == true && principal.HasRole &&
+            (principal.IsGlobal || principal.OrganizationId.HasValue) && !TrySetBrandingContext(principal))
         {
-            try
-            {
-                var libraryId = cache.OrganizationCache.GetLibrary(organizationId).OrganizationID;
-                settingsPageBrandingContext.Set(organizationId, libraryId);
-            }
-            catch (InvalidOperationException)
-            {
-                context.Result = Forbid();
-            }
+            context.Result = Forbid();
         }
         base.OnActionExecuting(context);
+    }
+
+    private bool TrySetBrandingContext(SettingsPrincipal principal)
+    {
+        if (principal.IsGlobal)
+        {
+            settingsPageBrandingContext.Set(
+                settingsOptions.SystemOrganizationId,
+                settingsOptions.SystemOrganizationId);
+            return true;
+        }
+
+        if (principal.OrganizationId is not { } organizationId)
+        {
+            return false;
+        }
+
+        try
+        {
+            var libraryId = cache.OrganizationCache.GetLibrary(organizationId).OrganizationID;
+            settingsPageBrandingContext.Set(organizationId, libraryId);
+            return true;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
     }
 
     [HttpGet("")]

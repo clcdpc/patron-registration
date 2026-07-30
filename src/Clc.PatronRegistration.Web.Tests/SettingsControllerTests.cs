@@ -161,13 +161,15 @@ public class SettingsControllerTests
         Assert.AreEqual(new SettingsPageBrandingContext(2, 2), branding.Current);
     }
 
-    [TestMethod]
-    public void GlobalAdministrator_BrandingStillUsesTheirClaimOrganization()
+    [DataTestMethod]
+    [DataRow(2, "")]
+    [DataRow(3, "kids")]
+    public void GlobalAdministrator_UsesSystemBrandingWithoutSentinelCacheOrganization(int editingOrganizationId, string editingFormCode)
     {
         var organizations = new List<OrganizationsGetRow>
         {
             new() { OrganizationID = 1, OrganizationCodeID = 1, Name = "System" },
-            new() { OrganizationID = -1, OrganizationCodeID = 2, Name = "Global administrator's library" },
+            new() { OrganizationID = 2, OrganizationCodeID = 2, Name = "Library" },
             new() { OrganizationID = 3, OrganizationCodeID = 3, ParentOrganizationID = 2, Name = "Selected branch" }
         };
         var cache = new Mock<ICache>();
@@ -179,10 +181,17 @@ public class SettingsControllerTests
         var branding = new SettingsPageBrandingContextAccessor();
         var controller = CreateController(new Mock<ISettingsAdministrationRepository>(), authorization, cache.Object, branding);
 
-        controller.OnActionExecuting(new ActionExecutingContext(
-            controller.ControllerContext, [], new Dictionary<string, object?> { ["organizationId"] = 3 }, controller));
+        var context = new ActionExecutingContext(
+            controller.ControllerContext, [], new Dictionary<string, object?>
+            {
+                ["organizationId"] = editingOrganizationId,
+                ["formCode"] = editingFormCode
+            }, controller);
+        controller.OnActionExecuting(context);
 
-        Assert.AreEqual(new SettingsPageBrandingContext(-1, -1), branding.Current);
+        Assert.IsNull(context.Result);
+        Assert.AreEqual(new SettingsPageBrandingContext(1, 1), branding.Current);
+        Assert.IsFalse(organizations.Any(organization => organization.OrganizationID == -1));
     }
 
     [TestMethod]
@@ -196,6 +205,53 @@ public class SettingsControllerTests
 
         controller.OnActionExecuting(new ActionExecutingContext(
             controller.ControllerContext, [], new Dictionary<string, object?> { ["organizationId"] = 1 }, controller));
+
+        Assert.IsNull(branding.Current);
+    }
+
+    [TestMethod]
+    public void BranchAdministrator_UsesBranchAndResolvedLibraryForBranding()
+    {
+        var authorization = new Mock<ISettingsAuthorizationService>();
+        authorization.Setup(service => service.Describe(It.IsAny<ClaimsPrincipal>()))
+            .Returns(new SettingsPrincipal(true, 3, false));
+        var branding = new SettingsPageBrandingContextAccessor();
+        var controller = CreateController(new Mock<ISettingsAdministrationRepository>(), authorization, brandingAccessor: branding);
+
+        controller.OnActionExecuting(new ActionExecutingContext(
+            controller.ControllerContext, [], new Dictionary<string, object?> { ["organizationId"] = 1 }, controller));
+
+        Assert.AreEqual(new SettingsPageBrandingContext(3, 2), branding.Current);
+    }
+
+    [TestMethod]
+    public void InvalidNonGlobalOrganization_IsForbiddenWithoutBranding()
+    {
+        var authorization = new Mock<ISettingsAuthorizationService>();
+        authorization.Setup(service => service.Describe(It.IsAny<ClaimsPrincipal>()))
+            .Returns(new SettingsPrincipal(true, 999, false));
+        var branding = new SettingsPageBrandingContextAccessor();
+        var controller = CreateController(new Mock<ISettingsAdministrationRepository>(), authorization, brandingAccessor: branding);
+        var context = new ActionExecutingContext(
+            controller.ControllerContext, [], new Dictionary<string, object?>(), controller);
+
+        controller.OnActionExecuting(context);
+
+        Assert.IsInstanceOfType<ForbidResult>(context.Result);
+        Assert.IsNull(branding.Current);
+    }
+
+    [TestMethod]
+    public void PrincipalWithoutSettingsRole_DoesNotEstablishBranding()
+    {
+        var authorization = new Mock<ISettingsAuthorizationService>();
+        authorization.Setup(service => service.Describe(It.IsAny<ClaimsPrincipal>()))
+            .Returns(new SettingsPrincipal(false, 2, false));
+        var branding = new SettingsPageBrandingContextAccessor();
+        var controller = CreateController(new Mock<ISettingsAdministrationRepository>(), authorization, brandingAccessor: branding);
+
+        controller.OnActionExecuting(new ActionExecutingContext(
+            controller.ControllerContext, [], new Dictionary<string, object?>(), controller));
 
         Assert.IsNull(branding.Current);
     }
