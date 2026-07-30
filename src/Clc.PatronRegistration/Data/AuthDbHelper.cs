@@ -13,7 +13,7 @@ namespace Clc.PatronRegistration.Data
     public class AuthDbHelper
     {
         AppSettings config;
-        public string ConnectionString => $"Server={config.Database.Hostname};Database=clc_web_membership;Trusted_Connection=True;";
+        public string ConnectionString => $"Server={config.Database.Hostname};Database=clc_web_membership;Trusted_Connection=True;TrustServerCertificate=true";
 
         public AuthDbHelper(string dbHostname, string appName) : this(new AppSettings { Database = new DatabaseSettings { Hostname = dbHostname }, ApplicationName = appName })
         {

@@ -19,7 +19,8 @@
                 value.disabled = true;
             }
             (operation?.value === "RemoveOverride" ? operation : value)?.focus();
-            row.closest("details")?.setAttribute("open", "");
+            row.setAttribute("open", "");
+            row.closest(".setting-category, .dynamic-settings")?.setAttribute("open", "");
         }
     }
 
@@ -42,20 +43,22 @@
         });
     });
 
+    const categories = [...document.querySelectorAll(".setting-category, .dynamic-settings")];
+    categories.forEach((category) => category.dataset.initialOpen = category.open.toString());
     search?.addEventListener("input", () => {
         const query = search.value.trim().toLowerCase();
         let visible = 0;
         document.querySelectorAll(".setting-row").forEach((row) => {
             const matches = row.dataset.search.includes(query);
             row.hidden = !matches;
-            if (matches) {
-                visible += 1;
-                if (query) {
-                    row.closest("details")?.setAttribute("open", "");
-                }
-            }
+            if (matches) visible += 1;
         });
-        searchStatus.textContent = query ? `${visible} settings match.` : "";
+        categories.forEach((category) => {
+            const hasMatch = category.querySelector(".setting-row:not([hidden])") !== null;
+            category.hidden = Boolean(query) && !hasMatch;
+            category.open = query && hasMatch ? true : category.dataset.initialOpen === "true";
+        });
+        searchStatus.textContent = query ? `${visible} ${visible === 1 ? "setting" : "settings"} found` : "";
     });
 
     document.querySelectorAll(".html-preview").forEach((frame) => {
@@ -84,7 +87,7 @@
             const operation = row.querySelector(".operation");
             const item = document.createElement("li");
             const newValue = row.dataset.sensitive === "true" ? "••••••••" : value.value;
-            item.textContent = `${row.dataset.displayName} (${row.dataset.settingKey}): ${operation.value}; old “${row.dataset.oldValue || "not configured"}”; new “${operation.value === "RemoveOverride" ? "inherit" : newValue}”.`;
+            item.textContent = `${row.dataset.displayName}: ${operation.value === "RemoveOverride" ? "Use inherited value" : `Set to “${newValue}”`} (current value: “${row.dataset.oldValue || "not configured"}”).`;
             list.append(item);
         });
 

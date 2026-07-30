@@ -10,6 +10,158 @@ namespace Clc.PatronRegistration.Tests;
 [TestClass]
 public class SettingsAdministrationTests
 {
+    [TestMethod]
+    public void FormCodeNormalizer_CanonicalizesOnlyNullAndEmptyDefaults()
+    {
+        Assert.AreEqual(string.Empty, FormCodeNormalizer.Normalize(null));
+        Assert.AreEqual(string.Empty, FormCodeNormalizer.Normalize(string.Empty));
+        Assert.AreEqual(" Adult Form ", FormCodeNormalizer.Normalize(" Adult Form "));
+    }
+
+    [TestMethod]
+    public void SettingsRequests_CanonicalizeNullDefaultFormCodes()
+    {
+        Assert.AreEqual(string.Empty, new SaveSettingsRequest { FormCode = null! }.FormCode);
+        Assert.AreEqual(string.Empty, new DraftChangesRequest { FormCode = null! }.FormCode);
+        Assert.AreEqual(string.Empty, new PreviewLinkRequest { FormCode = null! }.FormCode);
+        Assert.AreEqual(string.Empty, new FormCodeRequest { FormCode = null! }.FormCode);
+    }
+
+    [TestMethod]
+    public void AuditContext_CanonicalizesNullDefaultFormCode()
+    {
+        var audit = new AuditContext(null, null, null, 1, 1, null, null, null);
+
+        Assert.AreEqual(string.Empty, audit.FormCode);
+    }
+
+    [TestMethod]
+    public void OrdinaryCatalog_HasOrderedStaffFacingPresentationMetadata()
+    {
+        var ordinary = new SettingCatalog().All.Where(setting => setting.Group == SettingGroup.Ordinary).ToList();
+        Assert.IsTrue(ordinary.All(setting => setting.Category.HasValue));
+        Assert.IsTrue(ordinary.All(setting => !string.IsNullOrWhiteSpace(setting.DisplayName)));
+        Assert.IsTrue(ordinary.All(setting => !string.IsNullOrWhiteSpace(setting.Description)));
+        Assert.IsFalse(ordinary.Any(setting => setting.Description == $"Registration setting {setting.Key}."));
+        CollectionAssert.AreEqual(Enum.GetValues<SettingCategory>(), SettingCategoryPresentation.Ordered.ToArray());
+        foreach (var category in SettingCategoryPresentation.Ordered)
+        {
+            var names = ordinary.Where(setting => setting.Category == category).Select(setting => setting.DisplayName).ToArray();
+            CollectionAssert.AreEqual(names.OrderBy(name => name, StringComparer.OrdinalIgnoreCase).ToArray(), names);
+        }
+    }
+
+    [TestMethod]
+    public void Catalog_UsesStaffFriendlyAcronymsAndAlphabetizesDynamicGroups()
+    {
+        var catalog = new SettingCatalog().All;
+        foreach (var expected in new[] { "CSS file", "Header image URL", "Custom form footer HTML", "Polaris record set ID", "PAPI duplicate check", "E-card patron code" })
+            Assert.IsTrue(catalog.Any(setting => setting.DisplayName == expected), expected);
+        foreach (var group in new[] { SettingGroup.Alert, SettingGroup.Label, SettingGroup.Require })
+        {
+            var names = catalog.Where(setting => setting.Group == group).Select(setting => setting.DisplayName).ToArray();
+            CollectionAssert.AreEqual(names.OrderBy(name => name, StringComparer.OrdinalIgnoreCase).ToArray(), names);
+        }
+    }
+
+    [TestMethod]
+    public void SettingValuePresentation_FormatsMissingBlankBooleanAndDirectValues()
+    {
+        var text = new SettingDefinition("text", "Text", "Text", SettingValueType.ShortString);
+        var boolean = new SettingDefinition("boolean", "Boolean", "Boolean", SettingValueType.Boolean);
+
+        Assert.AreEqual("Not configured", SettingValuePresentation.Format(text, null, false));
+        Assert.AreEqual("Blank", SettingValuePresentation.Format(text, string.Empty, true));
+        Assert.AreEqual("Yes", SettingValuePresentation.Format(boolean, "true", true));
+        Assert.AreEqual("No", SettingValuePresentation.Format(boolean, "false", true));
+        Assert.AreEqual("Leave this page", SettingValuePresentation.Format(text, "Leave this page", true));
+    }
+
+    [TestMethod]
+    public void SettingValuePresentation_UsesSafeTypeSpecificSummaries()
+    {
+        var longText = new SettingDefinition("long", "Long", "Long", SettingValueType.LongString);
+        var html = new SettingDefinition("html", "HTML", "HTML", SettingValueType.Html);
+        var template = new SettingDefinition("template", "Template", "Template", SettingValueType.EmailTemplate);
+        var sensitive = new SettingDefinition("secret", "Secret", "Secret", SettingValueType.ShortString, IsSensitive: true);
+
+        Assert.AreEqual("Several words on one line", SettingValuePresentation.Format(longText, " Several\n words   on\tone line ", true));
+        Assert.AreEqual("HTML configured", SettingValuePresentation.Format(html, "<strong>private markup</strong>", true));
+        Assert.AreEqual("Email template configured", SettingValuePresentation.Format(template, "Hello {{name}}", true));
+        Assert.AreEqual("Hidden", SettingValuePresentation.Format(sensitive, "recognizable-secret", true));
+        Assert.AreEqual("Not configured", SettingValuePresentation.Format(sensitive, null, false));
+    }
+
+    [TestMethod]
+    public void SettingValuePresentation_DraftUpsertUsesStagedValue()
+    {
+        var definition = new SettingDefinition("message", "Message", "Message", SettingValueType.LongString);
+        var resolution = new ResolvedSetting("message", "Live value", 1, "System", string.Empty, false, null, true);
+        var row = new SettingRowViewModel("token", definition, resolution, "Staged\n value", DraftOperation.Upsert, 1);
+
+        var presentation = SettingValuePresentation.ForRow(row);
+        Assert.AreEqual(SettingPresentationState.DraftChange, presentation.State);
+        Assert.AreEqual("Staged value", presentation.Value);
+        Assert.AreEqual("Draft change", presentation.Status);
+    }
+
+    [TestMethod]
+    public void SettingPresentation_DistinguishesNotSetInheritedCustomizedAndSensitive()
+    {
+        var text = new SettingDefinition("text", "Text", "Text", SettingValueType.ShortString);
+        var secret = new SettingDefinition("secret", "Secret", "Secret", SettingValueType.ShortString, IsSensitive: true);
+        SettingRowViewModel Row(SettingDefinition definition, ResolvedSetting resolution) =>
+            new("token", definition, resolution, null, null, null);
+
+        var notSet = SettingValuePresentation.ForRow(Row(text,
+            new("text", null, null, "Unconfigured", string.Empty, false, null, true)));
+        Assert.AreEqual(SettingPresentationState.NotSet, notSet.State);
+        Assert.AreEqual("—", notSet.Value);
+        Assert.AreEqual("Not set", notSet.Status);
+        Assert.AreNotEqual(SettingPresentationState.Inherited, notSet.State);
+
+        var inherited = SettingValuePresentation.ForRow(Row(text,
+            new("text", "Parent value", 1, "System", string.Empty, false, null, true)));
+        Assert.AreEqual(SettingPresentationState.Inherited, inherited.State);
+        Assert.AreEqual("Inherited", inherited.Status);
+
+        var blank = SettingValuePresentation.ForRow(Row(text,
+            new("text", string.Empty, 2, "Library", string.Empty, true, string.Empty, false)));
+        Assert.AreEqual(SettingPresentationState.Customized, blank.State);
+        Assert.AreEqual("Blank", blank.Value);
+
+        var hidden = SettingValuePresentation.ForRow(Row(secret,
+            new("secret", null, 1, "System", string.Empty, false, null, true)));
+        Assert.AreEqual(SettingPresentationState.Inherited, hidden.State);
+        Assert.AreEqual("Hidden", hidden.Value);
+    }
+
+    [TestMethod]
+    public void SettingPresentation_DraftTakesPrecedenceOverUnsetResolution()
+    {
+        var definition = new SettingDefinition("text", "Text", "Text", SettingValueType.ShortString);
+        var resolution = new ResolvedSetting("text", null, null, "Unconfigured", string.Empty, false, null, true);
+        var row = new SettingRowViewModel("token", definition, resolution, "New value", DraftOperation.Upsert, 1);
+
+        Assert.AreEqual(SettingPresentationState.DraftChange, SettingValuePresentation.ForRow(row).State);
+    }
+
+    [TestMethod]
+    public void SettingsView_HasValueHeadingsAndNoBareConfiguredFallback()
+    {
+        var root = FindRepositoryRoot();
+        var index = File.ReadAllText(Path.Combine(root, "src/Clc.PatronRegistration.Web/Views/Settings/Index.cshtml"));
+        var row = File.ReadAllText(Path.Combine(root, "src/Clc.PatronRegistration.Web/Views/Settings/_SettingRow.cshtml"));
+
+        StringAssert.Contains(index, "<span>Setting</span><span>Value</span><span>Status</span>");
+        StringAssert.Contains(index, "<form method=\"get\" class=\"settings-context\"");
+        StringAssert.Contains(index, "name=\"organizationId\"");
+        StringAssert.Contains(index, "name=\"formCode\"");
+        StringAssert.Contains(index, "name=\"ExpectedVersion\"");
+        Assert.IsFalse(row.Contains(">Configured<", StringComparison.Ordinal));
+        StringAssert.Contains(row, "data-presentation-state");
+    }
+
     [DataTestMethod]
     [DataRow("<img src=x onerror=alert(1)>")]
     [DataRow("<script>alert(1)</script>")]

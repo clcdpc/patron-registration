@@ -43,6 +43,7 @@ public sealed class SettingsController(
     [HttpGet("")]
     public IActionResult Index(int? organizationId, string formCode = "")
     {
+        formCode = FormCodeNormalizer.Normalize(formCode);
         var principal = RequireManager();
         if (principal is null)
         {
@@ -74,7 +75,8 @@ public sealed class SettingsController(
                 definition.IsSensitive ? SanitizeSensitiveResolution(resolution) : resolution,
                 definition.IsSensitive ? null : draftChange?.Value,
                 draftChange?.Operation,
-                draft?.DraftId));
+                draft?.DraftId,
+                DescribeSource(resolution)));
         }
 
         var model = new SettingsIndexViewModel
@@ -95,6 +97,20 @@ public sealed class SettingsController(
             Settings = rows
         };
         return View(model);
+    }
+
+    private string DescribeSource(ResolvedSetting resolution)
+    {
+        if (!resolution.SourceOrganizationId.HasValue)
+        {
+            return "No value is configured";
+        }
+        if (resolution.SourceOrganizationId == settingsOptions.SystemOrganizationId)
+        {
+            return "System defaults";
+        }
+        var formName = resolution.SourceFormCode.Length == 0 ? "Default form" : $"{resolution.SourceFormCode} form";
+        return $"{GetOrganizationName(resolution.SourceOrganizationId.Value)} — {formName}";
     }
 
     private static ResolvedSetting SanitizeSensitiveResolution(ResolvedSetting resolution) => resolution with
@@ -159,6 +175,7 @@ public sealed class SettingsController(
     [ValidateAntiForgeryToken]
     public IActionResult CreateDraft(int organizationId, string formCode = "")
     {
+        formCode = FormCodeNormalizer.Normalize(formCode);
         if (!ValidateScope(organizationId, formCode))
         {
             return Forbid();
@@ -216,6 +233,7 @@ public sealed class SettingsController(
     [ValidateAntiForgeryToken]
     public IActionResult RemoveDraftChange(long draftId, int organizationId, string formCode, string settingKey)
     {
+        formCode = FormCodeNormalizer.Normalize(formCode);
         if (AuthorizedActiveDraft(draftId, organizationId, formCode) is null)
         {
             return DraftUnavailableResult(draftId, organizationId, formCode);
@@ -246,6 +264,7 @@ public sealed class SettingsController(
     [ValidateAntiForgeryToken]
     public IActionResult CommitDraft(long draftId, int organizationId, string formCode = "")
     {
+        formCode = FormCodeNormalizer.Normalize(formCode);
         var draft = AuthorizedActiveDraft(draftId, organizationId, formCode);
         if (draft is null)
         {
@@ -286,6 +305,7 @@ public sealed class SettingsController(
     [ValidateAntiForgeryToken]
     public IActionResult DiscardDraft(long draftId, int organizationId, string formCode = "")
     {
+        formCode = FormCodeNormalizer.Normalize(formCode);
         var draft = AuthorizedActiveDraft(draftId, organizationId, formCode);
         if (draft is null)
         {
@@ -703,16 +723,31 @@ public sealed class SettingsController(
     {
         if (principal.IsGlobal)
         {
-            var scopes = cache.OrganizationCache
-                .Where(organization => organization.OrganizationCodeID is 2 or 3)
-                .Select(organization => new ScopeOption(organization.OrganizationID, organization.DisplayName))
-                .ToList();
-            scopes.Insert(0, new ScopeOption(settingsOptions.SystemOrganizationId, "System defaults"));
+            var libraries = cache.OrganizationCache.Where(organization => organization.OrganizationCodeID == 2)
+                .ToDictionary(organization => organization.OrganizationID);
+            var scopes = new List<ScopeOption>
+            {
+                new(settingsOptions.SystemOrganizationId, "System defaults", ScopeOptionGroup.System)
+            };
+            scopes.AddRange(libraries.Values.OrderBy(library => library.Name, StringComparer.OrdinalIgnoreCase)
+                .Select(library => new ScopeOption(library.OrganizationID, library.Name, ScopeOptionGroup.Libraries)));
+            scopes.AddRange(cache.OrganizationCache.Where(organization => organization.OrganizationCodeID == 3)
+                .Select(branch =>
+                {
+                    var parentName = branch.ParentOrganizationID.HasValue && libraries.TryGetValue(branch.ParentOrganizationID.Value, out var parent)
+                        ? parent.Name : string.Empty;
+                    var label = string.IsNullOrEmpty(parentName) ? branch.Name : $"{parentName} — {branch.Name}";
+                    return new ScopeOption(branch.OrganizationID, label, ScopeOptionGroup.Branches, parentName);
+                })
+                .OrderBy(branch => branch.SortParent, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(branch => branch.DisplayName, StringComparer.OrdinalIgnoreCase));
             return scopes;
         }
         var libraryId = GetLibraryId(principal.OrganizationId!.Value);
-        var result = new List<ScopeOption> { new(libraryId, GetOrganizationName(libraryId)) };
-        result.AddRange(cache.GetBranches(libraryId).Select(branch => new ScopeOption(branch.OrganizationID, branch.DisplayName)));
+        var libraryName = cache.GetOrg(libraryId).Name;
+        var result = new List<ScopeOption> { new(libraryId, libraryName, ScopeOptionGroup.Libraries) };
+        result.AddRange(cache.GetBranches(libraryId).OrderBy(branch => branch.Name, StringComparer.OrdinalIgnoreCase)
+            .Select(branch => new ScopeOption(branch.OrganizationID, $"{libraryName} — {branch.Name}", ScopeOptionGroup.Branches, libraryName)));
         return result;
     }
 
@@ -791,7 +826,7 @@ public sealed class SettingsController(
             actor.OrganizationId,
             organizationId,
             targetLibraryId,
-            formCode,
+            FormCodeNormalizer.Normalize(formCode),
             HttpContext.TraceIdentifier,
             Request.GetTrueClientIP());
     }

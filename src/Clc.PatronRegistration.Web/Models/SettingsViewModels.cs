@@ -1,10 +1,13 @@
 using Clc.PatronRegistration.Administration;
 using Clc.PatronRegistration.Configuration;
 using Clc.PatronRegistration.Web.Settings;
+using System.Text.RegularExpressions;
 
 namespace Clc.PatronRegistration.Web.Models;
 
-public sealed record ScopeOption(int OrganizationId, string DisplayName);
+public enum ScopeOptionGroup { System, Libraries, Branches }
+public sealed record ScopeOption(int OrganizationId, string DisplayName,
+    ScopeOptionGroup Group = ScopeOptionGroup.Branches, string SortParent = "");
 public sealed record FormCodeOption(string FormCode, string DisplayName, string? Description, int OwnerOrganizationId, bool IsRegistered = true);
 
 public static class PreviewLinkMode
@@ -17,6 +20,73 @@ public static class SettingEditorDefaults
     public static string ValueFor(SettingDefinition definition, string? value) =>
         definition.ValueType == SettingValueType.Boolean && string.IsNullOrEmpty(value) ? "false" : value ?? string.Empty;
 }
+
+public static class SettingValuePresentation
+{
+    public static string Format(SettingDefinition definition, string? value, bool hasValue)
+    {
+        if (!hasValue)
+        {
+            return "Not configured";
+        }
+        if (definition.IsSensitive)
+        {
+            return "Hidden";
+        }
+        if (value is null)
+        {
+            return "Not configured";
+        }
+        if (value.Length == 0)
+        {
+            return "Blank";
+        }
+        return definition.ValueType switch
+        {
+            SettingValueType.Boolean when bool.TryParse(value, out var booleanValue) => booleanValue ? "Yes" : "No",
+            SettingValueType.LongString => Preview(value),
+            SettingValueType.Html => "HTML configured",
+            SettingValueType.EmailTemplate => "Email template configured",
+            _ => value
+        };
+    }
+
+    public static SettingRowPresentation ForRow(SettingRowViewModel row)
+    {
+        if (row.DraftOperation == DraftOperation.Upsert)
+        {
+            return new(SettingPresentationState.DraftChange, Format(row.Definition, row.DraftValue, true),
+                "Draft change", Format(row.Definition, row.Resolution.EffectiveValue, row.Resolution.SourceOrganizationId.HasValue));
+        }
+        if (row.DraftOperation == DraftOperation.RemoveOverride)
+        {
+            return new(SettingPresentationState.DraftChange, "Use inherited value", "Draft change",
+                Format(row.Definition, row.Resolution.EffectiveValue, row.Resolution.SourceOrganizationId.HasValue));
+        }
+        if (row.Resolution.OwnsOverride)
+        {
+            var value = Format(row.Definition, row.Resolution.EffectiveValue, true);
+            return new(SettingPresentationState.Customized, value, "Customized", value);
+        }
+        if (row.Resolution.SourceOrganizationId.HasValue)
+        {
+            var value = Format(row.Definition, row.Resolution.EffectiveValue, true);
+            return new(SettingPresentationState.Inherited, value, "Inherited", value);
+        }
+        return new(SettingPresentationState.NotSet, "—", "Not set", "Not set");
+    }
+
+    private static string Preview(string value)
+    {
+        const int maximumLength = 160;
+        var normalized = Regex.Replace(value, @"\s+", " ").Trim();
+        return normalized.Length <= maximumLength ? normalized : $"{normalized[..maximumLength].TrimEnd()}…";
+    }
+}
+
+public enum SettingPresentationState { DraftChange, Customized, Inherited, NotSet }
+public sealed record SettingRowPresentation(SettingPresentationState State, string Value, string Status,
+    string CurrentValue);
 
 public sealed class SettingsIndexViewModel
 {
@@ -42,12 +112,14 @@ public sealed record SettingRowViewModel(
     ResolvedSetting Resolution,
     string? DraftValue,
     DraftOperation? DraftOperation,
-    long? DraftId);
+    long? DraftId,
+    string SourceDescription = "No value is configured");
 
 public sealed class SaveSettingsRequest
 {
+    private string formCode = string.Empty;
     public int OrganizationId { get; set; }
-    public string FormCode { get; set; } = string.Empty;
+    public string FormCode { get => formCode; set => formCode = FormCodeNormalizer.Normalize(value); }
     public long ExpectedVersion { get; set; }
     public List<SettingMutationInput> Changes { get; set; } = [];
 }
@@ -61,15 +133,17 @@ public sealed class SettingMutationInput
 
 public sealed class DraftChangesRequest
 {
+    private string formCode = string.Empty;
     public int OrganizationId { get; set; }
-    public string FormCode { get; set; } = string.Empty;
+    public string FormCode { get => formCode; set => formCode = FormCodeNormalizer.Normalize(value); }
     public List<SettingMutationInput> Changes { get; set; } = [];
 }
 
 public sealed class PreviewLinkRequest
 {
+    private string formCode = string.Empty;
     public int OrganizationId { get; set; }
-    public string FormCode { get; set; } = string.Empty;
+    public string FormCode { get => formCode; set => formCode = FormCodeNormalizer.Normalize(value); }
     public bool AllowLiveSubmission { get; set; }
     public int? OperationalBranchId { get; set; }
 }
@@ -85,8 +159,9 @@ public sealed class FormsViewModel
 
 public sealed class FormCodeRequest
 {
+    private string formCode = string.Empty;
     public int OrganizationId { get; set; }
-    public string FormCode { get; set; } = string.Empty;
+    public string FormCode { get => formCode; set => formCode = FormCodeNormalizer.Normalize(value); }
     public string DisplayName { get; set; } = string.Empty;
     public string? Description { get; set; }
 }
