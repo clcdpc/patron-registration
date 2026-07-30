@@ -74,7 +74,51 @@ public class SettingsAdministrationTests
         var resolution = new ResolvedSetting("message", "Live value", 1, "System", string.Empty, false, null, true);
         var row = new SettingRowViewModel("token", definition, resolution, "Staged\n value", DraftOperation.Upsert, 1);
 
-        Assert.AreEqual("Staged value", SettingValuePresentation.ForRow(row));
+        var presentation = SettingValuePresentation.ForRow(row);
+        Assert.AreEqual(SettingPresentationState.DraftChange, presentation.State);
+        Assert.AreEqual("Staged value", presentation.Value);
+        Assert.AreEqual("Draft change", presentation.Status);
+    }
+
+    [TestMethod]
+    public void SettingPresentation_DistinguishesNotSetInheritedCustomizedAndSensitive()
+    {
+        var text = new SettingDefinition("text", "Text", "Text", SettingValueType.ShortString);
+        var secret = new SettingDefinition("secret", "Secret", "Secret", SettingValueType.ShortString, IsSensitive: true);
+        SettingRowViewModel Row(SettingDefinition definition, ResolvedSetting resolution) =>
+            new("token", definition, resolution, null, null, null);
+
+        var notSet = SettingValuePresentation.ForRow(Row(text,
+            new("text", null, null, "Unconfigured", string.Empty, false, null, true)));
+        Assert.AreEqual(SettingPresentationState.NotSet, notSet.State);
+        Assert.AreEqual("—", notSet.Value);
+        Assert.AreEqual("Not set", notSet.Status);
+        Assert.AreNotEqual(SettingPresentationState.Inherited, notSet.State);
+
+        var inherited = SettingValuePresentation.ForRow(Row(text,
+            new("text", "Parent value", 1, "System", string.Empty, false, null, true)));
+        Assert.AreEqual(SettingPresentationState.Inherited, inherited.State);
+        Assert.AreEqual("Inherited", inherited.Status);
+
+        var blank = SettingValuePresentation.ForRow(Row(text,
+            new("text", string.Empty, 2, "Library", string.Empty, true, string.Empty, false)));
+        Assert.AreEqual(SettingPresentationState.Customized, blank.State);
+        Assert.AreEqual("Blank", blank.Value);
+
+        var hidden = SettingValuePresentation.ForRow(Row(secret,
+            new("secret", null, 1, "System", string.Empty, false, null, true)));
+        Assert.AreEqual(SettingPresentationState.Inherited, hidden.State);
+        Assert.AreEqual("Hidden", hidden.Value);
+    }
+
+    [TestMethod]
+    public void SettingPresentation_DraftTakesPrecedenceOverUnsetResolution()
+    {
+        var definition = new SettingDefinition("text", "Text", "Text", SettingValueType.ShortString);
+        var resolution = new ResolvedSetting("text", null, null, "Unconfigured", string.Empty, false, null, true);
+        var row = new SettingRowViewModel("token", definition, resolution, "New value", DraftOperation.Upsert, 1);
+
+        Assert.AreEqual(SettingPresentationState.DraftChange, SettingValuePresentation.ForRow(row).State);
     }
 
     [TestMethod]
@@ -85,7 +129,12 @@ public class SettingsAdministrationTests
         var row = File.ReadAllText(Path.Combine(root, "src/Clc.PatronRegistration.Web/Views/Settings/_SettingRow.cshtml"));
 
         StringAssert.Contains(index, "<span>Setting</span><span>Value</span><span>Status</span>");
+        StringAssert.Contains(index, "<form method=\"get\" class=\"settings-context\"");
+        StringAssert.Contains(index, "name=\"organizationId\"");
+        StringAssert.Contains(index, "name=\"formCode\"");
+        StringAssert.Contains(index, "name=\"ExpectedVersion\"");
         Assert.IsFalse(row.Contains(">Configured<", StringComparison.Ordinal));
+        StringAssert.Contains(row, "data-presentation-state");
     }
 
     [DataTestMethod]

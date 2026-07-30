@@ -12,12 +12,53 @@ using Microsoft.AspNetCore.Mvc.Filters;
 using System.Reflection;
 using Microsoft.Extensions.Options;
 using Moq;
+using Clc.Polaris.Api.Models;
 
 namespace Clc.PatronRegistration.Tests;
 
 [TestClass]
 public class SettingsControllerTests
 {
+    [TestMethod]
+    public void GlobalScopeOptions_AreGroupedSortedAndIncludeParentLibraryNames()
+    {
+        var organizations = new List<OrganizationsGetRow>
+        {
+            new() { OrganizationID = 1, OrganizationCodeID = 1, Name = "System" },
+            new() { OrganizationID = 8, OrganizationCodeID = 2, Name = "Zulu Library" },
+            new() { OrganizationID = 2, OrganizationCodeID = 2, Name = "Alpha Library" },
+            new() { OrganizationID = 9, OrganizationCodeID = 3, ParentOrganizationID = 8, Name = "Main Branch" },
+            new() { OrganizationID = 3, OrganizationCodeID = 3, ParentOrganizationID = 2, Name = "North Branch" }
+        };
+        var cache = new Mock<ICache>();
+        cache.SetupGet(value => value.OrganizationCache).Returns(organizations);
+        var authorization = new Mock<ISettingsAuthorizationService>();
+        authorization.Setup(service => service.Describe(It.IsAny<ClaimsPrincipal>()))
+            .Returns(new SettingsPrincipal(true, -1, true));
+        var controller = CreateController(new Mock<ISettingsAdministrationRepository>(), authorization, cache.Object);
+        var method = typeof(SettingsController).GetMethod("GetAuthorizedScopes", BindingFlags.NonPublic | BindingFlags.Instance)!;
+
+        var options = (List<ScopeOption>)method.Invoke(controller, [new SettingsPrincipal(true, -1, true)])!;
+
+        CollectionAssert.AreEqual(new[] { ScopeOptionGroup.System, ScopeOptionGroup.Libraries, ScopeOptionGroup.Libraries,
+            ScopeOptionGroup.Branches, ScopeOptionGroup.Branches }, options.Select(option => option.Group).ToArray());
+        CollectionAssert.AreEqual(new[] { "System defaults", "Alpha Library", "Zulu Library",
+            "Alpha Library — North Branch", "Zulu Library — Main Branch" }, options.Select(option => option.DisplayName).ToArray());
+    }
+
+    [TestMethod]
+    public void LibraryScopeOptions_ExcludeSystemAndOtherLibraries()
+    {
+        var controller = CreateController(new Mock<ISettingsAdministrationRepository>(), LibraryAuthorization(), new TestCache());
+        var method = typeof(SettingsController).GetMethod("GetAuthorizedScopes", BindingFlags.NonPublic | BindingFlags.Instance)!;
+
+        var options = (List<ScopeOption>)method.Invoke(controller, [new SettingsPrincipal(true, 2, false)])!;
+
+        CollectionAssert.AreEqual(new[] { 2, 3 }, options.Select(option => option.OrganizationId).ToArray());
+        Assert.IsFalse(options.Any(option => option.Group == ScopeOptionGroup.System));
+        StringAssert.StartsWith(options[1].DisplayName, "Library — ");
+    }
+
     [DataTestMethod]
     [DataRow(true, true)]
     [DataRow(false, false)]

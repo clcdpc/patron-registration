@@ -5,7 +5,9 @@ using System.Text.RegularExpressions;
 
 namespace Clc.PatronRegistration.Web.Models;
 
-public sealed record ScopeOption(int OrganizationId, string DisplayName);
+public enum ScopeOptionGroup { System, Libraries, Branches }
+public sealed record ScopeOption(int OrganizationId, string DisplayName,
+    ScopeOptionGroup Group = ScopeOptionGroup.Branches, string SortParent = "");
 public sealed record FormCodeOption(string FormCode, string DisplayName, string? Description, int OwnerOrganizationId, bool IsRegistered = true);
 
 public static class PreviewLinkMode
@@ -49,17 +51,29 @@ public static class SettingValuePresentation
         };
     }
 
-    public static string ForRow(SettingRowViewModel row)
+    public static SettingRowPresentation ForRow(SettingRowViewModel row)
     {
         if (row.DraftOperation == DraftOperation.Upsert)
         {
-            return Format(row.Definition, row.DraftValue, true);
+            return new(SettingPresentationState.DraftChange, Format(row.Definition, row.DraftValue, true),
+                "Draft change", Format(row.Definition, row.Resolution.EffectiveValue, row.Resolution.SourceOrganizationId.HasValue));
         }
         if (row.DraftOperation == DraftOperation.RemoveOverride)
         {
-            return "Use inherited value";
+            return new(SettingPresentationState.DraftChange, "Use inherited value", "Draft change",
+                Format(row.Definition, row.Resolution.EffectiveValue, row.Resolution.SourceOrganizationId.HasValue));
         }
-        return Format(row.Definition, row.Resolution.EffectiveValue, row.Resolution.SourceOrganizationId.HasValue);
+        if (row.Resolution.OwnsOverride)
+        {
+            var value = Format(row.Definition, row.Resolution.EffectiveValue, true);
+            return new(SettingPresentationState.Customized, value, "Customized", value);
+        }
+        if (row.Resolution.SourceOrganizationId.HasValue)
+        {
+            var value = Format(row.Definition, row.Resolution.EffectiveValue, true);
+            return new(SettingPresentationState.Inherited, value, "Inherited", value);
+        }
+        return new(SettingPresentationState.NotSet, "—", "Not set", "Not set");
     }
 
     private static string Preview(string value)
@@ -69,6 +83,10 @@ public static class SettingValuePresentation
         return normalized.Length <= maximumLength ? normalized : $"{normalized[..maximumLength].TrimEnd()}…";
     }
 }
+
+public enum SettingPresentationState { DraftChange, Customized, Inherited, NotSet }
+public sealed record SettingRowPresentation(SettingPresentationState State, string Value, string Status,
+    string CurrentValue);
 
 public sealed class SettingsIndexViewModel
 {

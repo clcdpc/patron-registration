@@ -16,25 +16,24 @@
     editorValue = Clc.PatronRegistration.Web.Models.SettingEditorDefaults.ValueFor(definition, editorValue);
     var safeEffective = definition.IsSensitive ? string.Empty : resolution.EffectiveValue;
     var searchText = $"{definition.DisplayName} {definition.Key} {definition.Description} {safeEffective}".ToLowerInvariant();
-    var displayValue = Clc.PatronRegistration.Web.Models.SettingValuePresentation.ForRow(Model);
-    var currentDisplayValue = Clc.PatronRegistration.Web.Models.SettingValuePresentation.Format(
-        definition, resolution.EffectiveValue, resolution.SourceOrganizationId.HasValue);
-    var status = hasDraftOperation ? "Draft change" : resolution.OwnsOverride ? "Customized here" : "Using inherited value";
+    var presentation = Clc.PatronRegistration.Web.Models.SettingValuePresentation.ForRow(Model);
+    bool isNotSet = presentation.State == Clc.PatronRegistration.Web.Models.SettingPresentationState.NotSet;
 }
 <details class="setting-row" open="@hasDraftOperation"
          data-search="@searchText"
          data-display-name="@definition.DisplayName"
          data-setting-key="@definition.Key"
          data-old-value="@(definition.IsSensitive ? "••••••••" : resolution.EffectiveValue)"
-         data-sensitive="@definition.IsSensitive.ToString().ToLowerInvariant()">
+         data-sensitive="@definition.IsSensitive.ToString().ToLowerInvariant()"
+         data-presentation-state="@presentation.State.ToString().ToLowerInvariant()">
     <input class="change-index" type="hidden" name="Changes.Index" value="@token" disabled />
     <input class="change-key" type="hidden" name="Changes[@token].Key" value="@definition.Key" disabled />
 
     <summary>
         <span class="setting-summary-content">
             <span class="setting-name">@definition.DisplayName</span>
-            <span class="summary-value" title="@displayValue">@displayValue</span>
-            <span class="setting-status">@status</span>
+            <span class="summary-value" title="@presentation.Value">@presentation.Value</span>
+            <span class="setting-status">@presentation.Status</span>
         </span>
     </summary>
     <div class="setting-content">
@@ -42,15 +41,15 @@
     <dl class="setting-source">
         <div>
             <dt>Current value</dt>
-            <dd>@currentDisplayValue</dd>
+            <dd>@presentation.CurrentValue</dd>
         </div>
         <div>
             <dt>Comes from</dt>
-            <dd>@Model.SourceDescription</dd>
+            <dd>@(isNotSet ? "No value configured" : Model.SourceDescription)</dd>
         </div>
         <div>
             <dt>Status</dt>
-            <dd>@(resolution.OwnsOverride ? "Customized here" : "Using inherited value")</dd>
+            <dd>@(isNotSet ? "Not configured at the system, library, or branch level" : presentation.Status)</dd>
         </div>
         @if (hasDraftOperation)
         {
