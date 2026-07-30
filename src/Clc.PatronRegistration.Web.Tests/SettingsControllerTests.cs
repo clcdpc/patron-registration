@@ -18,6 +18,15 @@ namespace Clc.PatronRegistration.Tests;
 [TestClass]
 public class SettingsControllerTests
 {
+    [DataTestMethod]
+    [DataRow(true, true)]
+    [DataRow(false, false)]
+    [DataRow(null, false)]
+    public void PreviewLinkMode_NormalizesNullableValuesToSafeDefault(bool? value, bool expected)
+    {
+        Assert.AreEqual(expected, PreviewLinkMode.AllowsLiveSubmission(value));
+    }
+
     [TestMethod]
     public void GlobalSettingsModel_RemovesEffectiveOverrideAndStagedSecretValues()
     {

@@ -125,7 +125,7 @@
                     @foreach (var link in Model.PreviewLinks)
                     {
                         var operationalBranch = Model.PreviewBranches.FirstOrDefault(branch => branch.OrganizationId == link.OperationalBranchId);
-                        bool allowsLiveSubmission = link.AllowLiveSubmission;
+                        bool allowsLiveSubmission = link.AllowLiveSubmission == true;
                         bool isRevoked = link.RevokedAtUtc.HasValue;
                         <li>
                             Link #@link.PreviewLinkId — @(operationalBranch?.DisplayName ?? $"branch {link.OperationalBranchId}") — @(isRevoked ? "Revoked" : allowsLiveSubmission ? "Active live preview" : "Active safe preview")
