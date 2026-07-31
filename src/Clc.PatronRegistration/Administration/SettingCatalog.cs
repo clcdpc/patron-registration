@@ -39,8 +39,7 @@ public enum SettingCategory
     DuplicateChecking,
     AddressVerification,
     PolarisIntegrationAndRecordSets,
-    KioskAndSessionBehavior,
-    AdvancedIntegrations
+    KioskAndSessionBehavior
 }
 
 public static class SettingCategoryPresentation
@@ -48,16 +47,15 @@ public static class SettingCategoryPresentation
     public static IReadOnlyList<SettingCategory> Ordered { get; } = Enum.GetValues<SettingCategory>();
     public static string DisplayName(this SettingCategory category) => category switch
     {
-        SettingCategory.PageAppearanceAndInstructions => "Page appearance and instructions",
-        SettingCategory.FormBehaviorAndFields => "Form behavior and fields",
-        SettingCategory.BranchAndPatronDefaults => "Branch and patron defaults",
+        SettingCategory.PageAppearanceAndInstructions => "Page content and appearance",
+        SettingCategory.FormBehaviorAndFields => "Form fields and behavior",
+        SettingCategory.BranchAndPatronDefaults => "Branch selection and patron defaults",
         SettingCategory.ECardRegistration => "E-card registration",
-        SettingCategory.EmailAndNotices => "Email and notices",
-        SettingCategory.DuplicateChecking => "Duplicate checking",
+        SettingCategory.EmailAndNotices => "Email and communications",
+        SettingCategory.DuplicateChecking => "Duplicate detection and workarounds",
         SettingCategory.AddressVerification => "Address verification",
-        SettingCategory.PolarisIntegrationAndRecordSets => "Polaris integration and record sets",
-        SettingCategory.KioskAndSessionBehavior => "Kiosk and session behavior",
-        SettingCategory.AdvancedIntegrations => "Advanced integrations",
+        SettingCategory.PolarisIntegrationAndRecordSets => "Polaris patron creation and follow-up",
+        SettingCategory.KioskAndSessionBehavior => "Kiosk and on-site behavior",
         _ => throw new ArgumentOutOfRangeException(nameof(category))
     };
 }
@@ -208,127 +206,87 @@ public sealed class SettingCatalog : ISettingCatalog
         "postmark_api_key",
         "melissa_data_api_key"
     ];
-    private static readonly string[] OrdinaryKeys =
+    private sealed record OrdinaryPresentation(string Key, SettingCategory Category, string DisplayName, string Description);
+
+    private static readonly IReadOnlyList<OrdinaryPresentation> OrdinarySettings =
     [
-        "header_image_url",
-        "css_file",
-        "warning_text",
-        "custom_form_footer_html",
-        "show_dl_ips",
-        "reset_form",
-        "show_dl",
-        "hide_gender",
-        "enable_age_warning",
-        "age_warning_text",
-        "hide_ereceipt",
-        "na_gender_text",
-        "normalize_to_uppercase",
-        "dl_format",
-        "bypass_dupe_check",
-        "registration_text",
-        "enable_patron_branch_select_option",
-        "block_out_of_state_registrations",
-        "registration_form_header",
-        "duplicate_patron_message_html",
-        "enable_legal_name_checkbox",
-        "legal_name_checkbox_label",
-        "use_legal_name_on_notices",
-        "drivers_license_button_text",
-        "drivers_license_prompt_text",
-        "agreement_confirm_button_text",
-        "agreement_cancel_button_text",
-        "kiosk_registration_text",
-        "kiosk_registration_header",
-        "school_info_field_legend",
-        "display_ecard_checkbox",
-        "ecard_checkbox_label",
-        "mailing_list_description_html",
-        "display_mailing_list_checkbox",
-        "mailing_list_checkbox_label",
-        "mailing_list_record_set_id",
-        "registration_logon_user_id",
-        "ecard_patron_code_id",
-        "teacher_patron_code_id",
-        "student_patron_code_id",
-        "school_info_format",
-        "responsible_person_disclaimer",
-        "ecard_registration_text",
-        "sms_notice_information_html",
-        "display_sms_notice_information",
-        "ecard_welcome_email_template_text",
-        "ecard_welcome_email_template_html",
-        "welcome_email_template_text",
-        "welcome_email_template_html",
-        "welcome_email_from_name",
-        "welcome_email_subject",
-        "welcome_email_from_address",
-        "ecard_welcome_email_subject",
-        "postmark_api_key",
-        "display_preferred_pickup_location",
-        "require_preferred_pickup_location",
-        "display_responsible_person_field",
-        "perform_papi_duplicate_bypass",
-        "use_first_name_for_duplicate_workaround",
-        "update_patron_record_with_melissa_address",
-        "melissa_data_api_key",
-        "valid_address_registration_text",
-        "valid_address_plus_name_registration_text",
-        "out_of_state_block_message",
-        "ecard_barcode_prefix",
-        "valid_address_patron_code_id",
-        "valid_address_plus_name_patron_code_id",
-        "valid_address_record_set_id",
-        "valid_address_plus_name_record_set_id",
-        "invalid_address_record_set_id",
-        "add_to_record_set_id",
-        "post_registration_note_text",
-        "expiration_date",
-        "expiration_date_years",
-        "patron_code_id",
-        "hide_branch_select_if_only_one_option",
-        "disable_branch",
-        "reset_seconds",
-        "phone_number_format",
-        "force_ecard_remotely"
+        new("header_image_url", SettingCategory.PageAppearanceAndInstructions, "Header image URL", "Header image URL used by the registration workflow."),
+        new("css_file", SettingCategory.PageAppearanceAndInstructions, "CSS file", "CSS file used by the registration workflow."),
+        new("warning_text", SettingCategory.PageAppearanceAndInstructions, "Registration agreement content", "Registration agreement content used by the registration workflow."),
+        new("custom_form_footer_html", SettingCategory.PageAppearanceAndInstructions, "Custom form footer HTML", "Custom form footer HTML used by the registration workflow."),
+        new("registration_text", SettingCategory.PageAppearanceAndInstructions, "Default success message", "Default success message used by the registration workflow."),
+        new("registration_form_header", SettingCategory.PageAppearanceAndInstructions, "Registration form introduction", "Registration form introduction used by the registration workflow."),
+        new("show_dl", SettingCategory.FormBehaviorAndFields, "Enable driver’s license scanner", "Enable driver’s license scanner used by the registration workflow."),
+        new("hide_gender", SettingCategory.FormBehaviorAndFields, "Hide gender field", "Hide gender field used by the registration workflow."),
+        new("enable_age_warning", SettingCategory.FormBehaviorAndFields, "Show age warning", "Show age warning used by the registration workflow."),
+        new("age_warning_text", SettingCategory.FormBehaviorAndFields, "Age warning message", "Age warning message used by the registration workflow."),
+        new("hide_ereceipt", SettingCategory.FormBehaviorAndFields, "Hide e-receipt option", "Hide e-receipt option used by the registration workflow."),
+        new("na_gender_text", SettingCategory.FormBehaviorAndFields, "N/A gender option text", "N/A gender option text used by the registration workflow."),
+        new("normalize_to_uppercase", SettingCategory.FormBehaviorAndFields, "Convert registration data to uppercase", "Convert registration data to uppercase used by the registration workflow."),
+        new("dl_format", SettingCategory.FormBehaviorAndFields, "Driver’s license scanner format", "Driver’s license scanner format used by the registration workflow."),
+        new("enable_legal_name_checkbox", SettingCategory.FormBehaviorAndFields, "Show legal-name option", "Show legal-name option used by the registration workflow."),
+        new("drivers_license_button_text", SettingCategory.FormBehaviorAndFields, "Driver’s license button text", "Driver’s license button text used by the registration workflow."),
+        new("drivers_license_prompt_text", SettingCategory.FormBehaviorAndFields, "Driver’s license prompt text", "Driver’s license prompt text used by the registration workflow."),
+        new("agreement_confirm_button_text", SettingCategory.FormBehaviorAndFields, "Agreement accept button text", "Agreement accept button text used by the registration workflow."),
+        new("agreement_cancel_button_text", SettingCategory.FormBehaviorAndFields, "Agreement decline button text", "Agreement decline button text used by the registration workflow."),
+        new("school_info_field_legend", SettingCategory.FormBehaviorAndFields, "School-information heading", "School-information heading used by the registration workflow."),
+        new("school_info_format", SettingCategory.FormBehaviorAndFields, "School-registration mode", "School-registration mode used by the registration workflow."),
+        new("responsible_person_disclaimer", SettingCategory.FormBehaviorAndFields, "Responsible-person instructions", "Responsible-person instructions used by the registration workflow."),
+        new("display_responsible_person_field", SettingCategory.FormBehaviorAndFields, "Show responsible-person field", "Show responsible-person field used by the registration workflow."),
+        new("phone_number_format", SettingCategory.FormBehaviorAndFields, "Phone-number storage format", "Phone-number storage format used by the registration workflow."),
+        new("enable_patron_branch_select_option", SettingCategory.BranchAndPatronDefaults, "Allow patrons to choose a home branch", "Allow patrons to choose a home branch used by the registration workflow."),
+        new("display_preferred_pickup_location", SettingCategory.BranchAndPatronDefaults, "Show preferred pickup location", "Show preferred pickup location used by the registration workflow."),
+        new("teacher_patron_code_id", SettingCategory.BranchAndPatronDefaults, "Teacher patron code", "Teacher patron code used by the registration workflow."),
+        new("student_patron_code_id", SettingCategory.BranchAndPatronDefaults, "Student patron code", "Student patron code used by the registration workflow."),
+        new("patron_code_id", SettingCategory.BranchAndPatronDefaults, "Default patron code", "Default patron code used by the registration workflow."),
+        new("expiration_date", SettingCategory.BranchAndPatronDefaults, "Fixed expiration date", "Supplies one fixed patron expiration date; a configured years-based expiration takes precedence."),
+        new("expiration_date_years", SettingCategory.BranchAndPatronDefaults, "Expiration period (years)", "Calculates patron expiration relative to registration and takes precedence over the fixed expiration date."),
+        new("hide_branch_select_if_only_one_option", SettingCategory.BranchAndPatronDefaults, "Hide home branch when only one option exists", "Hide home branch when only one option exists used by the registration workflow."),
+        new("disable_branch", SettingCategory.BranchAndPatronDefaults, "Disable registration for this branch and form", "Prevents this branch and form combination from accepting registrations."),
+        new("display_ecard_checkbox", SettingCategory.ECardRegistration, "Show e-card option", "Show e-card option used by the registration workflow."),
+        new("ecard_patron_code_id", SettingCategory.ECardRegistration, "E-card patron code", "E-card patron code used by the registration workflow."),
+        new("ecard_registration_text", SettingCategory.ECardRegistration, "E-card success message", "E-card success message used by the registration workflow."),
+        new("ecard_barcode_prefix", SettingCategory.ECardRegistration, "E-card barcode prefix", "E-card barcode prefix used by the registration workflow."),
+        new("force_ecard_remotely", SettingCategory.ECardRegistration, "Require e-card for remote registration", "Require e-card for remote registration used by the registration workflow."),
+        new("display_mailing_list_checkbox", SettingCategory.EmailAndNotices, "Show mailing-list option", "Show mailing-list option used by the registration workflow."),
+        new("mailing_list_description_html", SettingCategory.EmailAndNotices, "Mailing-list description", "Mailing-list description used by the registration workflow."),
+        new("mailing_list_record_set_id", SettingCategory.EmailAndNotices, "Mailing-list record set", "Polaris record set to which patrons are added when they select the mailing-list option."),
+        new("display_sms_notice_information", SettingCategory.EmailAndNotices, "Show text-message information", "Show text-message information used by the registration workflow."),
+        new("sms_notice_information_html", SettingCategory.EmailAndNotices, "Text-message information", "Text-message information used by the registration workflow."),
+        new("use_legal_name_on_notices", SettingCategory.EmailAndNotices, "Use legal name on notices", "Use legal name on notices used by the registration workflow."),
+        new("ecard_welcome_email_template_text", SettingCategory.EmailAndNotices, "E-card welcome email text version", "E-card welcome email text version used by the registration workflow."),
+        new("ecard_welcome_email_template_html", SettingCategory.EmailAndNotices, "E-card welcome email HTML version", "E-card welcome email HTML version used by the registration workflow."),
+        new("welcome_email_template_text", SettingCategory.EmailAndNotices, "Welcome email text version", "Welcome email text version used by the registration workflow."),
+        new("welcome_email_template_html", SettingCategory.EmailAndNotices, "Welcome email HTML version", "Welcome email HTML version used by the registration workflow."),
+        new("welcome_email_from_name", SettingCategory.EmailAndNotices, "Welcome email sender name", "Welcome email sender name used by the registration workflow."),
+        new("welcome_email_subject", SettingCategory.EmailAndNotices, "Welcome email subject", "Welcome email subject used by the registration workflow."),
+        new("welcome_email_from_address", SettingCategory.EmailAndNotices, "Welcome email sender address", "Welcome email sender address used by the registration workflow."),
+        new("ecard_welcome_email_subject", SettingCategory.EmailAndNotices, "E-card welcome email subject", "E-card welcome email subject used by the registration workflow."),
+        new("postmark_api_key", SettingCategory.EmailAndNotices, "Postmark API key", "Secret credential used by the application to send welcome emails through Postmark; saved values remain concealed."),
+        new("bypass_dupe_check", SettingCategory.DuplicateChecking, "Skip preliminary duplicate check", "Skips the application’s preliminary duplicate check before patron creation; Polaris may still perform its own duplicate checking."),
+        new("duplicate_patron_message_html", SettingCategory.DuplicateChecking, "Duplicate patron message", "Duplicate patron message used by the registration workflow."),
+        new("perform_papi_duplicate_bypass", SettingCategory.DuplicateChecking, "Attempt PAPI duplicate workaround", "When Polaris rejects registration as a duplicate, allows the application to retry using the configured duplicate-name workaround."),
+        new("use_first_name_for_duplicate_workaround", SettingCategory.DuplicateChecking, "Apply duplicate workaround to first name", "Adds the duplicate-workaround suffix to the first name when enabled; otherwise it is added to the last name."),
+        new("block_out_of_state_registrations", SettingCategory.AddressVerification, "Block out-of-state registrations", "Blocks registration when the submitted state differs from the branch’s configured state."),
+        new("update_patron_record_with_melissa_address", SettingCategory.AddressVerification, "Save standardized Melissa address", "Save standardized Melissa address used by the registration workflow."),
+        new("melissa_data_api_key", SettingCategory.AddressVerification, "Melissa Data API key", "Secret credential used to request Melissa Data address verification; saved values remain concealed."),
+        new("valid_address_registration_text", SettingCategory.AddressVerification, "Verified-address success message", "Verified-address success message used by the registration workflow."),
+        new("valid_address_plus_name_registration_text", SettingCategory.AddressVerification, "Address-and-name-match success message", "Address-and-name-match success message used by the registration workflow."),
+        new("out_of_state_block_message", SettingCategory.AddressVerification, "Out-of-state registration message", "Out-of-state registration message used by the registration workflow."),
+        new("valid_address_patron_code_id", SettingCategory.AddressVerification, "Verified-address patron code", "Verified-address patron code used by the registration workflow."),
+        new("valid_address_plus_name_patron_code_id", SettingCategory.AddressVerification, "Address-and-name-match patron code", "Address-and-name-match patron code used by the registration workflow."),
+        new("valid_address_record_set_id", SettingCategory.AddressVerification, "Verified-address record set", "Verified-address record set used by the registration workflow."),
+        new("valid_address_plus_name_record_set_id", SettingCategory.AddressVerification, "Address-and-name-match record set", "Address-and-name-match record set used by the registration workflow."),
+        new("invalid_address_record_set_id", SettingCategory.AddressVerification, "Invalid-address record set", "Invalid-address record set used by the registration workflow."),
+        new("registration_logon_user_id", SettingCategory.PolarisIntegrationAndRecordSets, "Registration user for unverified addresses", "Polaris user ID used to create registrations whose address was not verified through the address-verification workflow."),
+        new("add_to_record_set_id", SettingCategory.PolarisIntegrationAndRecordSets, "Additional post-registration record set", "Additional Polaris record set to which every successfully created patron is added when configured."),
+        new("post_registration_note_text", SettingCategory.PolarisIntegrationAndRecordSets, "Patron note added after registration", "Text added to the created patron’s Polaris note after successful registration."),
+        new("show_dl_ips", SettingCategory.KioskAndSessionBehavior, "On-site IP address prefixes", "Semicolon-separated IP address prefixes treated as on-site requests; these control driver’s-license scanner availability, automatic kiosk resetting, and whether remote registration is forced into e-card mode."),
+        new("reset_form", SettingCategory.KioskAndSessionBehavior, "Automatically reset on-site form", "Automatically reset on-site form used by the registration workflow."),
+        new("kiosk_registration_text", SettingCategory.KioskAndSessionBehavior, "On-site success message", "On-site success message used by the registration workflow."),
+        new("kiosk_registration_header", SettingCategory.KioskAndSessionBehavior, "On-site registration introduction", "On-site registration introduction used by the registration workflow."),
+        new("reset_seconds", SettingCategory.KioskAndSessionBehavior, "Automatic reset delay (seconds)", "Automatic reset delay (seconds) used by the registration workflow."),
     ];
-    private static readonly IReadOnlyDictionary<SettingCategory, string[]> CategoryKeys =
-        new Dictionary<SettingCategory, string[]>
-        {
-            [SettingCategory.PageAppearanceAndInstructions] = ["header_image_url", "css_file", "warning_text", "custom_form_footer_html", "registration_text", "registration_form_header", "school_info_field_legend"],
-            [SettingCategory.FormBehaviorAndFields] = ["show_dl_ips", "show_dl", "hide_gender", "enable_age_warning", "age_warning_text", "hide_ereceipt", "na_gender_text", "normalize_to_uppercase", "dl_format", "enable_legal_name_checkbox", "legal_name_checkbox_label", "drivers_license_button_text", "drivers_license_prompt_text", "agreement_confirm_button_text", "agreement_cancel_button_text", "school_info_format", "responsible_person_disclaimer", "display_preferred_pickup_location", "require_preferred_pickup_location", "display_responsible_person_field", "phone_number_format"],
-            [SettingCategory.BranchAndPatronDefaults] = ["enable_patron_branch_select_option", "teacher_patron_code_id", "student_patron_code_id", "patron_code_id", "expiration_date", "expiration_date_years", "hide_branch_select_if_only_one_option", "disable_branch"],
-            [SettingCategory.ECardRegistration] = ["display_ecard_checkbox", "ecard_checkbox_label", "ecard_patron_code_id", "ecard_registration_text", "ecard_barcode_prefix", "force_ecard_remotely"],
-            [SettingCategory.EmailAndNotices] = ["display_mailing_list_checkbox", "mailing_list_checkbox_label", "mailing_list_description_html", "display_sms_notice_information", "sms_notice_information_html", "use_legal_name_on_notices", "ecard_welcome_email_template_text", "ecard_welcome_email_template_html", "welcome_email_template_text", "welcome_email_template_html", "welcome_email_from_name", "welcome_email_subject", "welcome_email_from_address", "ecard_welcome_email_subject", "post_registration_note_text"],
-            [SettingCategory.DuplicateChecking] = ["bypass_dupe_check", "duplicate_patron_message_html", "perform_papi_duplicate_bypass", "use_first_name_for_duplicate_workaround"],
-            [SettingCategory.AddressVerification] = ["block_out_of_state_registrations", "update_patron_record_with_melissa_address", "valid_address_registration_text", "valid_address_plus_name_registration_text", "out_of_state_block_message", "valid_address_patron_code_id", "valid_address_plus_name_patron_code_id", "valid_address_record_set_id", "valid_address_plus_name_record_set_id", "invalid_address_record_set_id"],
-            [SettingCategory.PolarisIntegrationAndRecordSets] = ["mailing_list_record_set_id", "registration_logon_user_id", "add_to_record_set_id"],
-            [SettingCategory.KioskAndSessionBehavior] = ["reset_form", "kiosk_registration_text", "kiosk_registration_header", "reset_seconds"],
-            [SettingCategory.AdvancedIntegrations] = ["postmark_api_key", "melissa_data_api_key"]
-        };
-    private static readonly IReadOnlyDictionary<string, string> DisplayNames = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-    {
-        ["css_file"] = "CSS file", ["header_image_url"] = "Header image URL",
-        ["custom_form_footer_html"] = "Custom form footer HTML",
-        ["perform_papi_duplicate_bypass"] = "PAPI duplicate check",
-        ["ecard_patron_code_id"] = "E-card patron code", ["display_ecard_checkbox"] = "Show e-card option",
-        ["ecard_checkbox_label"] = "E-card option label", ["ecard_registration_text"] = "E-card registration text",
-        ["ecard_barcode_prefix"] = "E-card barcode prefix", ["force_ecard_remotely"] = "Require e-card for remote registration",
-        ["sms_notice_information_html"] = "Text message information", ["display_sms_notice_information"] = "Show text message information",
-        ["add_to_record_set_id"] = "Polaris record set ID", ["registration_logon_user_id"] = "Polaris registration user ID",
-        ["postmark_api_key"] = "Postmark API key", ["melissa_data_api_key"] = "Melissa Data API key"
-    };
-    private static readonly IReadOnlyDictionary<string, string> Descriptions = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-    {
-        ["show_dl"] = "Shows or hides the driver’s license field on the registration form.",
-        ["ecard_patron_code_id"] = "Polaris patron code assigned to successful e-card registrations.",
-        ["out_of_state_block_message"] = "Text displayed when registration is blocked because the address is outside the allowed state.",
-        ["add_to_record_set_id"] = "Adds newly registered patrons to this Polaris record set. Leave blank to disable this action.",
-        ["css_file"] = "CSS file used to style the registration page.",
-        ["header_image_url"] = "Web address of the image displayed at the top of the registration page.",
-        ["postmark_api_key"] = "Secret API key used to send registration email through Postmark.",
-        ["melissa_data_api_key"] = "Secret API key used for Melissa Data address verification.",
-        ["perform_papi_duplicate_bypass"] = "Controls whether PAPI is used when bypassing the standard duplicate check."
-    };
     public IReadOnlyList<string> DynamicFieldSuffixes { get; } =
     [
         "PatronBranchID", "NameFirst", "NameMiddle", "NameLast", "UseLegalName",
@@ -338,6 +296,24 @@ public sealed class SettingCatalog : ISettingCatalog
         "RequestPickupBranchID", "User1", "User5", "DeliverCardToSchool", "IsStudent",
         "IsTeacher", "IsECard", "AddToMailingList"
     ];
+    public static IReadOnlyDictionary<string, string> FieldNames { get; } =
+        new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["PatronBranchID"] = "Home branch", ["NameFirst"] = "First name",
+            ["NameMiddle"] = "Middle name", ["NameLast"] = "Last name",
+            ["UseLegalName"] = "Legal name option", ["LegalNameFirst"] = "Legal first name",
+            ["LegalNameMiddle"] = "Legal middle name", ["LegalNameLast"] = "Legal last name",
+            ["Birthdate"] = "Birth date", ["DeliveryOptionId"] = "Notification method",
+            ["PhoneVoice1"] = "Primary phone number", ["PhoneVoice2"] = "Secondary phone number",
+            ["ReceiveEreceipts"] = "E-receipts", ["EmailAddress"] = "Email address",
+            ["AltEmailAddress"] = "Alternate email address", ["StreetOne"] = "Address line 1",
+            ["StreetTwo"] = "Address line 2", ["City"] = "City", ["State"] = "State",
+            ["PostalCode"] = "ZIP code", ["Password"] = "PIN", ["Password2"] = "Confirm PIN",
+            ["RequestPickupBranchID"] = "Preferred pickup location", ["User1"] = "School",
+            ["User5"] = "Responsible person", ["DeliverCardToSchool"] = "Deliver card to school",
+            ["IsStudent"] = "Student", ["IsTeacher"] = "Teacher", ["IsECard"] = "E-card option",
+            ["AddToMailingList"] = "Mailing-list option"
+        };
     public IReadOnlyList<string> LabelFieldSuffixes { get; } =
     [
         "PatronBranchID", "NameFirst", "NameMiddle", "NameLast", "UseLegalName",
@@ -355,33 +331,24 @@ public sealed class SettingCatalog : ISettingCatalog
 
     public SettingCatalog()
     {
-        var categoriesByKey = CategoryKeys.SelectMany(pair => pair.Value.Select(key => (key, pair.Key)))
-            .ToDictionary(item => item.key, item => item.Key, StringComparer.OrdinalIgnoreCase);
-        var list = OrdinaryKeys.Select((key, i) =>
+        var list = OrdinarySettings.Select((setting, i) =>
         {
-            var type = TypeFor(key);
-            var displayName = DisplayNames.GetValueOrDefault(key, Friendly(key));
-            return new SettingDefinition(
-                key,
-                displayName,
-                Descriptions.GetValueOrDefault(key, DescriptionFor(displayName, type)),
-                type,
-                IsSensitive: SensitiveKeys.Contains(key),
-                AllowEmpty: AllowsEmpty(type),
-                SortOrder: i,
-                Category: categoriesByKey[key]);
+            var type = TypeFor(setting.Key);
+            return new SettingDefinition(setting.Key, setting.DisplayName, setting.Description, type,
+                IsSensitive: SensitiveKeys.Contains(setting.Key), AllowEmpty: AllowsEmpty(type), SortOrder: i,
+                Category: setting.Category);
         }).ToList();
         foreach (var suffix in DynamicFieldSuffixes)
         {
-            list.Add(new($"alert.{suffix}", $"{Friendly(suffix)} alert", "Stored alert text reserved for future validation-message integration.", SettingValueType.LongString, SettingGroup.Alert));
+            list.Add(new($"alert.{suffix}", FieldNames[suffix], $"Validation message for {FieldNames[suffix].ToLowerInvariant()}; reserved for future registration-form integration.", SettingValueType.LongString, SettingGroup.Alert));
         }
         foreach (var suffix in LabelFieldSuffixes)
         {
-            list.Add(new($"label.{suffix}", $"{Friendly(suffix)} label", "Label shown for this field.", SettingValueType.ShortString, SettingGroup.Label));
+            list.Add(new($"label.{suffix}", FieldNames[suffix], $"Label displayed for {FieldNames[suffix].ToLowerInvariant()} on the registration form.", SettingValueType.ShortString, SettingGroup.Label));
         }
         foreach (var suffix in RequiredFieldSuffixes)
         {
-            list.Add(new($"require.{suffix}", $"Require {Friendly(suffix)}", "Whether this dynamically validated field is required.", SettingValueType.Boolean, SettingGroup.Require, AllowEmpty: false));
+            list.Add(new($"require.{suffix}", $"Require {FieldNames[suffix].ToLowerInvariant()}", $"Makes {FieldNames[suffix].ToLowerInvariant()} required on the registration form.", SettingValueType.Boolean, SettingGroup.Require, AllowEmpty: false));
         }
         All = list.OrderBy(x => x.Group).ThenBy(x => x.Category).ThenBy(x => x.DisplayName, StringComparer.OrdinalIgnoreCase).ToList();
         byKey = list.ToDictionary(x => x.Key, StringComparer.OrdinalIgnoreCase);

@@ -4,6 +4,7 @@ using Clc.PatronRegistration.Web.Settings;
 using Clc.PatronRegistration.Web.Models;
 using Clc.PatronRegistration.Validators;
 using System.ComponentModel.DataAnnotations;
+using Moq;
 
 namespace Clc.PatronRegistration.Tests;
 
@@ -63,7 +64,7 @@ public class SettingsAdministrationTests
     public void Catalog_UsesStaffFriendlyAcronymsAndAlphabetizesDynamicGroups()
     {
         var catalog = new SettingCatalog().All;
-        foreach (var expected in new[] { "CSS file", "Header image URL", "Custom form footer HTML", "Polaris record set ID", "PAPI duplicate check", "E-card patron code" })
+        foreach (var expected in new[] { "CSS file", "Header image URL", "Custom form footer HTML", "Additional post-registration record set", "Attempt PAPI duplicate workaround", "E-card patron code" })
             Assert.IsTrue(catalog.Any(setting => setting.DisplayName == expected), expected);
         foreach (var group in new[] { SettingGroup.Alert, SettingGroup.Label, SettingGroup.Require })
         {
