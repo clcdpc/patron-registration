@@ -68,8 +68,14 @@ public static partial class SettingsAuditPresenter
 
     public static string PresentActivity(string? eventType)
     {
-        if (!string.IsNullOrWhiteSpace(eventType) && ActivityLabels.TryGetValue(eventType, out var label)) return label;
-        if (string.IsNullOrWhiteSpace(eventType)) return "Unknown activity";
+        if (!string.IsNullOrWhiteSpace(eventType) && ActivityLabels.TryGetValue(eventType, out var label))
+        {
+            return label;
+        }
+        if (string.IsNullOrWhiteSpace(eventType))
+        {
+            return "Unknown activity";
+        }
         var words = PascalCaseBoundary().Replace(eventType.Trim(), " ");
         return char.ToUpperInvariant(words[0]) + words[1..].ToLowerInvariant();
     }
@@ -86,7 +92,12 @@ public static partial class SettingsAuditPresenter
         var form = string.IsNullOrEmpty(row.FormCode) ? "Default form" : presentedFormName ?? row.FormCode;
         var setting = string.IsNullOrWhiteSpace(row.SettingKey) ? null :
             catalog.TryGetValue(row.SettingKey, out var definition) ? definition.DisplayName : row.SettingKey;
-        var technical = new List<AuditTechnicalDetail>();
+        var technical = new List<AuditTechnicalDetail>
+        {
+            new("Raw event type", row.EventType),
+            new("Raw form code", string.IsNullOrEmpty(row.FormCode) ? "(empty — default form)" : row.FormCode)
+        };
+        Add(technical, "Raw setting key", row.SettingKey);
         if (isGlobal)
         {
             technical.Add(new("Audit event ID", row.AuditEventId.ToString(CultureInfo.InvariantCulture)));
@@ -95,9 +106,6 @@ public static partial class SettingsAuditPresenter
             {
                 technical.Add(new("Target library ID", row.TargetLibraryId.Value.ToString(CultureInfo.InvariantCulture)));
             }
-            technical.Add(new("Raw form code", string.IsNullOrEmpty(row.FormCode) ? "(empty — default form)" : row.FormCode));
-            Add(technical, "Raw event type", row.EventType);
-            Add(technical, "Raw setting key", row.SettingKey);
             Add(technical, "Correlation ID", row.CorrelationId);
             Add(technical, "IP address", row.IpAddress);
         }

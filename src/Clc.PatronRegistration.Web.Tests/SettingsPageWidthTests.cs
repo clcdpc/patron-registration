@@ -25,6 +25,20 @@ public class SettingsPageWidthTests
         Assert.IsFalse(layout.Contains("ControllerName", StringComparison.Ordinal));
     }
 
+
+    [TestMethod]
+    public void SharedLayout_LoadsPageStylesheetAfterCustomStylesheetAndBeforeBody()
+    {
+        var layout = ReadWebFile("Views", "Shared", "_Layout.cshtml");
+        var customStylesheet = layout.IndexOf("Settings.CssFile", StringComparison.Ordinal);
+        var pageStylesheet = layout.IndexOf("href=\"@pageStylesheet\"", StringComparison.Ordinal);
+        var renderBody = layout.IndexOf("@RenderBody()", StringComparison.Ordinal);
+
+        Assert.IsTrue(customStylesheet >= 0);
+        Assert.IsTrue(pageStylesheet > customStylesheet);
+        Assert.IsTrue(renderBody > pageStylesheet);
+    }
+
     [TestMethod]
     public void OrdinaryAndRegistrationViews_DoNotAssignSettingsBodyClass()
     {

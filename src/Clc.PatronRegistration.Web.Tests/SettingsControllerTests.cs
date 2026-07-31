@@ -536,6 +536,31 @@ public class SettingsControllerTests
 
         Assert.IsInstanceOfType<ViewResult>(result);
         repository.Verify(service => service.SearchAudit(global ? null : 2, includeSensitive, search), Times.Once);
+        repository.Verify(service => service.GetFormCodesForLibraries(
+            It.IsAny<IReadOnlyCollection<int>>(), It.IsAny<int>()), Times.Never);
+    }
+
+    [TestMethod]
+    public void Audit_SearchResultPresentsTheRawIdentifierThatMatched()
+    {
+        var repository = new Mock<ISettingsAdministrationRepository>();
+        repository.Setup(service => service.SearchAudit(2, false, "DirectSave")).Returns(
+        [
+            new SettingsAuditRow(1, DateTime.UtcNow, "DirectSave", 3, 2, "kids", "registration_text",
+                null, null, false, true, "Admin", null, "hidden-correlation", "127.0.0.1")
+        ]);
+        repository.Setup(service => service.GetFormCodesForLibraries(It.IsAny<IReadOnlyCollection<int>>(), 1))
+            .Returns([]);
+
+        var result = (ViewResult)CreateController(repository, LibraryAuthorization()).Audit("DirectSave");
+        var entry = ((SettingsAuditViewModel)result.Model!).Events.Single();
+        var details = entry.TechnicalDetails.ToDictionary(detail => detail.Label, detail => detail.Value);
+
+        Assert.AreEqual("DirectSave", details["Raw event type"]);
+        Assert.AreEqual("registration_text", details["Raw setting key"]);
+        Assert.AreEqual("kids", details["Raw form code"]);
+        Assert.IsFalse(details.ContainsKey("Correlation ID"));
+        Assert.IsFalse(details.ContainsKey("IP address"));
     }
 
     [TestMethod]
@@ -547,15 +572,14 @@ public class SettingsControllerTests
             new SettingsAuditRow(1, DateTime.UtcNow, "DirectSave", 3, 2, "kids", null, null, null,
                 false, true, "Admin", null, null, null),
             new SettingsAuditRow(2, DateTime.UtcNow, "DirectSave", 5, 4, "kids", null, null, null,
+                false, true, "Admin", null, null, null),
+            new SettingsAuditRow(3, DateTime.UtcNow, "DirectSave", 7, 6, "kids", null, null, null,
                 false, true, "Admin", null, null, null)
         ]);
-        repository.Setup(service => service.GetFormCodes(2, 1)).Returns(
+        repository.Setup(service => service.GetFormCodesForLibraries(
+            It.Is<IReadOnlyCollection<int>>(ids => ids.OrderBy(id => id).SequenceEqual(new[] { 2, 4, 6 })), 1)).Returns(
         [
             FormMetadata(2, "kids", "Library two children"),
-            FormMetadata(1, "kids", "Inherited children")
-        ]);
-        repository.Setup(service => service.GetFormCodes(4, 1)).Returns(
-        [
             FormMetadata(4, "kids", "Library four youth"),
             FormMetadata(1, "kids", "Inherited children")
         ]);
@@ -565,6 +589,10 @@ public class SettingsControllerTests
 
         Assert.AreEqual("Library two children", model.Events.Single(entry => entry.AuditEventId == 1).Form);
         Assert.AreEqual("Library four youth", model.Events.Single(entry => entry.AuditEventId == 2).Form);
+        Assert.AreEqual("Inherited children", model.Events.Single(entry => entry.AuditEventId == 3).Form);
+        repository.Verify(service => service.GetFormCodesForLibraries(
+            It.IsAny<IReadOnlyCollection<int>>(), 1), Times.Once);
+        repository.Verify(service => service.GetFormCodes(It.IsAny<int>(), It.IsAny<int>()), Times.Never);
     }
 
     private static FormCodeMetadata FormMetadata(int organizationId, string code, string displayName) =>

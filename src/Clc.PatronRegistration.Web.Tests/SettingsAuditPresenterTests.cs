@@ -48,9 +48,33 @@ public class SettingsAuditPresenterTests
     }
 
     [TestMethod]
-    public void LibraryAdministrator_DoesNotReceiveTroubleshootingValues()
+    public void LibraryAdministrator_ReceivesSearchableIdentifiersButNotTroubleshootingValues()
     {
-        Assert.AreEqual(0, Present(Row(correlation: "request-1", ip: "127.0.0.1")).TechnicalDetails.Count);
+        var model = Present(Row(form: "kids", setting: "registration_text", correlation: "request-1", ip: "127.0.0.1"));
+        var labels = model.TechnicalDetails.Select(detail => detail.Label).ToList();
+
+        CollectionAssert.Contains(labels, "Raw event type");
+        CollectionAssert.Contains(labels, "Raw setting key");
+        CollectionAssert.Contains(labels, "Raw form code");
+        CollectionAssert.DoesNotContain(labels, "Audit event ID");
+        CollectionAssert.DoesNotContain(labels, "Target organization ID");
+        CollectionAssert.DoesNotContain(labels, "Target library ID");
+        CollectionAssert.DoesNotContain(labels, "Correlation ID");
+        CollectionAssert.DoesNotContain(labels, "IP address");
+        Assert.AreEqual("kids", model.TechnicalDetails.Single(detail => detail.Label == "Raw form code").Value);
+    }
+
+    [TestMethod]
+    public void DuplicateFriendlyFormNamesRemainDistinguishableByRawFormCode()
+    {
+        var first = SettingsAuditPresenter.Present(Row(form: "kids"), false, 1, _ => null,
+            (_, _) => "Youth registration", Catalog());
+        var second = SettingsAuditPresenter.Present(Row(form: "teens"), false, 1, _ => null,
+            (_, _) => "Youth registration", Catalog());
+
+        Assert.AreEqual(first.Form, second.Form);
+        Assert.AreEqual("kids", first.TechnicalDetails.Single(detail => detail.Label == "Raw form code").Value);
+        Assert.AreEqual("teens", second.TechnicalDetails.Single(detail => detail.Label == "Raw form code").Value);
     }
 
     [TestMethod]

@@ -11,6 +11,14 @@ namespace Clc.PatronRegistration.Tests;
 public class SettingsAdministrationTests
 {
     [TestMethod]
+    public void SettingsAudit_EmptyBatchedFormLookupReturnsWithoutOpeningAConnection()
+    {
+        var repository = new SettingsAdministrationRepository(Mock.Of<IDbHelperSettings>());
+
+        Assert.AreEqual(0, repository.GetFormCodesForLibraries([], 1).Count);
+    }
+
+    [TestMethod]
     public void FormCodeNormalizer_CanonicalizesOnlyNullAndEmptyDefaults()
     {
         Assert.AreEqual(string.Empty, FormCodeNormalizer.Normalize(null));

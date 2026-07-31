@@ -17,10 +17,6 @@
 </head>
 <body class="@bodyClass" aria-live="polite">
     <link rel="stylesheet" href="~/css/site.css" asp-append-version="true" />
-    @if (!string.IsNullOrWhiteSpace(pageStylesheet))
-    {
-        <link rel="stylesheet" href="@pageStylesheet" asp-append-version="true" />
-    }
     <div id="regFormContainer">
         @if (!@Context.IsInjectedForm())
         {
@@ -30,6 +26,10 @@
             {
                 <img alt="header image containing the library's logo" src="@Settings.HeaderImageUrl" role="banner" />
             }
+        }
+        @if (!string.IsNullOrWhiteSpace(pageStylesheet))
+        {
+            <link rel="stylesheet" href="@pageStylesheet" asp-append-version="true" />
         }
         @RenderBody()
     </div>
