@@ -516,8 +516,22 @@ public sealed class SettingsController(
             return Forbid();
         }
         int? libraryId = principal.IsGlobal ? null : GetLibraryId(principal.OrganizationId!.Value);
-        var rows = repository.SearchAudit(libraryId, principal.IsGlobal, search);
-        return View(SettingsAuditVisibility.ForAdministrator(rows, principal.IsGlobal));
+        var rows = SettingsAuditVisibility.ForAdministrator(
+            repository.SearchAudit(libraryId, principal.IsGlobal, search), principal.IsGlobal).ToList();
+        var formNames = rows.Select(row => row.TargetLibraryId ?? row.TargetOrganizationId).Distinct()
+            .SelectMany(id => repository.GetFormCodes(id, settingsOptions.SystemOrganizationId) ?? [])
+            .GroupBy(form => form.FormCode, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.First().DisplayName, StringComparer.OrdinalIgnoreCase);
+        var events = rows.Select(row => SettingsAuditPresenter.Present(row, principal.IsGlobal,
+            settingsOptions.SystemOrganizationId,
+            id => cache.OrganizationCache.FirstOrDefault(organization => organization.OrganizationID == id)?.Name,
+            formNames, CatalogByKey)).ToList();
+        return View(new SettingsAuditViewModel
+        {
+            SearchText = search ?? string.Empty,
+            IsGlobalAdministrator = principal.IsGlobal,
+            Events = events
+        });
     }
 
     [HttpGet("forms")]
