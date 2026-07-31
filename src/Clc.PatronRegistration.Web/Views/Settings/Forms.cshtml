@@ -2,12 +2,12 @@
 @{
     ViewData["Title"] = "Form codes";
 }
-<link rel="stylesheet" href="~/css/settings.css" asp-append-version="true" />
 <header class="settings-header">
     <h1>Form-code management</h1>
-    <nav aria-label="Form-code administration">
-        <a asp-action="Index">Back to settings</a>
+    <nav class="settings-navigation" aria-label="Form-code administration">
+        <a asp-action="Index">Settings</a>
         <a asp-action="Audit">Audit history</a>
+        <a asp-action="Forms" asp-route-libraryId="@Model.LibraryId" aria-current="page">Form codes</a>
         <a asp-action="Help">Help</a>
     </nav>
 </header>

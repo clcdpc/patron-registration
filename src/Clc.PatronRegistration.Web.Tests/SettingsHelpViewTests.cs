@@ -37,9 +37,9 @@ public class SettingsHelpViewTests
         foreach (var file in new[] { "Forms.cshtml", "Audit.cshtml" })
         {
             var view = ReadWebFile("Views", "Settings", file);
-            StringAssert.Contains(view, "<nav aria-label=");
+            StringAssert.Contains(view, "<nav class=\"settings-navigation\" aria-label=");
             StringAssert.Contains(view, "asp-action=\"Help\"");
-            StringAssert.Contains(view, "asp-action=\"Index\">Back to settings");
+            StringAssert.Contains(view, "asp-action=\"Index\">Settings");
         }
     }
 
@@ -49,7 +49,7 @@ public class SettingsHelpViewTests
         var help = ReadWebFile("Views", "Settings", "Help.cshtml");
 
         StringAssert.Contains(help, "aria-label=\"Settings help navigation\"");
-        StringAssert.Contains(help, ">Back to settings</a>");
+        StringAssert.Contains(help, ">Settings</a>");
         StringAssert.Contains(help, "asp-action=\"Forms\">Form codes</a>");
         StringAssert.Contains(help, "asp-action=\"Audit\">Audit history</a>");
         StringAssert.Contains(help, "staff member's name, form code, setting key");

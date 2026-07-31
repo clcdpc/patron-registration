@@ -172,6 +172,7 @@ public interface ISettingsAdministrationRepository
     void RevokePreviewLink(long previewLinkId, IReadOnlyDictionary<string, SettingDefinition> catalog, bool canManageSensitive, AuditContext audit);
     long? ReplacePreviewLinkMode(long previewLinkId, byte[] replacementTokenHash, bool allowLiveSubmission, IReadOnlyDictionary<string, SettingDefinition> catalog, bool canManageSensitive, AuditContext audit);
     IReadOnlyList<FormCodeMetadata> GetFormCodes(int libraryId, int systemOrganizationId);
+    IReadOnlyList<FormCodeMetadata> GetFormCodesForLibraries(IReadOnlyCollection<int> libraryIds, int systemOrganizationId);
     IReadOnlyList<LegacyFormCodeRow> GetLegacyFormCodes();
     void SaveFormCode(FormCodeMetadata metadata, bool isCreate, AuditContext audit);
     FormCodeImpact GetFormCodeImpact(int ownerOrganizationId, string formCode, IReadOnlyCollection<int> affectedOrganizations);
@@ -563,6 +564,23 @@ select OrganizationId,FormCode,DisplayName,Description,CreatedAtUtc,CreatedBy,Mo
 from dbo.RegistrationFormCodeMetadata where OrganizationId in (@libraryId,@systemOrganizationId)
 order by FormCode,case when OrganizationId=@libraryId then 0 else 1 end",
             new { libraryId, systemOrganizationId }).ToList();
+    }
+
+    public IReadOnlyList<FormCodeMetadata> GetFormCodesForLibraries(IReadOnlyCollection<int> libraryIds, int systemOrganizationId)
+    {
+        var targetLibraryIds = libraryIds.Distinct().ToList();
+        if (targetLibraryIds.Count == 0)
+        {
+            return [];
+        }
+
+        using var connection = Open();
+        return connection.Query<FormCodeMetadata>(@"
+select OrganizationId,FormCode,DisplayName,Description,CreatedAtUtc,CreatedBy,ModifiedAtUtc,ModifiedBy
+from dbo.RegistrationFormCodeMetadata
+where OrganizationId=@systemOrganizationId or OrganizationId in @targetLibraryIds
+order by FormCode,case when OrganizationId=@systemOrganizationId then 1 else 0 end,OrganizationId",
+            new { targetLibraryIds, systemOrganizationId }).ToList();
     }
 
     public IReadOnlyList<LegacyFormCodeRow> GetLegacyFormCodes()

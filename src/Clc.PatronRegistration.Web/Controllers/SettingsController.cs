@@ -516,8 +516,31 @@ public sealed class SettingsController(
             return Forbid();
         }
         int? libraryId = principal.IsGlobal ? null : GetLibraryId(principal.OrganizationId!.Value);
-        var rows = repository.SearchAudit(libraryId, principal.IsGlobal, search);
-        return View(SettingsAuditVisibility.ForAdministrator(rows, principal.IsGlobal));
+        var rows = SettingsAuditVisibility.ForAdministrator(
+            repository.SearchAudit(libraryId, principal.IsGlobal, search), principal.IsGlobal).ToList();
+        var targetLibraryIds = rows.Select(row => row.TargetLibraryId ?? row.TargetOrganizationId).Distinct().ToList();
+        var formMetadata = targetLibraryIds.Count == 0
+            ? []
+            : repository.GetFormCodesForLibraries(targetLibraryIds, settingsOptions.SystemOrganizationId) ?? [];
+        var systemForms = formMetadata.Where(form => form.OrganizationId == settingsOptions.SystemOrganizationId).ToList();
+        var formNamesByLibrary = targetLibraryIds.ToDictionary(id => id, id => formMetadata
+            .Where(form => form.OrganizationId == id)
+            .Concat(id == settingsOptions.SystemOrganizationId ? [] : systemForms)
+            .GroupBy(form => form.FormCode, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.First().DisplayName, StringComparer.OrdinalIgnoreCase));
+        var catalogByKey = CatalogByKey;
+        var events = rows.Select(row => SettingsAuditPresenter.Present(row, principal.IsGlobal,
+            settingsOptions.SystemOrganizationId,
+            id => cache.OrganizationCache.FirstOrDefault(organization => organization.OrganizationID == id)?.Name,
+            (ownerId, formCode) => formNamesByLibrary.TryGetValue(ownerId, out var formNames) &&
+                formNames.TryGetValue(formCode, out var displayName) ? displayName : null,
+            catalogByKey)).ToList();
+        return View(new SettingsAuditViewModel
+        {
+            SearchText = search ?? string.Empty,
+            IsGlobalAdministrator = principal.IsGlobal,
+            Events = events
+        });
     }
 
     [HttpGet("forms")]

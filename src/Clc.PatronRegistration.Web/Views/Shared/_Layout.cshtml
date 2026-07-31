@@ -1,4 +1,9 @@
-﻿@inject ISettingProvider Settings
+@inject ISettingProvider Settings
+
+@{
+    var bodyClass = ViewData["BodyClass"] as string;
+    var pageStylesheet = ViewData["PageStylesheet"] as string;
+}
 
 <!DOCTYPE html>
 <html lang="en">
@@ -10,7 +15,7 @@
     
     <title>@(ViewData["Title"] as string ?? "New Library Card Registration")</title>
 </head>
-<body aria-live="polite">
+<body class="@bodyClass" aria-live="polite">
     <link rel="stylesheet" href="~/css/site.css" asp-append-version="true" />
     <div id="regFormContainer">
         @if (!@Context.IsInjectedForm())
@@ -21,6 +26,10 @@
             {
                 <img alt="header image containing the library's logo" src="@Settings.HeaderImageUrl" role="banner" />
             }
+        }
+        @if (!string.IsNullOrWhiteSpace(pageStylesheet))
+        {
+            <link rel="stylesheet" href="@pageStylesheet" asp-append-version="true" />
         }
         @RenderBody()
     </div>
