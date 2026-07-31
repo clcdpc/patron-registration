@@ -51,9 +51,40 @@
 }
 
 .settings-help-warning h3 { margin-top: 0 }
-.settings-help-table-wrap { overflow-x: auto }
-.settings-help-status-table { width: 100% }
-.settings-help-status-table th, .settings-help-status-table td { vertical-align: top }
+.settings-help-status-table {
+    border-collapse: collapse;
+    table-layout: fixed;
+    text-align: left;
+    width: 100%
+}
+
+.settings-help-status-table caption {
+    font-weight: 700;
+    padding-block: 0 0.5rem;
+    text-align: left
+}
+
+.settings-help-status-table th,
+.settings-help-status-table td {
+    border-bottom: 1px solid #d4d4d4;
+    overflow-wrap: anywhere;
+    padding: .55rem .65rem;
+    text-align: left;
+    vertical-align: top
+}
+
+.settings-help-status-table thead {
+    background: #e8eef3
+}
+
+.settings-help-status-table th:first-child {
+    width: 8rem
+}
+
+.settings-help a:focus-visible {
+    outline: 3px solid #1b65a7;
+    outline-offset: 3px
+}
 
 @media (max-width: 40rem) {
     .settings-help-toc ul { columns: 1 }

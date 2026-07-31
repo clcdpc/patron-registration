@@ -58,6 +58,23 @@ public class SettingsControllerTests
     }
 
     [TestMethod]
+    public void Help_PreservesAuthorizedNamedFormReturnContext()
+    {
+        var repository = new Mock<ISettingsAdministrationRepository>();
+        repository.Setup(service => service.GetFormCodes(2, 1)).Returns(
+        [
+            new FormCodeMetadata(2, "kids", "Children's form", null, DateTime.UtcNow, "admin", DateTime.UtcNow, "admin")
+        ]);
+        repository.Setup(service => service.GetLegacyFormCodes()).Returns([]);
+
+        var result = (ViewResult)CreateController(repository, LibraryAuthorization()).Help(3, "kids");
+        var model = (SettingsHelpViewModel)result.Model!;
+
+        Assert.AreEqual(3, model.OrganizationId);
+        Assert.AreEqual("kids", model.FormCode);
+    }
+
+    [TestMethod]
     public void Help_ForbidsUserWithoutSettingsRole()
     {
         var authorization = new Mock<ISettingsAuthorizationService>();
