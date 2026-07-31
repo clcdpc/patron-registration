@@ -19,6 +19,132 @@ namespace Clc.PatronRegistration.Tests;
 [TestClass]
 public class SettingsControllerTests
 {
+    [TestMethod]
+    public void Help_AllowsManagerAndPreservesAuthorizedDefaultFormWithoutRepositoryAccess()
+    {
+        var repository = new Mock<ISettingsAdministrationRepository>(MockBehavior.Strict);
+        repository.Setup(service => service.GetCacheGeneration()).Returns(1);
+        var controller = CreateController(repository, LibraryAuthorization());
+
+        var result = (ViewResult)controller.Help(3, null);
+        var model = (SettingsHelpViewModel)result.Model!;
+
+        Assert.AreEqual(3, model.OrganizationId);
+        Assert.AreEqual(string.Empty, model.FormCode);
+        repository.Verify(service => service.GetCacheGeneration(), Times.Never);
+        repository.VerifyNoOtherCalls();
+    }
+
+    [TestMethod]
+    public void Help_DropsUnauthorizedReturnContext()
+    {
+        var repository = new Mock<ISettingsAdministrationRepository>();
+        var result = (ViewResult)CreateController(repository, LibraryAuthorization()).Help(99, "kids");
+        var model = (SettingsHelpViewModel)result.Model!;
+
+        Assert.IsNull(model.OrganizationId);
+        Assert.AreEqual(string.Empty, model.FormCode);
+        repository.Verify(service => service.GetFormCodes(It.IsAny<int>(), It.IsAny<int>()), Times.Never);
+    }
+
+    [TestMethod]
+    public void Help_DropsUnavailableNamedForm()
+    {
+        var repository = new Mock<ISettingsAdministrationRepository>();
+        repository.Setup(service => service.GetFormCodes(It.IsAny<int>(), It.IsAny<int>())).Returns([]);
+        repository.Setup(service => service.GetLegacyFormCodes()).Returns([]);
+        var result = (ViewResult)CreateController(repository, LibraryAuthorization()).Help(3, "missing");
+        Assert.IsNull(((SettingsHelpViewModel)result.Model!).OrganizationId);
+    }
+
+    [TestMethod]
+    public void Help_PreservesAuthorizedNamedFormReturnContext()
+    {
+        var repository = new Mock<ISettingsAdministrationRepository>();
+        repository.Setup(service => service.GetFormCodes(2, 1)).Returns(
+        [
+            new FormCodeMetadata(2, "kids", "Children's form", null, DateTime.UtcNow, "admin", DateTime.UtcNow, "admin")
+        ]);
+        repository.Setup(service => service.GetLegacyFormCodes()).Returns([]);
+
+        var result = (ViewResult)CreateController(repository, LibraryAuthorization()).Help(3, "kids");
+        var model = (SettingsHelpViewModel)result.Model!;
+
+        Assert.AreEqual(3, model.OrganizationId);
+        Assert.AreEqual("kids", model.FormCode);
+    }
+
+    [TestMethod]
+    public void Help_ForbidsUserWithoutSettingsRole()
+    {
+        var authorization = new Mock<ISettingsAuthorizationService>();
+        authorization.Setup(service => service.Describe(It.IsAny<ClaimsPrincipal>())).Returns(new SettingsPrincipal(false, 2, false));
+
+        Assert.IsInstanceOfType<ForbidResult>(CreateController(new Mock<ISettingsAdministrationRepository>(), authorization).Help(null));
+    }
+
+    [TestMethod]
+    public void Help_AllowsGlobalAdministratorWithoutResolvingSentinelOrganization()
+    {
+        var authorization = new Mock<ISettingsAuthorizationService>();
+        authorization.Setup(service => service.Describe(It.IsAny<ClaimsPrincipal>())).Returns(new SettingsPrincipal(true, -1, true));
+        var cache = new Mock<ICache>(MockBehavior.Strict);
+        var result = CreateController(new Mock<ISettingsAdministrationRepository>(), authorization, cache.Object).Help(null);
+
+        Assert.IsInstanceOfType<ViewResult>(result);
+        cache.VerifyNoOtherCalls();
+    }
+
+    [DataTestMethod]
+    [DataRow(999)]
+    [DataRow(-1)]
+    public void Help_GlobalAdministratorDropsUnknownAndSentinelReturnOrganizations(int organizationId)
+    {
+        var repository = new Mock<ISettingsAdministrationRepository>();
+        var result = (ViewResult)CreateController(repository, GlobalAuthorization(), new TestCache()).Help(organizationId, null);
+
+        Assert.IsNull(((SettingsHelpViewModel)result.Model!).OrganizationId);
+        repository.Verify(service => service.GetFormCodes(It.IsAny<int>(), It.IsAny<int>()), Times.Never);
+    }
+
+    [DataTestMethod]
+    [DataRow(1)]
+    [DataRow(2)]
+    [DataRow(3)]
+    public void Help_GlobalAdministratorPreservesRealSystemLibraryAndBranchScopes(int organizationId)
+    {
+        var result = (ViewResult)CreateController(
+            new Mock<ISettingsAdministrationRepository>(), GlobalAuthorization(), new TestCache()).Help(organizationId, null);
+        var model = (SettingsHelpViewModel)result.Model!;
+
+        Assert.AreEqual(organizationId, model.OrganizationId);
+        Assert.AreEqual(string.Empty, model.FormCode);
+    }
+
+    [DataTestMethod]
+    [DataRow(2, true)]
+    [DataRow(3, true)]
+    [DataRow(4, false)]
+    public void Help_LibraryAdministratorOnlyPreservesOwnLibraryAndBranches(int organizationId, bool isPreserved)
+    {
+        var organizations = new List<OrganizationsGetRow>
+        {
+            new() { OrganizationID = 1, OrganizationCodeID = 1, Name = "System" },
+            new() { OrganizationID = 2, OrganizationCodeID = 2, Name = "Own library" },
+            new() { OrganizationID = 3, OrganizationCodeID = 3, ParentOrganizationID = 2, Name = "Own branch" },
+            new() { OrganizationID = 4, OrganizationCodeID = 2, Name = "Other library" }
+        };
+        var cache = new Mock<ICache>();
+        cache.SetupGet(value => value.OrganizationCache).Returns(organizations);
+        cache.Setup(value => value.GetOrg(2)).Returns(organizations[1]);
+        cache.Setup(value => value.GetBranches(2)).Returns([organizations[2]]);
+
+        var result = (ViewResult)CreateController(
+            new Mock<ISettingsAdministrationRepository>(), LibraryAuthorization(), cache.Object).Help(organizationId, null);
+
+        Assert.AreEqual(isPreserved ? organizationId : null, ((SettingsHelpViewModel)result.Model!).OrganizationId);
+    }
+
     [DataTestMethod]
     [DataRow("2")]
     [DataRow("999")]
@@ -896,6 +1022,16 @@ public class SettingsControllerTests
         authorization.Setup(service => service.Describe(It.IsAny<ClaimsPrincipal>())).Returns(new SettingsPrincipal(true, 2, false));
         authorization.Setup(service => service.CanManage(It.IsAny<ClaimsPrincipal>(), 3, It.IsAny<bool>()))
             .Returns((ClaimsPrincipal user, int organizationId, bool sensitive) => !sensitive);
+        return authorization;
+    }
+
+    private static Mock<ISettingsAuthorizationService> GlobalAuthorization()
+    {
+        var authorization = new Mock<ISettingsAuthorizationService>();
+        authorization.Setup(service => service.Describe(It.IsAny<ClaimsPrincipal>()))
+            .Returns(new SettingsPrincipal(true, -1, true));
+        authorization.Setup(service => service.CanManage(It.IsAny<ClaimsPrincipal>(), It.IsAny<int>(), It.IsAny<bool>()))
+            .Returns(true);
         return authorization;
     }
 

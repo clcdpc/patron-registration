@@ -106,6 +106,8 @@ public sealed class SettingsIndexViewModel
     public List<SettingRowViewModel> Settings { get; set; } = [];
 }
 
+public sealed record SettingsHelpViewModel(int? OrganizationId, string FormCode);
+
 public sealed record SettingRowViewModel(
     string Token,
     SettingDefinition Definition,

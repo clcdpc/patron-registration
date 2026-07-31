@@ -5,6 +5,98 @@
     flex-wrap: wrap
 }
 
+.settings-help {
+    margin-inline: auto;
+    max-width: 58rem
+}
+
+.settings-help section, .settings-help-toc {
+    scroll-margin-top: 1rem;
+    margin-block: 1.5rem
+}
+
+.settings-help-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: .75rem 1.25rem;
+    align-items: center
+}
+
+.settings-help-back {
+    border: 2px solid currentColor;
+    border-radius: .25rem;
+    font-weight: 700;
+    padding: .45rem .7rem
+}
+
+.settings-help-toc {
+    background: #f3f3f3;
+    border: 1px solid #c8c8c8;
+    border-radius: .35rem;
+    padding: .75rem 1rem
+}
+
+.settings-help-toc h2 { margin-top: 0 }
+.settings-help-toc ul { columns: 2; margin-bottom: 0 }
+.settings-help-toc li { break-inside: avoid; margin-block: .3rem }
+
+.settings-help-note, .settings-help-warning {
+    border-left: .35rem solid #4b6475;
+    padding: .7rem 1rem
+}
+
+.settings-help-warning {
+    background: #fff4dc;
+    border-color: #8a5700
+}
+
+.settings-help-warning h3 { margin-top: 0 }
+.settings-help-status-table {
+    border-collapse: collapse;
+    table-layout: fixed;
+    text-align: left;
+    width: 100%
+}
+
+.settings-help-status-table caption {
+    font-weight: 700;
+    padding-block: 0 0.5rem;
+    text-align: left
+}
+
+.settings-help-status-table th,
+.settings-help-status-table td {
+    border-bottom: 1px solid #d4d4d4;
+    overflow-wrap: anywhere;
+    padding: .55rem .65rem;
+    text-align: left;
+    vertical-align: top
+}
+
+.settings-help-status-table thead {
+    background: #e8eef3
+}
+
+.settings-help-status-table th:first-child {
+    width: 8rem
+}
+
+.settings-help a:focus-visible {
+    outline: 3px solid #1b65a7;
+    outline-offset: 3px
+}
+
+@media (max-width: 40rem) {
+    .settings-help-toc ul { columns: 1 }
+}
+
+@media print {
+    .settings-help { max-width: none }
+    .settings-help-actions, .settings-help-toc { display: none }
+    .settings-help section { break-inside: avoid }
+    .settings-help a { color: inherit; text-decoration: underline }
+}
+
 .settings-header {
     justify-content: space-between;
     margin-bottom: .5rem

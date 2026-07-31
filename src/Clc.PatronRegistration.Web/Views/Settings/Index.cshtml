@@ -24,6 +24,7 @@
     <nav aria-label="Settings administration">
         <a asp-action="Audit">Audit history</a>
         <a asp-action="Forms" asp-route-libraryId="@Model.LibraryId">Form codes</a>
+        <a asp-action="Help" asp-route-organizationId="@Model.OrganizationId" asp-route-formCode="@Model.FormCode">Help</a>
     </nav>
 </header>
 @if (!string.IsNullOrWhiteSpace(settingsError))

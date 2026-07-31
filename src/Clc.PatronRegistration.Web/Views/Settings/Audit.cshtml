@@ -3,7 +3,14 @@
     ViewData["Title"] = "Settings audit";
 }
 <link rel="stylesheet" href="~/css/settings.css" asp-append-version="true" />
-<h1>Settings audit history</h1>
+<header class="settings-header">
+    <h1>Settings audit history</h1>
+    <nav aria-label="Settings audit administration">
+        <a asp-action="Index">Back to settings</a>
+        <a asp-action="Forms">Form codes</a>
+        <a asp-action="Help">Help</a>
+    </nav>
+</header>
 <form method="get" class="settings-search">
     <label for="audit-search">Search audit events</label>
     <input id="audit-search" name="search" type="search" />
