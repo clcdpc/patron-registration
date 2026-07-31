@@ -1,3 +1,17 @@
+body.settings-administration-page {
+    box-sizing: border-box;
+    max-width: none;
+    padding-right: 10px;
+    width: auto
+}
+
+body.settings-administration-page #regFormContainer {
+    box-sizing: border-box;
+    max-width: none;
+    min-width: 0;
+    width: 100%
+}
+
 .settings-header, .scope-form, .setting-editor, .button-row, .settings-actions {
     display: flex;
     align-items: center;
@@ -500,7 +514,7 @@
 }
 
 /* Settings audit disclosure list */
-.settings-audit { margin-inline: auto; max-width: 90rem; min-width: 0 }
+.settings-audit { min-width: 0; width: 100% }
 .audit-search-actions { align-items: center; display: flex; gap: 1rem; margin-top: .5rem }
 .audit-result-count { font-weight: 600; margin-block: .75rem }
 .audit-empty { background: #f3f3f3; border: 1px solid #ccc; border-radius: .35rem; padding: 1rem }
