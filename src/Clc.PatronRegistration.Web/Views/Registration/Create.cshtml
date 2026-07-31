@@ -184,7 +184,7 @@
             {
                 <div id="UseLegalNameFieldGroup" class="">
                     <input asp-for="UseLegalName" />
-                    <label asp-for="UseLegalName"></label>
+                    <label asp-for="UseLegalName">@Settings.LegalNameCheckboxLabel</label>
                 </div>
                 <div id="legalNameGroup">
                     <span asp-for="LegalNameFirst" class="hidden">
@@ -264,7 +264,7 @@
                 {
                     <div id="AddToMailingListGroup">
                         <input asp-for="AddToMailingList" />
-                        <label asp-for="AddToMailingList" style="display:inline;"></label>
+                        <label asp-for="AddToMailingList" style="display:inline;">@Settings.MailingListCheckboxLabel</label>
                         @Html.Raw(Settings.MailingListDescriptionHtml)
                     </div>
                 }

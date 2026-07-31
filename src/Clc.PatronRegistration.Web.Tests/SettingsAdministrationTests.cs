@@ -1,9 +1,11 @@
+using Moq;
 using Clc.PatronRegistration.Administration;
 using Clc.PatronRegistration.Configuration;
 using Clc.PatronRegistration.Web.Settings;
 using Clc.PatronRegistration.Web.Models;
 using Clc.PatronRegistration.Validators;
 using System.ComponentModel.DataAnnotations;
+using System.Text.RegularExpressions;
 
 namespace Clc.PatronRegistration.Tests;
 
@@ -63,13 +65,65 @@ public class SettingsAdministrationTests
     public void Catalog_UsesStaffFriendlyAcronymsAndAlphabetizesDynamicGroups()
     {
         var catalog = new SettingCatalog().All;
-        foreach (var expected in new[] { "CSS file", "Header image URL", "Custom form footer HTML", "Polaris record set ID", "PAPI duplicate check", "E-card patron code" })
+        foreach (var expected in new[] { "CSS file", "Header image URL", "Custom form footer HTML", "Additional post-registration record set", "Attempt PAPI duplicate workaround", "E-card patron code" })
             Assert.IsTrue(catalog.Any(setting => setting.DisplayName == expected), expected);
         foreach (var group in new[] { SettingGroup.Alert, SettingGroup.Label, SettingGroup.Require })
         {
             var names = catalog.Where(setting => setting.Group == group).Select(setting => setting.DisplayName).ToArray();
             CollectionAssert.AreEqual(names.OrderBy(name => name, StringComparer.OrdinalIgnoreCase).ToArray(), names);
         }
+    }
+
+    [TestMethod]
+    public void Catalog_AssignsRequestedCategoriesAndExactStaffNames()
+    {
+        var catalog = new SettingCatalog().All.ToDictionary(setting => setting.Key);
+        var expected = new Dictionary<string, (SettingCategory Category, string Name)>
+        {
+            ["warning_text"] = (SettingCategory.PageAppearanceAndInstructions, "Registration agreement content"),
+            ["registration_text"] = (SettingCategory.PageAppearanceAndInstructions, "Default success message"),
+            ["show_dl"] = (SettingCategory.FormBehaviorAndFields, "Enable driver’s license scanner"),
+            ["dl_format"] = (SettingCategory.FormBehaviorAndFields, "Driver’s license scanner format"),
+            ["school_info_field_legend"] = (SettingCategory.FormBehaviorAndFields, "School-information heading"),
+            ["display_preferred_pickup_location"] = (SettingCategory.BranchAndPatronDefaults, "Show preferred pickup location"),
+            ["mailing_list_record_set_id"] = (SettingCategory.EmailAndNotices, "Mailing-list record set"),
+            ["postmark_api_key"] = (SettingCategory.EmailAndNotices, "Postmark API key"),
+            ["bypass_dupe_check"] = (SettingCategory.DuplicateChecking, "Skip preliminary duplicate check"),
+            ["perform_papi_duplicate_bypass"] = (SettingCategory.DuplicateChecking, "Attempt PAPI duplicate workaround"),
+            ["update_patron_record_with_melissa_address"] = (SettingCategory.AddressVerification, "Save standardized Melissa address"),
+            ["melissa_data_api_key"] = (SettingCategory.AddressVerification, "Melissa Data API key"),
+            ["registration_logon_user_id"] = (SettingCategory.PolarisIntegrationAndRecordSets, "Registration user for unverified addresses"),
+            ["add_to_record_set_id"] = (SettingCategory.PolarisIntegrationAndRecordSets, "Additional post-registration record set"),
+            ["post_registration_note_text"] = (SettingCategory.PolarisIntegrationAndRecordSets, "Patron note added after registration"),
+            ["show_dl_ips"] = (SettingCategory.KioskAndSessionBehavior, "On-site IP address prefixes"),
+            ["expiration_date"] = (SettingCategory.BranchAndPatronDefaults, "Fixed expiration date"),
+            ["expiration_date_years"] = (SettingCategory.BranchAndPatronDefaults, "Expiration period (years)"),
+            ["disable_branch"] = (SettingCategory.BranchAndPatronDefaults, "Disable registration for this branch and form")
+        };
+        foreach (var (key, presentation) in expected)
+        {
+            Assert.AreEqual(key, catalog[key].Key);
+            Assert.AreEqual(presentation.Category, catalog[key].Category);
+            Assert.AreEqual(presentation.Name, catalog[key].DisplayName);
+        }
+        Assert.IsFalse(catalog.Values.Where(x => x.Group == SettingGroup.Ordinary).Any(x =>
+            Regex.IsMatch(x.DisplayName, @"\b(?:Dupe|DL|User1|User5|Voice1|Voice2)\b")));
+    }
+
+    [TestMethod]
+    public void DynamicCatalog_UsesStaffFieldNamesAndKeepsAlertsCompatibilityOnly()
+    {
+        var catalog = new SettingCatalog();
+        Assert.AreEqual("Primary phone number", catalog.All.Single(x => x.Key == "label.PhoneVoice1").DisplayName);
+        Assert.AreEqual("Responsible person", catalog.All.Single(x => x.Key == "label.User5").DisplayName);
+        Assert.AreEqual("PIN", catalog.All.Single(x => x.Key == "label.Password").DisplayName);
+        Assert.AreEqual("Preferred pickup location", catalog.All.Single(x => x.Key == "label.RequestPickupBranchID").DisplayName);
+        CollectionAssert.AreEqual(new[] { "Require email address", "Require primary phone number", "Require responsible person" },
+            catalog.All.Where(x => x.Group == SettingGroup.Require).Select(x => x.DisplayName).ToArray());
+        Assert.IsTrue(catalog.TryGet("alert.NameFirst", out _));
+        var root = FindRepositoryRoot();
+        var view = File.ReadAllText(Path.Combine(root, "src/Clc.PatronRegistration.Web/Views/Settings/Index.cshtml"));
+        Assert.IsFalse(view.Contains("Validation messages", StringComparison.Ordinal));
     }
 
     [TestMethod]
@@ -325,7 +379,8 @@ public class SettingsAdministrationTests
             .OrderBy(name => name)
             .ToArray();
 
-        CollectionAssert.AreEqual(metadataFields, catalogFields);
+        var purposeSpecificOrSchoolSelection = new[] { "AddToMailingList", "IsECard", "UseLegalName", "User1" };
+        CollectionAssert.AreEqual(metadataFields.Except(purposeSpecificOrSchoolSelection).OrderBy(name => name).ToArray(), catalogFields);
         Assert.IsFalse(catalog.TryGet("label.AltEmailAddress", out _));
         Assert.IsTrue(catalog.TryGet("alert.AltEmailAddress", out _));
     }
@@ -645,19 +700,22 @@ public class SettingsAdministrationTests
     [TestMethod]
     public void DynamicFieldCatalog_ContainsDeliberatelySupportedRegistrationFields()
     {
-        var expected = new[]
+        var recognized = new[]
         {
             "UseLegalName", "ReceiveEreceipts", "User5", "Password2", "User1",
             "DeliverCardToSchool", "IsStudent", "IsTeacher", "IsECard", "AddToMailingList"
         };
         var catalog = new SettingCatalog();
 
-        foreach (var field in expected)
+        foreach (var field in recognized)
         {
             CollectionAssert.Contains(catalog.DynamicFieldSuffixes.ToList(), field);
             Assert.IsTrue(catalog.TryGet($"alert.{field}", out _));
-            Assert.IsTrue(catalog.TryGet($"label.{field}", out _));
         }
+        foreach (var duplicateOrIneffective in new[] { "UseLegalName", "User1", "IsECard", "AddToMailingList" })
+            Assert.IsFalse(catalog.TryGet($"label.{duplicateOrIneffective}", out _));
+        foreach (var effective in new[] { "ReceiveEreceipts", "User5", "Password2", "DeliverCardToSchool", "IsStudent", "IsTeacher" })
+            Assert.IsTrue(catalog.TryGet($"label.{effective}", out _));
     }
 
     [DataTestMethod]
