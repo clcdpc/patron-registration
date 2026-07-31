@@ -504,7 +504,7 @@
 .audit-search-actions { align-items: center; display: flex; gap: 1rem; margin-top: .5rem }
 .audit-result-count { font-weight: 600; margin-block: .75rem }
 .audit-empty { background: #f3f3f3; border: 1px solid #ccc; border-radius: .35rem; padding: 1rem }
-.audit-event-list { --audit-columns: minmax(10.5rem,1.15fr) minmax(9rem,1fr) minmax(12rem,1.5fr) minmax(13rem,1.4fr) 5.5rem; border: 1px solid #bbb; border-radius: .35rem; overflow: hidden }
+.audit-event-list { --audit-columns: minmax(10rem,1.05fr) minmax(8.5rem,.9fr) minmax(10rem,1.1fr) minmax(11rem,1.25fr) minmax(12rem,1.35fr) 5.5rem; border: 1px solid #bbb; border-radius: .35rem; overflow: hidden }
 .audit-column-headings, .audit-event-summary { align-items: center; box-sizing: border-box; display: grid; gap: .75rem; grid-template-columns: var(--audit-columns) }
 .audit-column-headings { background: #e8eef3; font-size: .85rem; font-weight: 700; padding: .5rem 1.9rem .5rem .75rem }
 .audit-event { border-top: 1px solid #ccc; min-width: 0 }
@@ -526,7 +526,7 @@
 .audit-technical-details > summary { cursor: pointer; font-weight: 700; padding: .35rem 0 }
 .audit-technical-details > summary:focus-visible { outline: 3px solid #1b65a7; outline-offset: 2px }
 
-@media (max-width: 64rem) {
+@media (max-width: 72rem) {
     .audit-column-headings { display: none }
     .audit-event:first-of-type { border-top: 0 }
     .audit-event-summary { grid-template-columns: minmax(0,1fr) minmax(0,1fr); padding-left: .8rem }

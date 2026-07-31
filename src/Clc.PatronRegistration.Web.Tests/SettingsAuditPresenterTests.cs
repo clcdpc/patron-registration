@@ -56,9 +56,9 @@ public class SettingsAuditPresenterTests
     [TestMethod]
     public void GlobalAdministrator_ReceivesOnlyAvailableTechnicalValues()
     {
-        var model = Present(Row(correlation: "request-1"), true);
+        var model = Present(Row(correlation: "request-1", ip: "127.0.0.1"), true);
         CollectionAssert.Contains(model.TechnicalDetails.Select(x => x.Label).ToList(), "Correlation ID");
-        CollectionAssert.DoesNotContain(model.TechnicalDetails.Select(x => x.Label).ToList(), "IP address");
+        CollectionAssert.Contains(model.TechnicalDetails.Select(x => x.Label).ToList(), "IP address");
     }
 
     [TestMethod]

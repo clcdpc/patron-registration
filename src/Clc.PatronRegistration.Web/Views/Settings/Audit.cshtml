@@ -4,55 +4,109 @@
 }
 <link rel="stylesheet" href="~/css/settings.css" asp-append-version="true" />
 <main class="settings-audit">
-<header class="settings-header">
-    <h1>Settings audit history</h1>
-    <nav aria-label="Settings audit administration">
-        <a asp-action="Index">Back to settings</a><a asp-action="Forms">Form codes</a><a asp-action="Help">Help</a>
-    </nav>
-</header>
-<form method="get" class="settings-search">
-    <label for="audit-search">Search audit events</label>
-    <input id="audit-search" name="search" type="search" value="@Model.SearchText" placeholder="Search staff, event, form, setting, or value" />
-    <div class="audit-search-actions"><button type="submit">Search</button>
-    @if (!string.IsNullOrWhiteSpace(Model.SearchText)) { <a asp-action="Audit">Clear search</a> }
-    </div>
-</form>
-<p class="audit-result-count" aria-live="polite">@Model.ResultCount @(Model.ResultCount == 1 ? "event" : "events") displayed</p>
-@if (Model.ResultCount == 0)
-{
-    <p class="audit-empty">@(string.IsNullOrWhiteSpace(Model.SearchText) ? "No settings activity has been recorded." : "No audit events matched your search.")</p>
-}
-else
-{
-<section class="audit-event-list" aria-label="Registration-settings administration and preview activity">
-    <div class="audit-column-headings" aria-hidden="true"><span>When</span><span>Staff member</span><span>Activity</span><span>Target</span><span>Result</span></div>
-    @foreach (var entry in Model.Events)
-    {
-    <details class="audit-event">
-        <summary class="audit-event-summary">
-            <span data-label="When"><time datetime="@entry.TimestampDateTime">@entry.TimestampDisplay</time></span>
-            <span data-label="Staff member">@entry.StaffMember</span><span data-label="Activity">@entry.Activity</span>
-            <span data-label="Target">@entry.Target</span>
-            <span data-label="Result" class="audit-result @(entry.Succeeded ? "audit-result-success" : "audit-result-failed")">@entry.Result</span>
-        </summary>
-        <div class="audit-event-content">
-            @if (!entry.Succeeded) { <p class="audit-failure"><strong>Failure reason:</strong> @entry.FailureReason</p> }
-            <dl>
-                <dt>Activity</dt><dd>@entry.Activity</dd><dt>Staff member</dt><dd>@entry.StaffMember</dd>
-                <dt>Target organization</dt><dd>@entry.Organization</dd><dt>Form</dt><dd>@entry.Form</dd>
-                @if (entry.Setting is not null) { <dt>Setting</dt><dd>@entry.Setting</dd> }
-                @if (entry.PreviousValue is not null) { <dt>Previous value</dt><dd class="audit-value">@entry.PreviousValue</dd> }
-                @if (entry.NewValue is not null) { <dt>New value</dt><dd class="audit-value">@entry.NewValue</dd> }
-            </dl>
-            @if (entry.TechnicalDetails.Count > 0)
+    <header class="settings-header">
+        <h1>Settings audit history</h1>
+        <nav aria-label="Settings audit administration">
+            <a asp-action="Index">Back to settings</a>
+            <a asp-action="Forms">Form codes</a>
+            <a asp-action="Help">Help</a>
+        </nav>
+    </header>
+    <form method="get" class="settings-search">
+        <label for="audit-search">Search audit events</label>
+        <input id="audit-search" name="search" type="search" value="@Model.SearchText" placeholder="Search staff, event, form, or setting key" />
+        <div class="audit-search-actions">
+            <button type="submit">Search</button>
+            @if (!string.IsNullOrWhiteSpace(Model.SearchText))
             {
-            <details class="audit-technical-details"><summary>Technical details</summary><dl>
-                @foreach (var detail in entry.TechnicalDetails) { <dt>@detail.Label</dt><dd>@detail.Value</dd> }
-            </dl></details>
+                <a asp-action="Audit">Clear search</a>
             }
         </div>
-    </details>
+    </form>
+    <p class="audit-result-count" aria-live="polite">@Model.ResultCount @(Model.ResultCount == 1 ? "event" : "events") displayed</p>
+    @if (Model.ResultCount == 0)
+    {
+        <p class="audit-empty">@(string.IsNullOrWhiteSpace(Model.SearchText) ? "No settings activity has been recorded." : "No audit events matched your search.")</p>
     }
-</section>
-}
+    else
+    {
+        <section class="audit-event-list" aria-label="Registration-settings administration and preview activity">
+            <div class="audit-column-headings" aria-hidden="true">
+                <span>When</span>
+                <span>Staff member</span>
+                <span>Activity</span>
+                <span>Setting</span>
+                <span>Target</span>
+                <span>Result</span>
+            </div>
+            @foreach (var entry in Model.Events)
+            {
+                <details class="audit-event">
+                    <summary class="audit-event-summary">
+                        <span data-label="When">
+                            <time datetime="@entry.TimestampDateTime">@entry.TimestampDisplay</time>
+                        </span>
+                        <span data-label="Staff member">@entry.StaffMember</span>
+                        <span data-label="Activity">@entry.Activity</span>
+                        <span data-label="Setting">
+                            @if (entry.Setting is null)
+                            {
+                                <span aria-label="Not applicable">—</span>
+                            }
+                            else
+                            {
+                                @entry.Setting
+                            }
+                        </span>
+                        <span data-label="Target">@entry.Target</span>
+                        <span data-label="Result" class="audit-result @(entry.Succeeded ? "audit-result-success" : "audit-result-failed")">@entry.Result</span>
+                    </summary>
+                    <div class="audit-event-content">
+                        @if (!entry.Succeeded)
+                        {
+                            <p class="audit-failure"><strong>Failure reason:</strong> @entry.FailureReason</p>
+                        }
+                        <dl>
+                            <dt>Activity</dt>
+                            <dd>@entry.Activity</dd>
+                            <dt>Staff member</dt>
+                            <dd>@entry.StaffMember</dd>
+                            <dt>Target organization</dt>
+                            <dd>@entry.Organization</dd>
+                            <dt>Form</dt>
+                            <dd>@entry.Form</dd>
+                            @if (entry.Setting is not null)
+                            {
+                                <dt>Setting</dt>
+                                <dd>@entry.Setting</dd>
+                            }
+                            @if (entry.PreviousValue is not null)
+                            {
+                                <dt>Previous value</dt>
+                                <dd class="audit-value">@entry.PreviousValue</dd>
+                            }
+                            @if (entry.NewValue is not null)
+                            {
+                                <dt>New value</dt>
+                                <dd class="audit-value">@entry.NewValue</dd>
+                            }
+                        </dl>
+                        @if (entry.TechnicalDetails.Count > 0)
+                        {
+                            <details class="audit-technical-details">
+                                <summary>Technical details</summary>
+                                <dl>
+                                    @foreach (var detail in entry.TechnicalDetails)
+                                    {
+                                        <dt>@detail.Label</dt>
+                                        <dd>@detail.Value</dd>
+                                    }
+                                </dl>
+                            </details>
+                        }
+                    </div>
+                </details>
+            }
+        </section>
+    }
 </main>
