@@ -96,6 +96,56 @@ public class SettingsControllerTests
     }
 
     [DataTestMethod]
+    [DataRow(999)]
+    [DataRow(-1)]
+    public void Help_GlobalAdministratorDropsUnknownAndSentinelReturnOrganizations(int organizationId)
+    {
+        var repository = new Mock<ISettingsAdministrationRepository>();
+        var result = (ViewResult)CreateController(repository, GlobalAuthorization(), new TestCache()).Help(organizationId, null);
+
+        Assert.IsNull(((SettingsHelpViewModel)result.Model!).OrganizationId);
+        repository.Verify(service => service.GetFormCodes(It.IsAny<int>(), It.IsAny<int>()), Times.Never);
+    }
+
+    [DataTestMethod]
+    [DataRow(1)]
+    [DataRow(2)]
+    [DataRow(3)]
+    public void Help_GlobalAdministratorPreservesRealSystemLibraryAndBranchScopes(int organizationId)
+    {
+        var result = (ViewResult)CreateController(
+            new Mock<ISettingsAdministrationRepository>(), GlobalAuthorization(), new TestCache()).Help(organizationId, null);
+        var model = (SettingsHelpViewModel)result.Model!;
+
+        Assert.AreEqual(organizationId, model.OrganizationId);
+        Assert.AreEqual(string.Empty, model.FormCode);
+    }
+
+    [DataTestMethod]
+    [DataRow(2, true)]
+    [DataRow(3, true)]
+    [DataRow(4, false)]
+    public void Help_LibraryAdministratorOnlyPreservesOwnLibraryAndBranches(int organizationId, bool isPreserved)
+    {
+        var organizations = new List<OrganizationsGetRow>
+        {
+            new() { OrganizationID = 1, OrganizationCodeID = 1, Name = "System" },
+            new() { OrganizationID = 2, OrganizationCodeID = 2, Name = "Own library" },
+            new() { OrganizationID = 3, OrganizationCodeID = 3, ParentOrganizationID = 2, Name = "Own branch" },
+            new() { OrganizationID = 4, OrganizationCodeID = 2, Name = "Other library" }
+        };
+        var cache = new Mock<ICache>();
+        cache.SetupGet(value => value.OrganizationCache).Returns(organizations);
+        cache.Setup(value => value.GetOrg(2)).Returns(organizations[1]);
+        cache.Setup(value => value.GetBranches(2)).Returns([organizations[2]]);
+
+        var result = (ViewResult)CreateController(
+            new Mock<ISettingsAdministrationRepository>(), LibraryAuthorization(), cache.Object).Help(organizationId, null);
+
+        Assert.AreEqual(isPreserved ? organizationId : null, ((SettingsHelpViewModel)result.Model!).OrganizationId);
+    }
+
+    [DataTestMethod]
     [DataRow("2")]
     [DataRow("999")]
     [DataRow("Unknown")]
@@ -972,6 +1022,16 @@ public class SettingsControllerTests
         authorization.Setup(service => service.Describe(It.IsAny<ClaimsPrincipal>())).Returns(new SettingsPrincipal(true, 2, false));
         authorization.Setup(service => service.CanManage(It.IsAny<ClaimsPrincipal>(), 3, It.IsAny<bool>()))
             .Returns((ClaimsPrincipal user, int organizationId, bool sensitive) => !sensitive);
+        return authorization;
+    }
+
+    private static Mock<ISettingsAuthorizationService> GlobalAuthorization()
+    {
+        var authorization = new Mock<ISettingsAuthorizationService>();
+        authorization.Setup(service => service.Describe(It.IsAny<ClaimsPrincipal>()))
+            .Returns(new SettingsPrincipal(true, -1, true));
+        authorization.Setup(service => service.CanManage(It.IsAny<ClaimsPrincipal>(), It.IsAny<int>(), It.IsAny<bool>()))
+            .Returns(true);
         return authorization;
     }
 

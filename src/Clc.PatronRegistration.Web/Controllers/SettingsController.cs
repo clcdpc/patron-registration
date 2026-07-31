@@ -151,14 +151,21 @@ public sealed class SettingsController(
     [HttpGet("help")]
     public IActionResult Help(int? organizationId, string? formCode = null)
     {
-        if (RequireManager() is null)
+        var principal = RequireManager();
+        if (principal is null)
         {
             return Forbid();
         }
 
         var normalizedFormCode = FormCodeNormalizer.Normalize(formCode);
-        var hasValidReturnContext = organizationId.HasValue &&
-            authorization.CanManage(User, organizationId.Value) &&
+        if (!organizationId.HasValue)
+        {
+            return View(new SettingsHelpViewModel(null, string.Empty));
+        }
+
+        var isAuthorizedScope = GetAuthorizedScopes(principal)
+            .Any(scope => scope.OrganizationId == organizationId.Value);
+        var hasValidReturnContext = isAuthorizedScope &&
             formCodeAvailability.IsAvailable(organizationId.Value, normalizedFormCode);
 
         return View(new SettingsHelpViewModel(
