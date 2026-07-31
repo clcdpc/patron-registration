@@ -547,6 +547,7 @@ body.settings-administration-page #regFormContainer {
 .audit-event-summary:hover { background: #f3f3f3 }
 .audit-event-summary:focus-visible { outline: 3px solid #1b65a7; outline-offset: -3px }
 .audit-event-summary > span { min-width: 0; overflow-wrap: anywhere }
+.audit-field-label { clip: rect(0 0 0 0); clip-path: inset(50%); height: 1px; overflow: hidden; position: absolute; white-space: nowrap; width: 1px }
 .audit-result { border: 1px solid currentColor; border-radius: 1rem; font-size: .8rem; font-weight: 700; justify-self: start; padding: .2rem .55rem; white-space: nowrap }
 .audit-result-success { color: #176329 }
 .audit-result-failed { background: #fff0f0; color: #8b1a1a }
@@ -564,7 +565,7 @@ body.settings-administration-page #regFormContainer {
     .audit-column-headings { display: none }
     .audit-event:first-of-type { border-top: 0 }
     .audit-event-summary { grid-template-columns: minmax(0,1fr) minmax(0,1fr); padding-left: .8rem }
-    .audit-event-summary > span::before { color: #555; content: attr(data-label) ": "; display: block; font-size: .72rem; font-weight: 700; text-transform: uppercase }
+    .audit-field-label { clip: auto; clip-path: none; color: #555; display: block; font-size: .72rem; font-weight: 700; height: auto; overflow: visible; position: static; text-transform: uppercase; white-space: normal; width: auto }
 }
 @media (max-width: 36rem) {
     .audit-event-summary { grid-template-columns: minmax(0,1fr) }

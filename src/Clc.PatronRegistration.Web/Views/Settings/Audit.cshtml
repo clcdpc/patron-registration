@@ -44,11 +44,13 @@
                 <details class="audit-event">
                     <summary class="audit-event-summary">
                         <span data-label="When">
+                            <span class="audit-field-label">When:</span>
                             <time datetime="@entry.TimestampDateTime">@entry.TimestampDisplay</time>
                         </span>
-                        <span data-label="Staff member">@entry.StaffMember</span>
-                        <span data-label="Activity">@entry.Activity</span>
+                        <span data-label="Staff member"><span class="audit-field-label">Staff member:</span>@entry.StaffMember</span>
+                        <span data-label="Activity"><span class="audit-field-label">Activity:</span>@entry.Activity</span>
                         <span data-label="Setting">
+                            <span class="audit-field-label">Setting:</span>
                             @if (entry.Setting is null)
                             {
                                 <span aria-label="Not applicable">—</span>
@@ -58,8 +60,8 @@
                                 @entry.Setting
                             }
                         </span>
-                        <span data-label="Target">@entry.Target</span>
-                        <span data-label="Result" class="audit-result @(entry.Succeeded ? "audit-result-success" : "audit-result-failed")">@entry.Result</span>
+                        <span data-label="Target"><span class="audit-field-label">Target:</span>@entry.Target</span>
+                        <span data-label="Result" class="audit-result @(entry.Succeeded ? "audit-result-success" : "audit-result-failed")"><span class="audit-field-label">Result:</span>@entry.Result</span>
                     </summary>
                     <div class="audit-event-content">
                         @if (!entry.Succeeded)

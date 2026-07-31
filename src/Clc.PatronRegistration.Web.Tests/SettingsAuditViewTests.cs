@@ -25,6 +25,20 @@ public class SettingsAuditViewTests
         StringAssert.Contains(summary, "aria-label=\"Not applicable\">—</span>");
     }
 
+
+    [TestMethod]
+    public void CollapsedSummary_EveryValueHasARealAccessibleTextLabel()
+    {
+        var summary = Between(View(), "<summary class=\"audit-event-summary\">", "</summary>");
+
+        foreach (var label in new[] { "When:", "Staff member:", "Activity:", "Setting:", "Target:", "Result:" })
+        {
+            StringAssert.Contains(summary, $"<span class=\"audit-field-label\">{label}</span>");
+        }
+        Assert.AreEqual(6, Count(summary, "class=\"audit-field-label\""));
+        Assert.IsFalse(summary.Contains("aria-hidden=\"true\"", StringComparison.Ordinal));
+    }
+
     [TestMethod]
     public void ValuesAndRequestMetadata_AreNotPermanentSummaryFields()
     {
@@ -57,7 +71,8 @@ public class SettingsAuditViewTests
         var columns = Between(css, "--audit-columns:", ";");
 
         Assert.AreEqual(6, Count(columns, "minmax(") + Count(columns, "5.5rem"));
-        StringAssert.Contains(css, "content: attr(data-label)");
+        StringAssert.Contains(css, ".audit-field-label");
+        Assert.IsFalse(css.Contains("content: attr(data-label)", StringComparison.Ordinal));
         StringAssert.Contains(css, "@media (max-width: 72rem)");
         StringAssert.Contains(css, "grid-template-columns: minmax(0,1fr) minmax(0,1fr)");
         StringAssert.Contains(css, "@media (max-width: 36rem)");

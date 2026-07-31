@@ -538,6 +538,38 @@ public class SettingsControllerTests
         repository.Verify(service => service.SearchAudit(global ? null : 2, includeSensitive, search), Times.Once);
     }
 
+    [TestMethod]
+    public void Audit_ResolvesSameFormCodeWithinEachTargetLibraryAndPrefersLocalMetadata()
+    {
+        var repository = new Mock<ISettingsAdministrationRepository>();
+        repository.Setup(service => service.SearchAudit(null, true, null)).Returns(
+        [
+            new SettingsAuditRow(1, DateTime.UtcNow, "DirectSave", 3, 2, "kids", null, null, null,
+                false, true, "Admin", null, null, null),
+            new SettingsAuditRow(2, DateTime.UtcNow, "DirectSave", 5, 4, "kids", null, null, null,
+                false, true, "Admin", null, null, null)
+        ]);
+        repository.Setup(service => service.GetFormCodes(2, 1)).Returns(
+        [
+            FormMetadata(2, "kids", "Library two children"),
+            FormMetadata(1, "kids", "Inherited children")
+        ]);
+        repository.Setup(service => service.GetFormCodes(4, 1)).Returns(
+        [
+            FormMetadata(4, "kids", "Library four youth"),
+            FormMetadata(1, "kids", "Inherited children")
+        ]);
+
+        var result = (ViewResult)CreateController(repository, GlobalAuthorization()).Audit(null);
+        var model = (SettingsAuditViewModel)result.Model!;
+
+        Assert.AreEqual("Library two children", model.Events.Single(entry => entry.AuditEventId == 1).Form);
+        Assert.AreEqual("Library four youth", model.Events.Single(entry => entry.AuditEventId == 2).Form);
+    }
+
+    private static FormCodeMetadata FormMetadata(int organizationId, string code, string displayName) =>
+        new(organizationId, code, displayName, null, DateTime.UtcNow, "Admin", DateTime.UtcNow, "Admin");
+
     [DataTestMethod]
     [DataRow(1, null)]
     [DataRow(1, 999)]

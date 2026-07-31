@@ -76,19 +76,26 @@ public static partial class SettingsAuditPresenter
 
     public static SettingsAuditEventViewModel Present(SettingsAuditRow row, bool isGlobal,
         int systemOrganizationId, Func<int, string?> organizationName,
-        IReadOnlyDictionary<string, string> formNames, IReadOnlyDictionary<string, SettingDefinition> catalog)
+        Func<int, string, string?> formName, IReadOnlyDictionary<string, SettingDefinition> catalog)
     {
         var utc = row.TimestampUtc.Kind == DateTimeKind.Utc ? row.TimestampUtc : DateTime.SpecifyKind(row.TimestampUtc, DateTimeKind.Utc);
         var organization = row.TargetOrganizationId == systemOrganizationId ? "System defaults" :
             organizationName(row.TargetOrganizationId) ?? $"Organization {row.TargetOrganizationId}";
-        var form = string.IsNullOrEmpty(row.FormCode) ? "Default form" :
-            formNames.TryGetValue(row.FormCode, out var formName) ? formName : row.FormCode;
+        var formOwnerId = row.TargetLibraryId ?? row.TargetOrganizationId;
+        var presentedFormName = formName(formOwnerId, row.FormCode);
+        var form = string.IsNullOrEmpty(row.FormCode) ? "Default form" : presentedFormName ?? row.FormCode;
         var setting = string.IsNullOrWhiteSpace(row.SettingKey) ? null :
             catalog.TryGetValue(row.SettingKey, out var definition) ? definition.DisplayName : row.SettingKey;
         var technical = new List<AuditTechnicalDetail>();
         if (isGlobal)
         {
             technical.Add(new("Audit event ID", row.AuditEventId.ToString(CultureInfo.InvariantCulture)));
+            technical.Add(new("Target organization ID", row.TargetOrganizationId.ToString(CultureInfo.InvariantCulture)));
+            if (row.TargetLibraryId.HasValue)
+            {
+                technical.Add(new("Target library ID", row.TargetLibraryId.Value.ToString(CultureInfo.InvariantCulture)));
+            }
+            technical.Add(new("Raw form code", string.IsNullOrEmpty(row.FormCode) ? "(empty — default form)" : row.FormCode));
             Add(technical, "Raw event type", row.EventType);
             Add(technical, "Raw setting key", row.SettingKey);
             Add(technical, "Correlation ID", row.CorrelationId);
@@ -109,7 +116,12 @@ public static partial class SettingsAuditPresenter
     }
 
     private static void Add(List<AuditTechnicalDetail> details, string label, string? value)
-    { if (!string.IsNullOrWhiteSpace(value)) details.Add(new(label, value)); }
+    {
+        if (!string.IsNullOrWhiteSpace(value))
+        {
+            details.Add(new(label, value));
+        }
+    }
 
     [GeneratedRegex(@"(?<=[a-z0-9])(?=[A-Z])|[_-]+")]
     private static partial Regex PascalCaseBoundary();

@@ -29,7 +29,7 @@ public class SettingsAuditPresenterTests
     {
         var model = SettingsAuditPresenter.Present(Row(organization: 3, form: "kids"), false, 1,
             id => id == 3 ? "North Branch" : null,
-            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { ["kids"] = "Kids registration" }, Catalog());
+            (_, code) => code.Equals("kids", StringComparison.OrdinalIgnoreCase) ? "Kids registration" : null, Catalog());
         Assert.AreEqual("North Branch — Kids registration", model.Target);
     }
 
@@ -57,8 +57,13 @@ public class SettingsAuditPresenterTests
     public void GlobalAdministrator_ReceivesOnlyAvailableTechnicalValues()
     {
         var model = Present(Row(correlation: "request-1", ip: "127.0.0.1"), true);
-        CollectionAssert.Contains(model.TechnicalDetails.Select(x => x.Label).ToList(), "Correlation ID");
-        CollectionAssert.Contains(model.TechnicalDetails.Select(x => x.Label).ToList(), "IP address");
+        var labels = model.TechnicalDetails.Select(detail => detail.Label).ToList();
+        CollectionAssert.Contains(labels, "Target organization ID");
+        CollectionAssert.Contains(labels, "Target library ID");
+        CollectionAssert.Contains(labels, "Raw form code");
+        CollectionAssert.Contains(labels, "Correlation ID");
+        CollectionAssert.Contains(labels, "IP address");
+        Assert.AreEqual("(empty — default form)", model.TechnicalDetails.Single(detail => detail.Label == "Raw form code").Value);
     }
 
     [TestMethod]
@@ -71,7 +76,7 @@ public class SettingsAuditPresenterTests
     }
 
     private static SettingsAuditEventViewModel Present(SettingsAuditRow row, bool global = false) =>
-        SettingsAuditPresenter.Present(row, global, 1, _ => null, new Dictionary<string, string>(), Catalog());
+        SettingsAuditPresenter.Present(row, global, 1, _ => null, (_, _) => null, Catalog());
 
     private static IReadOnlyDictionary<string, SettingDefinition> Catalog() =>
         new Dictionary<string, SettingDefinition>(StringComparer.OrdinalIgnoreCase)

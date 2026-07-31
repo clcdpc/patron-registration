@@ -518,14 +518,16 @@ public sealed class SettingsController(
         int? libraryId = principal.IsGlobal ? null : GetLibraryId(principal.OrganizationId!.Value);
         var rows = SettingsAuditVisibility.ForAdministrator(
             repository.SearchAudit(libraryId, principal.IsGlobal, search), principal.IsGlobal).ToList();
-        var formNames = rows.Select(row => row.TargetLibraryId ?? row.TargetOrganizationId).Distinct()
-            .SelectMany(id => repository.GetFormCodes(id, settingsOptions.SystemOrganizationId) ?? [])
-            .GroupBy(form => form.FormCode, StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(group => group.Key, group => group.First().DisplayName, StringComparer.OrdinalIgnoreCase);
+        var formNamesByLibrary = rows.Select(row => row.TargetLibraryId ?? row.TargetOrganizationId).Distinct()
+            .ToDictionary(id => id, id => (repository.GetFormCodes(id, settingsOptions.SystemOrganizationId) ?? [])
+                .GroupBy(form => form.FormCode, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(group => group.Key, group => group.First().DisplayName, StringComparer.OrdinalIgnoreCase));
         var events = rows.Select(row => SettingsAuditPresenter.Present(row, principal.IsGlobal,
             settingsOptions.SystemOrganizationId,
             id => cache.OrganizationCache.FirstOrDefault(organization => organization.OrganizationID == id)?.Name,
-            formNames, CatalogByKey)).ToList();
+            (ownerId, formCode) => formNamesByLibrary.TryGetValue(ownerId, out var formNames) &&
+                formNames.TryGetValue(formCode, out var displayName) ? displayName : null,
+            CatalogByKey)).ToList();
         return View(new SettingsAuditViewModel
         {
             SearchText = search ?? string.Empty,

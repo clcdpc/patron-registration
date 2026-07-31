@@ -70,7 +70,7 @@ public class SettingsNavigationTests
         StringAssert.Contains(body, "max-width: none");
         Assert.IsFalse(css.Contains("100vw", StringComparison.OrdinalIgnoreCase));
         Assert.IsFalse(css.Contains("float:", StringComparison.OrdinalIgnoreCase));
-        Assert.IsFalse(css.Contains("position: absolute", StringComparison.OrdinalIgnoreCase));
+        Assert.IsFalse(navigation.Contains("position: absolute", StringComparison.OrdinalIgnoreCase));
         Assert.IsFalse(css.Contains("margin-left: -", StringComparison.OrdinalIgnoreCase));
         Assert.IsFalse(css.Contains("margin-right: -", StringComparison.OrdinalIgnoreCase));
     }
