@@ -43,7 +43,7 @@ public class SettingsPageWidthTests
         var containerRule = Rule(css, "body.settings-administration-page #regFormContainer");
 
         StringAssert.Contains(bodyRule, "max-width: none");
-        StringAssert.Contains(bodyRule, "padding-right: 10px");
+        StringAssert.Contains(bodyRule, "padding-inline: clamp(.75rem, 1vw, 1.25rem)");
         StringAssert.Contains(containerRule, "max-width: none");
         StringAssert.Contains(containerRule, "min-width: 0");
         StringAssert.Contains(containerRule, "width: 100%");

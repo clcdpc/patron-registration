@@ -20,7 +20,8 @@
         <h1>Registration settings</h1>
         <p>Choose a library or branch and form, then review or change its registration settings. Settings not customized here continue to use the value provided by the next applicable level.</p>
     </div>
-    <nav aria-label="Settings administration">
+    <nav class="settings-navigation" aria-label="Settings administration">
+        <a asp-action="Index" asp-route-organizationId="@Model.OrganizationId" asp-route-formCode="@Model.FormCode" aria-current="page">Settings</a>
         <a asp-action="Audit">Audit history</a>
         <a asp-action="Forms" asp-route-libraryId="@Model.LibraryId">Form codes</a>
         <a asp-action="Help" asp-route-organizationId="@Model.OrganizationId" asp-route-formCode="@Model.FormCode">Help</a>

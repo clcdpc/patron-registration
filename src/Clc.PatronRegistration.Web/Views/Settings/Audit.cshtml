@@ -5,8 +5,9 @@
 <main class="settings-audit">
     <header class="settings-header">
         <h1>Settings audit history</h1>
-        <nav aria-label="Settings audit administration">
-            <a asp-action="Index">Back to settings</a>
+        <nav class="settings-navigation" aria-label="Settings audit administration">
+            <a asp-action="Index">Settings</a>
+            <a asp-action="Audit" aria-current="page">Audit history</a>
             <a asp-action="Forms">Form codes</a>
             <a asp-action="Help">Help</a>
         </nav>
