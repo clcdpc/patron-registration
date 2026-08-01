@@ -1158,7 +1158,7 @@ public class SettingsAdministrationTests
         StringAssert.Contains(partial, "class=\"cancel-setting\">Cancel</button>");
         StringAssert.Contains(partial, "class=\"edit-actions\" hidden");
         StringAssert.Contains(partial, "@if (canRemoveOverride)");
-        StringAssert.Contains(partial, "resolution.OwnsOverride && !isRemoveOverride");
+        StringAssert.Contains(partial, "canRemoveOverride = resolution.OwnsOverride");
 
         StringAssert.Contains(script, "function beginEdit(candidateOperation)");
         StringAssert.Contains(script, "function applyEdit()");
@@ -1181,11 +1181,30 @@ public class SettingsAdministrationTests
         var partial = File.ReadAllText(Path.Combine(root, "src/Clc.PatronRegistration.Web/Views/Settings/_SettingRow.cshtml"));
         var script = File.ReadAllText(Path.Combine(root, "src/Clc.PatronRegistration.Web/wwwroot/js/settings.js"));
 
-        StringAssert.Contains(partial, "Applying this action will remove the override at this scope and use the inherited value.");
-        Assert.IsFalse(partial.Contains("inheritance-message", StringComparison.Ordinal)
-            && partial.Contains("resolution.EffectiveValue</p>", StringComparison.Ordinal));
+        StringAssert.Contains(partial, "SettingInheritancePresentation.MessageFor(Model)");
         StringAssert.Contains(script, "row.dataset.sensitive === \"true\" ? \"••••••••\" : value.value");
         StringAssert.Contains(script, "operation.value === \"RemoveOverride\" ? \"Use inherited value\"");
+    }
+
+    [TestMethod]
+    public void InheritancePresentation_ShowsSafeValueOrUnconfiguredWithoutExposingSecrets()
+    {
+        var text = new SettingDefinition("text", "Text", "Text", SettingValueType.ShortString);
+        var secret = new SettingDefinition("secret", "Secret", "Secret", SettingValueType.ShortString, IsSensitive: true);
+        var resolution = new ResolvedSetting("text", "local", 2, "Library", string.Empty, true, "local", false);
+
+        var inherited = new SettingRowViewModel("one", text, resolution, null, null, null,
+            InheritedValue: "system value", HasInheritedValue: true);
+        StringAssert.Contains(SettingInheritancePresentation.MessageFor(inherited), "inherited value: system value");
+
+        var unconfigured = inherited with { InheritedValue = null, HasInheritedValue = false };
+        StringAssert.Contains(SettingInheritancePresentation.MessageFor(unconfigured), "become unconfigured");
+
+        var sensitive = new SettingRowViewModel("two", secret, resolution, null, null, null,
+            InheritedValue: "recognizable secret", HasInheritedValue: true);
+        var message = SettingInheritancePresentation.MessageFor(sensitive);
+        Assert.IsFalse(message.Contains("recognizable secret", StringComparison.Ordinal));
+        Assert.AreEqual("Applying this action will remove the override at this scope and use the inherited value.", message);
     }
 
     private static string FindRepositoryRoot()

@@ -3,10 +3,11 @@
     const searchStatus = document.querySelector("#search-status");
     const form = document.querySelector("#settings-form");
     const dialog = document.querySelector("#save-confirm");
+    const editStatus = document.querySelector("#edit-session-status");
     let approved = false;
     let submitter = null;
 
-    document.querySelectorAll(".setting-row").forEach((row) => {
+    function initializeRow(row) {
         const change = row.querySelector(".edit-setting");
         const inherit = row.querySelector(".inherit-setting");
         const apply = row.querySelector(".apply-setting");
@@ -26,10 +27,16 @@
 
         function showNormalState() {
             change.hidden = false;
-            if (inherit) inherit.hidden = operation.value === "RemoveOverride" && row.dataset.dirty === "true";
+            if (inherit) inherit.hidden = row.dataset.appliedOperation === "RemoveOverride";
             actions.hidden = true;
             editor.hidden = true;
             message.hidden = true;
+        }
+
+        function clearSaveBlockMessage() {
+            if (!editStatus) return;
+            editStatus.hidden = true;
+            editStatus.textContent = "";
         }
 
         function beginEdit(candidateOperation) {
@@ -65,6 +72,8 @@
             delete row.dataset.candidateOperation;
             session = null;
             showNormalState();
+            clearSaveBlockMessage();
+            change.focus();
         }
 
         function cancelEdit() {
@@ -81,6 +90,7 @@
             delete row.dataset.candidateOperation;
             session = null;
             showNormalState();
+            clearSaveBlockMessage();
             change.focus();
         }
 
@@ -89,7 +99,54 @@
         apply?.addEventListener("click", applyEdit);
         cancel?.addEventListener("click", cancelEdit);
         showNormalState();
-    });
+    }
+
+    document.querySelectorAll(".setting-row").forEach(initializeRow);
+
+    function blockActiveEdit(settingsForm, status) {
+        const activeRow = settingsForm.querySelector('.setting-row[data-candidate-operation]');
+        if (!activeRow) return false;
+        activeRow.setAttribute("open", "");
+        activeRow.closest(".setting-category, .dynamic-settings")?.setAttribute("open", "");
+        status.textContent = "Apply or Cancel the active setting edit before saving.";
+        status.hidden = false;
+        status.focus();
+        activeRow.querySelector(".apply-setting").focus();
+        return true;
+    }
+
+    function populateReviewList(settingsForm, list) {
+        list.replaceChildren();
+        settingsForm.querySelectorAll('.setting-row[data-dirty="true"]').forEach((row) => {
+            const value = row.querySelector(".setting-value");
+            const operation = row.querySelector(".operation");
+            const item = document.createElement("li");
+            const newValue = row.dataset.sensitive === "true" ? "••••••••" : value.value;
+            item.textContent = `${row.dataset.displayName}: ${operation.value === "RemoveOverride" ? "Use inherited value" : `Set to “${newValue}”`} (current value: “${row.dataset.oldValue || "not configured"}”).`;
+            list.append(item);
+        });
+    }
+
+    function handleSaveAttempt(event, settingsForm, status, reviewDialog, isApproved) {
+        if (blockActiveEdit(settingsForm, status)) {
+            event.preventDefault();
+            return "blocked";
+        }
+        if (event.submitter?.dataset.submitKind === "draft") return "draft";
+        if (isApproved) return "approved";
+
+        event.preventDefault();
+        const list = reviewDialog.querySelector("ul");
+        populateReviewList(settingsForm, list);
+        if (!list.children.length) {
+            window.alert("No settings have changed.");
+            return "empty";
+        }
+        reviewDialog.showModal();
+        return "review";
+    }
+
+    globalThis.SettingsEditSessions = { initializeRow, blockActiveEdit, populateReviewList, handleSaveAttempt };
 
     document.querySelectorAll(".reveal-secret").forEach((button) => {
         button.addEventListener("click", () => {
@@ -131,30 +188,7 @@
 
     form?.addEventListener("submit", (event) => {
         submitter = event.submitter;
-        if (submitter?.dataset.submitKind === "draft") {
-            return;
-        }
-        if (approved) {
-            return;
-        }
-
-        event.preventDefault();
-        const list = dialog.querySelector("ul");
-        list.replaceChildren();
-        form.querySelectorAll('.setting-row[data-dirty="true"]').forEach((row) => {
-            const value = row.querySelector(".setting-value");
-            const operation = row.querySelector(".operation");
-            const item = document.createElement("li");
-            const newValue = row.dataset.sensitive === "true" ? "••••••••" : value.value;
-            item.textContent = `${row.dataset.displayName}: ${operation.value === "RemoveOverride" ? "Use inherited value" : `Set to “${newValue}”`} (current value: “${row.dataset.oldValue || "not configured"}”).`;
-            list.append(item);
-        });
-
-        if (!list.children.length) {
-            window.alert("No settings have changed.");
-            return;
-        }
-        dialog.showModal();
+        handleSaveAttempt(event, form, editStatus, dialog, approved);
     });
 
     document.querySelector("#confirm-save")?.addEventListener("click", () => {

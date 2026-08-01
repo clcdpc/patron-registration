@@ -104,6 +104,14 @@ public sealed class SettingsController(
             var draftChange = draft?.Changes.FirstOrDefault(change => change.Key.Equals(definition.Key, StringComparison.OrdinalIgnoreCase));
             var resolution = resolver.Resolve(cache.SettingsCache, definition.Key, target, libraryId, formCode,
                 settingsOptions.SystemOrganizationId);
+            var inheritedResolution = resolution.OwnsOverride && !definition.IsSensitive
+                ? resolver.Resolve(cache.SettingsCache, definition.Key, target, libraryId, formCode,
+                    settingsOptions.SystemOrganizationId,
+                    new HashSet<(int OrganizationId, string FormCode, string Key)>
+                    {
+                        (target, formCode, definition.Key)
+                    })
+                : null;
             rows.Add(new SettingRowViewModel(
                 $"setting-{index}",
                 definition,
@@ -111,7 +119,9 @@ public sealed class SettingsController(
                 definition.IsSensitive ? null : draftChange?.Value,
                 draftChange?.Operation,
                 draft?.DraftId,
-                DescribeSource(resolution)));
+                DescribeSource(resolution),
+                inheritedResolution?.EffectiveValue,
+                inheritedResolution?.SourceOrganizationId.HasValue == true));
         }
 
         var model = new SettingsIndexViewModel

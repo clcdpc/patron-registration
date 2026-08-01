@@ -17,7 +17,8 @@
     var searchText = $"{definition.DisplayName} {definition.Key} {definition.Description} {safeEffective}".ToLowerInvariant();
     var presentation = Clc.PatronRegistration.Web.Models.SettingValuePresentation.ForRow(Model);
     bool isNotSet = presentation.State == Clc.PatronRegistration.Web.Models.SettingPresentationState.NotSet;
-    bool canRemoveOverride = resolution.OwnsOverride && !isRemoveOverride;
+    bool canRemoveOverride = resolution.OwnsOverride;
+    var inheritanceMessage = Clc.PatronRegistration.Web.Models.SettingInheritancePresentation.MessageFor(Model);
 }
 <details class="setting-row" open="@hasDraftOperation"
          data-search="@searchText"
@@ -113,10 +114,10 @@
         <button type="button" class="edit-setting">Change</button>
         @if (canRemoveOverride)
         {
-            <button type="button" class="inherit-setting">Use inherited value</button>
+            <button type="button" class="inherit-setting" hidden="@isRemoveOverride">Use inherited value</button>
         }
         <p class="inheritance-message" hidden>
-            Applying this action will remove the override at this scope and use the inherited value.
+            @inheritanceMessage
         </p>
         <span class="edit-actions" hidden>
             <button type="button" class="apply-setting">Apply</button>
