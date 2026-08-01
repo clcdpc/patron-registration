@@ -2,12 +2,16 @@
 @model Clc.PatronRegistration.Web.Models.SettingsIndexViewModel
 @{
     ViewData["Title"] = "Registration settings";
-    var groups = new[]
+    bool ShowValidationMessageSettings = false;
+    var groups = new List<(SettingGroup Group, string Name)>
     {
-        (SettingGroup.Alert, "Validation messages"),
         (SettingGroup.Label, "Field labels"),
         (SettingGroup.Require, "Required fields")
     };
+    if (ShowValidationMessageSettings)
+    {
+        groups.Insert(0, (SettingGroup.Alert, "Validation messages"));
+    }
     var settingsError = TempData["SettingsError"] as string;
     var settingsErrorGroup = TempData["SettingsErrorGroup"] as string;
     bool hasRestrictedDraftChanges = Model.HasRestrictedDraftChanges == true;
@@ -171,6 +175,7 @@
         {
             var rows = Model.Settings.Where(row => row.Definition.Group == SettingGroup.Ordinary && row.Definition.Category == category)
                 .OrderBy(row => row.Definition.DisplayName, StringComparer.OrdinalIgnoreCase).ToList();
+            if (rows.Count == 0) { continue; }
             bool categoryOpen = rows.Any(row => row.DraftOperation is not null);
             <details class="setting-category" open="@categoryOpen">
                 <summary>@category.DisplayName() <span>(@rows.Count)</span></summary>

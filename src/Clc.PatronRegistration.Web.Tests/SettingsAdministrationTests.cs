@@ -4,12 +4,137 @@ using Clc.PatronRegistration.Web.Settings;
 using Clc.PatronRegistration.Web.Models;
 using Clc.PatronRegistration.Validators;
 using System.ComponentModel.DataAnnotations;
+using Moq;
 
 namespace Clc.PatronRegistration.Tests;
 
 [TestClass]
 public class SettingsAdministrationTests
 {
+    private static readonly string[] SupportedOrdinaryKeys =
+    [
+        "header_image_url", "css_file", "warning_text", "custom_form_footer_html", "registration_text", "registration_form_header",
+        "show_dl", "hide_gender", "enable_age_warning", "age_warning_text", "hide_ereceipt", "na_gender_text",
+        "normalize_to_uppercase", "dl_format", "enable_legal_name_checkbox", "drivers_license_button_text",
+        "drivers_license_prompt_text", "agreement_confirm_button_text", "agreement_cancel_button_text", "school_info_field_legend",
+        "school_info_format", "responsible_person_disclaimer", "display_responsible_person_field", "phone_number_format",
+        "enable_patron_branch_select_option", "display_preferred_pickup_location", "teacher_patron_code_id", "student_patron_code_id",
+        "patron_code_id", "expiration_date", "expiration_date_years", "hide_branch_select_if_only_one_option", "disable_branch",
+        "display_ecard_checkbox", "ecard_patron_code_id", "ecard_registration_text", "ecard_barcode_prefix", "force_ecard_remotely",
+        "display_mailing_list_checkbox", "mailing_list_description_html", "mailing_list_record_set_id", "display_sms_notice_information",
+        "sms_notice_information_html", "use_legal_name_on_notices", "ecard_welcome_email_template_text",
+        "ecard_welcome_email_template_html", "welcome_email_template_text", "welcome_email_template_html", "welcome_email_from_name",
+        "welcome_email_subject", "welcome_email_from_address", "ecard_welcome_email_subject", "postmark_api_key",
+        "bypass_dupe_check", "duplicate_patron_message_html", "perform_papi_duplicate_bypass", "use_first_name_for_duplicate_workaround",
+        "block_out_of_state_registrations", "update_patron_record_with_melissa_address", "melissa_data_api_key",
+        "valid_address_registration_text", "valid_address_plus_name_registration_text", "out_of_state_block_message",
+        "valid_address_patron_code_id", "valid_address_plus_name_patron_code_id", "valid_address_record_set_id",
+        "valid_address_plus_name_record_set_id", "invalid_address_record_set_id", "registration_logon_user_id",
+        "add_to_record_set_id", "post_registration_note_text", "show_dl_ips", "reset_form", "kiosk_registration_text",
+        "kiosk_registration_header", "reset_seconds"
+    ];
+
+    [TestMethod]
+    public void OrdinaryCatalog_ExactlyMatchesIndependentSupportedKeyContract()
+    {
+        var actual = new SettingCatalog().All.Where(x => x.Group == SettingGroup.Ordinary).Select(x => x.Key).ToArray();
+
+        Assert.AreEqual(actual.Length, actual.Distinct(StringComparer.OrdinalIgnoreCase).Count(), "Duplicate ordinary key.");
+        CollectionAssert.AreEquivalent(SupportedOrdinaryKeys, actual);
+    }
+
+    [TestMethod]
+    public void OrdinaryCatalog_PreservesValueSensitivityAndEmptyValueContracts()
+    {
+        var booleans = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "reset_form", "show_dl", "hide_gender", "enable_age_warning", "hide_ereceipt", "normalize_to_uppercase",
+            "bypass_dupe_check", "enable_patron_branch_select_option", "block_out_of_state_registrations",
+            "enable_legal_name_checkbox", "use_legal_name_on_notices", "display_ecard_checkbox",
+            "display_mailing_list_checkbox", "display_sms_notice_information", "display_preferred_pickup_location",
+            "display_responsible_person_field", "perform_papi_duplicate_bypass", "use_first_name_for_duplicate_workaround",
+            "update_patron_record_with_melissa_address", "hide_branch_select_if_only_one_option", "disable_branch", "force_ecard_remotely"
+        };
+        var integers = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "mailing_list_record_set_id", "registration_logon_user_id", "ecard_patron_code_id", "teacher_patron_code_id",
+            "student_patron_code_id", "valid_address_patron_code_id", "valid_address_plus_name_patron_code_id",
+            "valid_address_record_set_id", "valid_address_plus_name_record_set_id", "invalid_address_record_set_id", "reset_seconds"
+        };
+        var nullableIntegers = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            { "add_to_record_set_id", "expiration_date_years", "patron_code_id" };
+        var html = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            { "custom_form_footer_html", "duplicate_patron_message_html", "mailing_list_description_html", "sms_notice_information_html" };
+        var templates = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            { "ecard_welcome_email_template_text", "ecard_welcome_email_template_html", "welcome_email_template_text", "welcome_email_template_html" };
+        var longStrings = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "warning_text", "age_warning_text", "na_gender_text", "drivers_license_button_text", "drivers_license_prompt_text",
+            "agreement_confirm_button_text", "agreement_cancel_button_text", "responsible_person_disclaimer", "registration_text",
+            "ecard_registration_text", "valid_address_registration_text", "valid_address_plus_name_registration_text",
+            "out_of_state_block_message", "post_registration_note_text", "kiosk_registration_text"
+        };
+        var shortStrings = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "css_file", "registration_form_header", "dl_format", "school_info_field_legend", "school_info_format",
+            "phone_number_format", "ecard_barcode_prefix", "welcome_email_from_name", "welcome_email_subject",
+            "ecard_welcome_email_subject", "postmark_api_key", "melissa_data_api_key", "show_dl_ips", "kiosk_registration_header"
+        };
+        var expectedTypes = new Dictionary<string, SettingValueType>(StringComparer.OrdinalIgnoreCase);
+        void Add(IEnumerable<string> keys, SettingValueType type)
+        {
+            foreach (var key in keys) expectedTypes.Add(key, type);
+        }
+        Add(booleans, SettingValueType.Boolean);
+        Add(integers, SettingValueType.Integer);
+        Add(nullableIntegers, SettingValueType.NullableInteger);
+        Add(html, SettingValueType.Html);
+        Add(templates, SettingValueType.EmailTemplate);
+        Add(longStrings, SettingValueType.LongString);
+        Add(shortStrings, SettingValueType.ShortString);
+        expectedTypes.Add("expiration_date", SettingValueType.NullableDate);
+        expectedTypes.Add("welcome_email_from_address", SettingValueType.EmailAddress);
+        expectedTypes.Add("header_image_url", SettingValueType.Uri);
+        CollectionAssert.AreEquivalent(SupportedOrdinaryKeys, expectedTypes.Keys.ToArray(), "The type contract must cover every supported key exactly once.");
+
+        foreach (var definition in new SettingCatalog().All.Where(x => x.Group == SettingGroup.Ordinary))
+        {
+            var expectedType = expectedTypes[definition.Key];
+            Assert.AreEqual(expectedType, definition.ValueType, definition.Key);
+            Assert.AreEqual(definition.Key is "postmark_api_key" or "melissa_data_api_key", definition.IsSensitive, definition.Key);
+            Assert.AreEqual(expectedType is SettingValueType.ShortString or SettingValueType.LongString or SettingValueType.Html
+                or SettingValueType.EmailTemplate or SettingValueType.EmailAddress or SettingValueType.Uri
+                or SettingValueType.NullableInteger or SettingValueType.NullableDate, definition.AllowEmpty, definition.Key);
+            Assert.IsNotNull(definition.Category, definition.Key);
+            Assert.IsFalse(string.IsNullOrWhiteSpace(definition.DisplayName), definition.Key);
+            Assert.IsFalse(string.IsNullOrWhiteSpace(definition.Description), definition.Key);
+        }
+    }
+
+    [TestMethod]
+    public void OrdinaryCatalog_DescriptionsAreSpecificAndCriticalDescriptionsAreStable()
+    {
+        var ordinary = new SettingCatalog().All.Where(x => x.Group == SettingGroup.Ordinary).ToDictionary(x => x.Key);
+        var forbidden = new[] { "used by the registration workflow", "value used for", "controls whether", "registration setting" };
+        foreach (var definition in ordinary.Values)
+            Assert.IsFalse(forbidden.Any(text => definition.Description.Contains(text, StringComparison.OrdinalIgnoreCase)), definition.Key);
+
+        var expected = new Dictionary<string, string>
+        {
+            ["show_dl_ips"] = "Semicolon-separated IP address prefixes treated as on-site requests; these control driver’s-license scanner availability, automatic kiosk resetting, and whether remote registration is forced into e-card mode.",
+            ["bypass_dupe_check"] = "Skips the application’s preliminary duplicate check before patron creation; Polaris may still perform its own duplicate checking.",
+            ["perform_papi_duplicate_bypass"] = "When Polaris rejects registration as a duplicate, allows the application to retry using the configured duplicate-name workaround.",
+            ["use_first_name_for_duplicate_workaround"] = "Adds the duplicate-workaround suffix to the first name when enabled; otherwise it is added to the last name.",
+            ["expiration_date"] = "Supplies one fixed patron expiration date; a configured years-based expiration takes precedence.",
+            ["expiration_date_years"] = "Calculates patron expiration relative to registration and takes precedence over the fixed expiration date.",
+            ["block_out_of_state_registrations"] = "Blocks registration when the submitted address state is outside Ohio.",
+            ["registration_logon_user_id"] = "Polaris user ID used to create registrations whose address was not verified through the address-verification workflow.",
+            ["mailing_list_record_set_id"] = "Polaris record set to which patrons are added when they select the mailing-list option.",
+            ["add_to_record_set_id"] = "Additional Polaris record set to which every successfully created patron is added when configured.",
+            ["post_registration_note_text"] = "Text added to the created patron’s Polaris note after successful registration."
+        };
+        foreach (var pair in expected) Assert.AreEqual(pair.Value, ordinary[pair.Key].Description, pair.Key);
+    }
     [TestMethod]
     public void SettingsAudit_EmptyBatchedFormLookupReturnsWithoutOpeningAConnection()
     {
@@ -63,13 +188,94 @@ public class SettingsAdministrationTests
     public void Catalog_UsesStaffFriendlyAcronymsAndAlphabetizesDynamicGroups()
     {
         var catalog = new SettingCatalog().All;
-        foreach (var expected in new[] { "CSS file", "Header image URL", "Custom form footer HTML", "Polaris record set ID", "PAPI duplicate check", "E-card patron code" })
+        foreach (var expected in new[] { "CSS file", "Header image URL", "Custom form footer HTML", "Additional post-registration record set", "Attempt PAPI duplicate workaround", "E-card patron code" })
             Assert.IsTrue(catalog.Any(setting => setting.DisplayName == expected), expected);
         foreach (var group in new[] { SettingGroup.Alert, SettingGroup.Label, SettingGroup.Require })
         {
             var names = catalog.Where(setting => setting.Group == group).Select(setting => setting.DisplayName).ToArray();
             CollectionAssert.AreEqual(names.OrderBy(name => name, StringComparer.OrdinalIgnoreCase).ToArray(), names);
         }
+    }
+
+    [TestMethod]
+    public void OrdinaryCatalog_UsesRequestedCategoriesAndTerminology()
+    {
+        var catalog = new SettingCatalog().All.ToDictionary(x => x.Key, StringComparer.OrdinalIgnoreCase);
+        var expectedCategories = new Dictionary<string, SettingCategory>
+        {
+            ["school_info_field_legend"] = SettingCategory.FormBehaviorAndFields,
+            ["display_preferred_pickup_location"] = SettingCategory.BranchAndPatronDefaults,
+            ["mailing_list_record_set_id"] = SettingCategory.EmailAndNotices,
+            ["postmark_api_key"] = SettingCategory.EmailAndNotices,
+            ["melissa_data_api_key"] = SettingCategory.AddressVerification,
+            ["post_registration_note_text"] = SettingCategory.PolarisIntegrationAndRecordSets,
+            ["show_dl_ips"] = SettingCategory.KioskAndSessionBehavior
+        };
+        foreach (var pair in expectedCategories) Assert.AreEqual(pair.Value, catalog[pair.Key].Category, pair.Key);
+
+        CollectionAssert.AreEqual(new[]
+        {
+            "Page content and appearance", "Form fields and behavior", "Branch selection and patron defaults",
+            "E-card registration", "Email and communications", "Duplicate detection and workarounds",
+            "Address verification", "Polaris patron creation and follow-up", "Kiosk and on-site behavior"
+        }, SettingCategoryPresentation.Ordered.Select(x => x.DisplayName()).ToArray());
+        Assert.IsFalse(Enum.GetNames<SettingCategory>().Contains("AdvancedIntegrations"));
+        var forbidden = new[] { "Dupe", "DL", "User1", "User5", "Voice1", "Voice2" };
+        Assert.IsFalse(catalog.Values.Any(x => forbidden.Any(term => x.DisplayName.Contains(term, StringComparison.Ordinal))),
+            "A staff-facing display name exposes an implementation mnemonic.");
+    }
+
+    [TestMethod]
+    public void DynamicCatalog_PreservesSupportedNamespacesAndCentralizedFieldNames()
+    {
+        var catalog = new SettingCatalog();
+        foreach (var key in new[]
+        {
+            "alert.NameFirst", "label.NameFirst", "label.UseLegalName", "label.IsECard", "label.AddToMailingList",
+            "require.PhoneVoice1", "require.EmailAddress", "require.User5"
+        }) Assert.IsTrue(catalog.TryGet(key, out _), key);
+        foreach (var key in new[] { "alert.NotAField", "label.NotAField", "require.NotAField", "require.ReceiveEreceipts" })
+            Assert.IsFalse(catalog.TryGet(key, out _), key);
+
+        Assert.AreEqual("First name", catalog.All.Single(x => x.Key == "alert.NameFirst").DisplayName);
+        Assert.AreEqual("First name", catalog.All.Single(x => x.Key == "label.NameFirst").DisplayName);
+        Assert.AreEqual("Require primary phone number", catalog.All.Single(x => x.Key == "require.PhoneVoice1").DisplayName);
+        CollectionAssert.AreEquivalent(new[] { "require.PhoneVoice1", "require.EmailAddress", "require.User5" },
+            catalog.All.Where(x => x.Group == SettingGroup.Require).Select(x => x.Key).ToArray());
+    }
+
+    [TestMethod]
+    public void SettingsView_HidesOnlyValidationMessagePresentationBehindOneBoolean()
+    {
+        var root = FindRepositoryRoot();
+        var view = File.ReadAllText(Path.Combine(root, "src/Clc.PatronRegistration.Web/Views/Settings/Index.cshtml"));
+
+        StringAssert.Contains(view, "bool ShowValidationMessageSettings = false;");
+        StringAssert.Contains(view, "if (ShowValidationMessageSettings)");
+        StringAssert.Contains(view, "groups.Insert(0, (SettingGroup.Alert, \"Validation messages\"));");
+        StringAssert.Contains(view, "(SettingGroup.Label, \"Field labels\")");
+        StringAssert.Contains(view, "(SettingGroup.Require, \"Required fields\")");
+        StringAssert.Contains(view, "if (rows.Count == 0) { continue; }");
+        Assert.AreEqual(2, Directory.GetFiles(Path.Combine(root, "src"), "*.cs", SearchOption.AllDirectories)
+            .Where(path => !path.Contains(".Web.Tests", StringComparison.Ordinal))
+            .SelectMany(File.ReadLines).Count(line => line.Contains("ShowValidationMessageSettings", StringComparison.Ordinal)) +
+            view.Split('\n').Count(line => line.Contains("ShowValidationMessageSettings", StringComparison.Ordinal)),
+            "The toggle must remain local to the Razor presentation and occur only in its declaration and conditional.");
+    }
+
+    [TestMethod]
+    public void RegistrationCheckboxes_UseSupportedRazorMetadataLabelsOnly()
+    {
+        var root = FindRepositoryRoot();
+        var view = File.ReadAllText(Path.Combine(root, "src/Clc.PatronRegistration.Web/Views/Registration/Create.cshtml"));
+        foreach (var property in new[] { "UseLegalName", "IsECard", "AddToMailingList" })
+        {
+            StringAssert.Contains(view, $"<input asp-for=\"{property}\" />");
+            StringAssert.Contains(view, $"<label asp-for=\"{property}\"");
+        }
+        foreach (var legacyProperty in new[] { "LegalNameCheckboxLabel", "ECardCheckboxLabel", "MailingListCheckboxLabel" })
+            Assert.IsFalse(view.Contains(legacyProperty, StringComparison.Ordinal), legacyProperty);
+        Assert.IsFalse(view.Contains("Html.Raw(Settings.GetFieldLabel", StringComparison.Ordinal));
     }
 
     [TestMethod]

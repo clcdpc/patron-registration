@@ -176,8 +176,8 @@ namespace Clc.PatronRegistration
             }
 
             FormatRegistration();
-            VerifyAndFixAddress(melissa);
             SetPatronCode();
+            VerifyAndFixAddress(melissa);
             HandleLibrarySettings();
             HandleMailingList();
             HandleEReceipts();
@@ -480,7 +480,15 @@ namespace Clc.PatronRegistration
                 }
             }
 
-            if (PatronCode == null)
+            ApplyAddressVerificationPatronCode(status);
+
+            return this;
+        }
+
+        public Registration ApplyAddressVerificationPatronCode(AddressVerificationStatus status)
+        {
+            var defaultPatronCode = PositiveOptionalIdentifier("patron_code_id", Settings.PatronCodeId);
+            if (PatronCode == null || PatronCode == defaultPatronCode)
             {
                 switch (status)
                 {
@@ -504,13 +512,21 @@ namespace Clc.PatronRegistration
 
         public Registration HandleValidAddressPreReg()
         {
-            PatronCode = PositiveOptionalIdentifier("valid_address_patron_code_id", Settings.ValidAddressPatronCodeId) ?? PatronCode;
+            var configuredCode = PositiveOptionalIdentifier("valid_address_patron_code_id", Settings.ValidAddressPatronCodeId);
+            if (configuredCode.HasValue)
+            {
+                PatronCode = configuredCode;
+            }
             return this;
         }
 
         public Registration HandleValidAddressPlusNamePreReg()
         {
-            PatronCode = PositiveOptionalIdentifier("valid_address_plus_name_patron_code_id", Settings.ValidAddressPlusNamePatronCodeId) ?? PatronCode;
+            var configuredCode = PositiveOptionalIdentifier("valid_address_plus_name_patron_code_id", Settings.ValidAddressPlusNamePatronCodeId);
+            if (configuredCode.HasValue)
+            {
+                PatronCode = configuredCode;
+            }
             return this;
         }
 
