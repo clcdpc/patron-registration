@@ -5,6 +5,10 @@ body.settings-administration-page {
     width: auto
 }
 
+.settings-administration-page [hidden] {
+    display: none !important
+}
+
 body.settings-administration-page #regFormContainer {
     box-sizing: border-box;
     max-width: none;

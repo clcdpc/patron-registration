@@ -64,6 +64,7 @@
 
         function applyEdit() {
             const candidateOperation = row.dataset.candidateOperation;
+            if (!session || !candidateOperation) return;
             if (candidateOperation === "Upsert" && !value.reportValidity()) return;
             operation.value = candidateOperation;
             row.dataset.appliedOperation = candidateOperation;
@@ -77,6 +78,7 @@
         }
 
         function cancelEdit() {
+            if (!session) return;
             operation.value = session.operation;
             value.value = session.value;
             if (value.nextElementSibling?.classList.contains("html-preview")) {

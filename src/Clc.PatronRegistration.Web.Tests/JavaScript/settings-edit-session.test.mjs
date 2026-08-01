@@ -30,6 +30,11 @@ context.globalThis = context;
 vm.runInNewContext(readFileSync(new URL("../../Clc.PatronRegistration.Web/wwwroot/js/settings.js", import.meta.url), "utf8"), context);
 const { initializeRow, blockActiveEdit, populateReviewList, handleSaveAttempt } = context.SettingsEditSessions;
 
+test("scoped CSS makes every hidden settings element non-rendering", () => {
+    const css = readFileSync(new URL("../../Clc.PatronRegistration.Web/wwwroot/css/settings.css", import.meta.url), "utf8");
+    assert.match(css, /\.settings-administration-page\s+\[hidden\]\s*\{\s*display:\s*none\s*!important/);
+});
+
 function rowFixture({ operation = "Upsert", dirty = false, ownsOverride = true } = {}) {
     const controls = {
         change: new Control(), inherit: ownsOverride ? new Control() : null,
@@ -117,6 +122,15 @@ test("server RemoveOverride can be replaced by Upsert and Apply restores focus",
     assert.equal(fixture.row.dataset.dirty, "true");
     assert.equal(fixture.controls.inherit.hidden, false);
     assert.equal(focused, fixture.controls.change);
+});
+
+test("Apply and Cancel are harmless without an active session", () => {
+    const fixture = rowFixture({ operation: "Upsert" });
+    fixture.controls.apply.click();
+    fixture.controls.cancel.click();
+    assert.equal(fixture.controls.operation.value, "Upsert");
+    assert.equal(fixture.row.dataset.dirty, "false");
+    assert.equal(fixture.row.dataset.candidateOperation, undefined);
 });
 
 test("review uses only an applied operation and masks sensitive values", () => {
