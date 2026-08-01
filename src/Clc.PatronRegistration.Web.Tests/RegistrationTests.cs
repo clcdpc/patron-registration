@@ -12,6 +12,7 @@ using Clc.Rest.Models;
 using Clc.PatronRegistration.Helpers;
 using Microsoft.AspNetCore.Mvc.ModelBinding;
 using Microsoft.AspNetCore.Mvc;
+using System.Reflection;
 
 namespace Clc.PatronRegistration.Tests
 {
@@ -51,6 +52,159 @@ namespace Clc.PatronRegistration.Tests
             };
             registration.SetPatronCode();
             Assert.AreEqual(_mockSettings.Object.PatronCodeId, registration.PatronCode);
+        }
+
+        [TestMethod]
+        public void DefaultPatronCode_RemainsWhenAddressVerificationHasNoResult()
+        {
+            _mockSettings.Setup(s => s.PatronCodeId).Returns(10);
+            var registration = new Registration(_mockSettings.Object);
+
+            registration.SetPatronCode();
+            registration.ApplyAddressVerificationPatronCode(AddressVerificationStatus.None);
+
+            Assert.AreEqual(10, registration.PatronCode);
+        }
+
+        [TestMethod]
+        public void VerifiedAddressPatronCode_ReplacesDefault()
+        {
+            _mockSettings.Setup(s => s.PatronCodeId).Returns(10);
+            _mockSettings.Setup(s => s.ValidAddressPatronCodeId).Returns(20);
+            var registration = new Registration(_mockSettings.Object);
+
+            registration.SetPatronCode();
+            registration.ApplyAddressVerificationPatronCode(AddressVerificationStatus.Valid);
+
+            Assert.AreEqual(20, registration.PatronCode);
+        }
+
+        [TestMethod]
+        public void AddressAndNameMatchPatronCode_ReplacesDefault()
+        {
+            _mockSettings.Setup(s => s.PatronCodeId).Returns(10);
+            _mockSettings.Setup(s => s.ValidAddressPlusNamePatronCodeId).Returns(30);
+            var registration = new Registration(_mockSettings.Object);
+
+            registration.SetPatronCode();
+            registration.ApplyAddressVerificationPatronCode(AddressVerificationStatus.ValidPlusNameMatch);
+
+            Assert.AreEqual(30, registration.PatronCode);
+        }
+
+        [TestMethod]
+        public void AddressVerification_DoesNotReplaceAnAlreadySpecificPatronCode()
+        {
+            _mockSettings.Setup(s => s.PatronCodeId).Returns(10);
+            _mockSettings.Setup(s => s.ValidAddressPatronCodeId).Returns(20);
+            var registration = new Registration(_mockSettings.Object) { PatronCode = 99 };
+
+            registration.ApplyAddressVerificationPatronCode(AddressVerificationStatus.Valid);
+
+            Assert.AreEqual(99, registration.PatronCode);
+        }
+
+        [DataTestMethod]
+        [DataRow(false, 0)]
+        [DataRow(false, -1)]
+        [DataRow(true, 0)]
+        [DataRow(true, -1)]
+        public void InvalidAddressSpecificPatronCode_DoesNotEraseDefault(bool plusNameMatch, int addressCode)
+        {
+            _mockSettings.Setup(s => s.PatronCodeId).Returns(10);
+            _mockSettings.Setup(s => s.ValidAddressPatronCodeId).Returns(addressCode);
+            _mockSettings.Setup(s => s.ValidAddressPlusNamePatronCodeId).Returns(addressCode);
+            var registration = new Registration(_mockSettings.Object);
+
+            registration.SetPatronCode();
+            registration.ApplyAddressVerificationPatronCode(plusNameMatch ? AddressVerificationStatus.ValidPlusNameMatch : AddressVerificationStatus.Valid);
+
+            Assert.AreEqual(10, registration.PatronCode);
+        }
+
+        [DataTestMethod]
+        [DataRow(false, AddressVerificationStatus.Valid, 20, "Verified success")]
+        [DataRow(true, AddressVerificationStatus.ValidPlusNameMatch, 30, "Name-match success")]
+        public void AddressSpecificSuccessMessage_IsSelectedAfterCodeIsApplied(
+            bool plusNameMatch, AddressVerificationStatus status, int addressCode, string expectedMessage)
+        {
+            _mockSettings.Setup(s => s.RegistrationText).Returns("Default success");
+            _mockSettings.Setup(s => s.PatronCodeId).Returns(10);
+            _mockSettings.Setup(s => s.ValidAddressPatronCodeId).Returns(20);
+            _mockSettings.Setup(s => s.ValidAddressPlusNamePatronCodeId).Returns(30);
+            _mockSettings.Setup(s => s.ValidAddressRegistrationText).Returns("Verified success");
+            _mockSettings.Setup(s => s.ValidAddressPlusNameRegistrationText).Returns("Name-match success");
+            _mockSettings.Setup(s => s.DriversLicenseButtonEnabledIpAddresses).Returns([]);
+            var registration = new Registration(_mockSettings.Object) { AddressVerificationStatus = status };
+            registration.SetPatronCode();
+            registration.ApplyAddressVerificationPatronCode(plusNameMatch ? AddressVerificationStatus.ValidPlusNameMatch : AddressVerificationStatus.Valid);
+
+            Assert.AreEqual(addressCode, registration.PatronCode);
+            Assert.AreEqual(expectedMessage, RegistrationSuccessText(registration));
+        }
+
+        [DataTestMethod]
+        [DataRow(false, AddressVerificationStatus.Valid)]
+        [DataRow(true, AddressVerificationStatus.ValidPlusNameMatch)]
+        public void AddressSpecificSuccessMessage_IsNotSelectedWhenCodeCannotBeApplied(bool plusNameMatch, AddressVerificationStatus status)
+        {
+            _mockSettings.Setup(s => s.RegistrationText).Returns("Default success");
+            _mockSettings.Setup(s => s.PatronCodeId).Returns(10);
+            _mockSettings.Setup(s => s.ValidAddressRegistrationText).Returns("Verified success");
+            _mockSettings.Setup(s => s.ValidAddressPlusNameRegistrationText).Returns("Name-match success");
+            _mockSettings.Setup(s => s.DriversLicenseButtonEnabledIpAddresses).Returns([]);
+            var registration = new Registration(_mockSettings.Object) { AddressVerificationStatus = status };
+            registration.SetPatronCode();
+            registration.ApplyAddressVerificationPatronCode(plusNameMatch ? AddressVerificationStatus.ValidPlusNameMatch : AddressVerificationStatus.Valid);
+
+            Assert.AreEqual(10, registration.PatronCode);
+            Assert.AreEqual("Default success", RegistrationSuccessText(registration));
+        }
+
+        [TestMethod]
+        public void LaterSpecificPatronCodes_StillOverrideDefaultAndAddressCodes()
+        {
+            _mockSettings.Setup(s => s.PatronCodeId).Returns(10);
+            _mockSettings.Setup(s => s.ValidAddressPatronCodeId).Returns(20);
+            _mockSettings.Setup(s => s.DisplayECardCheckbox).Returns(true);
+            _mockSettings.Setup(s => s.EcardPatronCodeId).Returns(30);
+            _mockSettings.Setup(s => s.RegistrationText).Returns("Default success");
+            _mockSettings.Setup(s => s.ValidAddressRegistrationText).Returns("Verified success");
+            _mockSettings.Setup(s => s.EcardRegistrationText).Returns("E-card success");
+            _mockSettings.Setup(s => s.DriversLicenseButtonEnabledIpAddresses).Returns([]);
+            _mockSettings.Setup(s => s.SchoolInfoFormat).Returns("configured");
+            _mockSettings.Setup(s => s.TeacherPatronCodeId).Returns(40);
+            _mockSettings.Setup(s => s.StudentPatronCodeId).Returns(50);
+            var registration = new Registration(_mockSettings.Object) { IsECard = true };
+
+            registration.SetPatronCode();
+            registration.ApplyAddressVerificationPatronCode(AddressVerificationStatus.Valid);
+            Assert.AreEqual(20, registration.PatronCode);
+            registration.HandleECardSettings();
+            Assert.AreEqual(30, registration.PatronCode);
+            Assert.AreEqual("E-card success", RegistrationSuccessText(registration));
+            registration.IsTeacher = true;
+            registration.HandleSchoolInfo();
+            Assert.AreEqual(40, registration.PatronCode);
+            registration.IsTeacher = false;
+            registration.IsStudent = true;
+            registration.HandleSchoolInfo();
+            Assert.AreEqual(50, registration.PatronCode);
+        }
+
+        [TestMethod]
+        public void SettingsContract_HasNoForcedPatronCodeSetting()
+        {
+            Assert.IsFalse(typeof(ISettingProvider).GetProperties().Any(property =>
+                property.Name.Contains("Force", StringComparison.OrdinalIgnoreCase) &&
+                property.Name.Contains("PatronCode", StringComparison.OrdinalIgnoreCase)));
+        }
+
+        private static string RegistrationSuccessText(Registration registration)
+        {
+            var method = typeof(Registration).GetMethod("GetRegistrationSuccessText", BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.IsNotNull(method);
+            return (string)method.Invoke(registration, ["203.0.113.1"])!;
         }
 
         [TestMethod]
