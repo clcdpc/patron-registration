@@ -5,6 +5,10 @@ body.settings-administration-page {
     width: auto
 }
 
+.settings-administration-page [hidden] {
+    display: none !important
+}
+
 body.settings-administration-page #regFormContainer {
     box-sizing: border-box;
     max-width: none;
@@ -307,6 +311,17 @@ body.settings-administration-page #regFormContainer {
 
 .value-editor {
     flex: 1 1 24rem
+}
+
+.edit-actions {
+    align-items: center;
+    display: inline-flex;
+    gap: .65rem
+}
+
+.inheritance-message {
+    flex: 1 1 24rem;
+    margin: .35rem 0
 }
 
 .technical-details {

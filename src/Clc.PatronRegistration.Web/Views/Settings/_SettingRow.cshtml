@@ -8,7 +8,6 @@
     var operationId = $"{token}-operation";
     bool hasDraftOperation = Model.DraftOperation.HasValue;
     bool isRemoveOverride = Model.DraftOperation == DraftOperation.RemoveOverride;
-    bool isUpsert = !isRemoveOverride;
     bool isDraftUpsert = Model.DraftOperation == DraftOperation.Upsert;
     var editorValue = definition.IsSensitive ? string.Empty : isDraftUpsert
         ? Model.DraftValue
@@ -18,6 +17,8 @@
     var searchText = $"{definition.DisplayName} {definition.Key} {definition.Description} {safeEffective}".ToLowerInvariant();
     var presentation = Clc.PatronRegistration.Web.Models.SettingValuePresentation.ForRow(Model);
     bool isNotSet = presentation.State == Clc.PatronRegistration.Web.Models.SettingPresentationState.NotSet;
+    bool canRemoveOverride = resolution.OwnsOverride;
+    var inheritanceMessage = Clc.PatronRegistration.Web.Models.SettingInheritancePresentation.MessageFor(Model);
 }
 <details class="setting-row" open="@hasDraftOperation"
          data-search="@searchText"
@@ -25,9 +26,13 @@
          data-setting-key="@definition.Key"
          data-old-value="@(definition.IsSensitive ? "••••••••" : resolution.EffectiveValue)"
          data-sensitive="@definition.IsSensitive.ToString().ToLowerInvariant()"
+         data-server-operation="@(Model.DraftOperation?.ToString() ?? string.Empty)"
+         data-applied-operation="@(isRemoveOverride ? "RemoveOverride" : "Upsert")"
          data-presentation-state="@presentation.State.ToString().ToLowerInvariant()">
     <input class="change-index" type="hidden" name="Changes.Index" value="@token" disabled />
     <input class="change-key" type="hidden" name="Changes[@token].Key" value="@definition.Key" disabled />
+    <input id="@operationId" class="operation" type="hidden" name="Changes[@token].Operation"
+           value="@(isRemoveOverride ? "RemoveOverride" : "Upsert")" disabled />
 
     <summary>
         <span class="setting-summary-content">
@@ -61,17 +66,7 @@
     </dl>
 
     <div class="setting-editor">
-        <div>
-            <label for="@operationId">Change</label>
-            <select id="@operationId" class="operation" name="Changes[@token].Operation" disabled>
-                <option value="Upsert" selected="@isUpsert">Set a value here</option>
-                @if (resolution.OwnsOverride)
-                {
-                    <option value="RemoveOverride" selected="@isRemoveOverride">Use inherited value</option>
-                }
-            </select>
-        </div>
-        <div class="value-editor">
+        <div class="value-editor" hidden>
             <label for="@inputId">Value</label>
             @if (definition.ValueType == SettingValueType.Boolean)
             {
@@ -117,6 +112,17 @@
             }
         </div>
         <button type="button" class="edit-setting">Change</button>
+        @if (canRemoveOverride)
+        {
+            <button type="button" class="inherit-setting" hidden="@isRemoveOverride">Use inherited value</button>
+        }
+        <p class="inheritance-message" hidden>
+            @inheritanceMessage
+        </p>
+        <span class="edit-actions" hidden>
+            <button type="button" class="apply-setting">Apply</button>
+            <button type="button" class="cancel-setting">Cancel</button>
+        </span>
         @if (hasDraftOperation && Model.DraftId.HasValue)
         {
             <button type="submit"

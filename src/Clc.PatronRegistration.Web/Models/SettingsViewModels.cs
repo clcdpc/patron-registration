@@ -115,7 +115,24 @@ public sealed record SettingRowViewModel(
     string? DraftValue,
     DraftOperation? DraftOperation,
     long? DraftId,
-    string SourceDescription = "No value is configured");
+    string SourceDescription = "No value is configured",
+    string? InheritedValue = null,
+    bool HasInheritedValue = false);
+
+public static class SettingInheritancePresentation
+{
+    public static string MessageFor(SettingRowViewModel row)
+    {
+        const string prefix = "Applying this action will remove the override at this scope";
+        if (row.Definition.IsSensitive)
+        {
+            return $"{prefix} and use the inherited value.";
+        }
+        return row.HasInheritedValue
+            ? $"{prefix} and use the inherited value: {SettingValuePresentation.Format(row.Definition, row.InheritedValue, true)}."
+            : $"{prefix} and the setting will become unconfigured.";
+    }
+}
 
 public sealed class SaveSettingsRequest
 {
