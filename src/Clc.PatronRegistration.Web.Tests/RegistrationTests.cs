@@ -54,6 +54,75 @@ namespace Clc.PatronRegistration.Tests
             Assert.AreEqual(_mockSettings.Object.PatronCodeId, registration.PatronCode);
         }
 
+        [DataTestMethod]
+        [DataRow("AS01", false, 20)]
+        [DataRow("VR01", true, 30)]
+        public void CreateRegistration_PassesAddressSpecificPatronCodeToPolaris(
+            string melissaResult, bool plusNameMatch, int expectedPatronCode)
+        {
+            _mockSettings.Setup(s => s.PatronCodeId).Returns(10);
+            _mockSettings.Setup(s => s.ValidAddressPatronCodeId).Returns(20);
+            _mockSettings.Setup(s => s.ValidAddressPlusNamePatronCodeId).Returns(30);
+            _mockSettings.Setup(s => s.RegistrationText).Returns("Registration complete");
+            _mockSettings.Setup(s => s.DriversLicenseButtonEnabledIpAddresses).Returns([]);
+            _mockDbHelper.Setup(db => db.CheckPatronIsDuplicate(
+                It.IsAny<int>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<DateTime>())).Returns(false);
+            DbHelper.Global = _mockDbHelper.Object;
+            _mockMelissaClient.Setup(client => client.PersonatorRequest(It.IsAny<Clc.Melissa.Models.PersonatorRequestRecord>()))
+                .Returns(new RestResponse<Clc.Melissa.Models.PersonatorResponse>
+                {
+                    Data = new Clc.Melissa.Models.PersonatorResponse
+                    {
+                        Records =
+                        [
+                            new Clc.Melissa.Models.Record
+                            {
+                                Results = melissaResult,
+                                AddressLine1 = "123 Main Street",
+                                AddressLine2 = "",
+                                City = "Columbus",
+                                State = "OH",
+                                PostalCode = "43215"
+                            }
+                        ]
+                    }
+                });
+            PatronRegistrationParams captured = null;
+            _mockPapiClient.Setup(client => client.PatronRegistrationCreate(It.IsAny<PatronRegistrationParams>()))
+                .Callback<PatronRegistrationParams>(value => captured = value)
+                .Returns(new RestResponse<PatronRegistrationCreateResult>
+                {
+                    Data = new PatronRegistrationCreateResult
+                    {
+                        PatronID = 123,
+                        Barcode = "2000000000123",
+                        PAPIErrorCode = 0
+                    }
+                });
+            var registration = new Registration(_mockSettings.Object)
+            {
+                NameFirst = "Pat",
+                NameLast = "Reader",
+                Birthdate = new DateTime(1990, 1, 1),
+                PatronBranchID = 1,
+                StreetOne = "123 Main Street",
+                StreetTwo = "",
+                City = "Columbus",
+                State = "OH",
+                PostalCode = "43215"
+            };
+
+            var result = registration.CreateRegistration(
+                "203.0.113.1", new ModelStateDictionary(), _mockSettings.Object, _mockDbHelper.Object,
+                _mockPapiClient.Object, _mockMelissaClient.Object, _mockEmailSender.Object);
+
+            Assert.AreEqual(RegistrationStatus.Success, result.Status);
+            Assert.IsNotNull(captured);
+            Assert.AreEqual(expectedPatronCode, captured.PatronCode);
+            Assert.AreEqual(plusNameMatch ? AddressVerificationStatus.ValidPlusNameMatch : AddressVerificationStatus.Valid,
+                registration.AddressVerificationStatus);
+        }
+
         [TestMethod]
         public void DefaultPatronCode_RemainsWhenAddressVerificationHasNoResult()
         {
