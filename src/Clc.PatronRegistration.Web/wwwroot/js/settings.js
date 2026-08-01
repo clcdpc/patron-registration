@@ -21,7 +21,17 @@
 
     initializeSettingsContext(document.querySelector(".settings-context"));
 
-    function initializeRow(row) {
+    function updatePendingActions(settingsForm) {
+        if (!settingsForm) return;
+        const actions = settingsForm.querySelector(".settings-actions");
+        if (!actions) return;
+        const count = settingsForm.querySelectorAll('.setting-row[data-dirty="true"]').length;
+        const status = actions.querySelector(".pending-changes-status");
+        actions.hidden = count === 0;
+        if (status) status.textContent = count === 0 ? "" : `${count} pending ${count === 1 ? "change" : "changes"}`;
+    }
+
+    function initializeRow(row, settingsForm) {
         const change = row.querySelector(".edit-setting");
         const inherit = row.querySelector(".inherit-setting");
         const apply = row.querySelector(".apply-setting");
@@ -88,6 +98,7 @@
             session = null;
             showNormalState();
             clearSaveBlockMessage();
+            updatePendingActions(settingsForm);
             change.focus();
         }
 
@@ -107,6 +118,7 @@
             session = null;
             showNormalState();
             clearSaveBlockMessage();
+            updatePendingActions(settingsForm);
             change.focus();
         }
 
@@ -117,7 +129,8 @@
         showNormalState();
     }
 
-    document.querySelectorAll(".setting-row").forEach(initializeRow);
+    document.querySelectorAll(".setting-row").forEach((row) => initializeRow(row, form));
+    updatePendingActions(form);
 
     function blockActiveEdit(settingsForm, status) {
         const activeRow = settingsForm.querySelector('.setting-row[data-candidate-operation]');
@@ -162,7 +175,7 @@
         return "review";
     }
 
-    globalThis.SettingsEditSessions = { initializeSettingsContext, initializeRow, blockActiveEdit, populateReviewList, handleSaveAttempt };
+    globalThis.SettingsEditSessions = { initializeSettingsContext, initializeRow, updatePendingActions, blockActiveEdit, populateReviewList, handleSaveAttempt };
 
     document.querySelectorAll(".reveal-secret").forEach((button) => {
         button.addEventListener("click", () => {

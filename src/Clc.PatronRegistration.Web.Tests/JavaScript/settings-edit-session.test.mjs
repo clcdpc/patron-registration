@@ -28,7 +28,7 @@ const documentStub = {
 const context = { document: documentStub, window: {}, globalThis: {}, Event };
 context.globalThis = context;
 vm.runInNewContext(readFileSync(new URL("../../Clc.PatronRegistration.Web/wwwroot/js/settings.js", import.meta.url), "utf8"), context);
-const { initializeSettingsContext, initializeRow, blockActiveEdit, populateReviewList, handleSaveAttempt } = context.SettingsEditSessions;
+const { initializeSettingsContext, initializeRow, updatePendingActions, blockActiveEdit, populateReviewList, handleSaveAttempt } = context.SettingsEditSessions;
 
 function settingsContextFixture() {
     const organization = new Control("branch-2");
@@ -101,6 +101,79 @@ function rowFixture({ operation = "Upsert", dirty = false, ownsOverride = true }
     initializeRow(row);
     return { row, controls, category };
 }
+
+function pendingActionsFixture(rowOptions = [{}, {}]) {
+    const actions = new Control();
+    const status = new Control();
+    actions.querySelector = (selector) => selector === ".pending-changes-status" ? status : null;
+    const rows = [];
+    const form = {
+        querySelector(selector) { return selector === ".settings-actions" ? actions : null; },
+        querySelectorAll(selector) {
+            return selector === '.setting-row[data-dirty="true"]'
+                ? rows.filter(({ row }) => row.dataset.dirty === "true").map(({ row }) => row)
+                : [];
+        }
+    };
+    for (const options of rowOptions) {
+        const fixture = rowFixture(options);
+        initializeRow(fixture.row, form);
+        rows.push(fixture);
+    }
+    updatePendingActions(form);
+    return { form, actions, status, rows };
+}
+
+test("pending actions follow applied dirty rows rather than edit sessions or server draft operations", () => {
+    const fixture = pendingActionsFixture([{ operation: "Upsert" }, { operation: "RemoveOverride" }]);
+    const [first, second] = fixture.rows;
+    assert.equal(fixture.actions.hidden, true);
+    assert.equal(fixture.status.textContent, "");
+
+    first.controls.change.click();
+    assert.equal(fixture.actions.hidden, true, "entering edit mode is not a pending change");
+    first.controls.cancel.click();
+    assert.equal(fixture.actions.hidden, true, "cancelling a clean candidate remains clean");
+
+    first.controls.change.click();
+    first.controls.apply.click();
+    assert.equal(fixture.actions.hidden, false);
+    assert.equal(fixture.status.textContent, "1 pending change");
+
+    first.controls.change.click();
+    first.controls.apply.click();
+    assert.equal(fixture.status.textContent, "1 pending change", "reapplying a dirty row does not increment the count");
+    first.controls.change.click();
+    first.controls.cancel.click();
+    assert.equal(fixture.actions.hidden, false, "cancelling a dirty row edit preserves its applied change");
+    assert.equal(fixture.status.textContent, "1 pending change");
+
+    second.controls.change.click();
+    second.controls.apply.click();
+    assert.equal(fixture.status.textContent, "2 pending changes");
+});
+
+test("failed validation and server-loaded draft operations do not create browser-pending changes", () => {
+    const fixture = pendingActionsFixture([{ operation: "Upsert" }]);
+    const candidate = fixture.rows[0];
+    candidate.controls.change.click();
+    candidate.controls.value.reportValidity = () => false;
+    candidate.controls.apply.click();
+    assert.equal(candidate.row.dataset.dirty, "false");
+    assert.equal(fixture.actions.hidden, true);
+    assert.equal(fixture.status.textContent, "");
+});
+
+test("save actions share the hidden pending region while Remove draft change stays on its row", () => {
+    const indexMarkup = readFileSync(new URL("../../Clc.PatronRegistration.Web/Views/Settings/Index.cshtml", import.meta.url), "utf8");
+    const rowMarkup = readFileSync(new URL("../../Clc.PatronRegistration.Web/Views/Settings/_SettingRow.cshtml", import.meta.url), "utf8");
+    const actions = indexMarkup.match(/<div class="settings-actions" hidden>[\s\S]*?<\/div>\s*<\/div>/)?.[0] ?? "";
+    assert.match(actions, /Review and save now/);
+    assert.match(actions, /Save changes to draft/);
+    assert.match(actions, /role="status" aria-live="polite"/);
+    assert.doesNotMatch(actions, /Remove draft change/);
+    assert.match(rowMarkup, /Remove draft change/);
+});
 
 test("active edits block both save paths and cannot enter review", () => {
     for (const dirty of [false, true]) {

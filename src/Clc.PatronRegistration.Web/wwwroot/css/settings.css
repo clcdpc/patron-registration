@@ -16,7 +16,7 @@ body.settings-administration-page #regFormContainer {
     width: 100%
 }
 
-.settings-header, .scope-form, .setting-editor, .button-row, .settings-actions {
+.settings-header, .scope-form, .setting-editor, .button-row, .settings-actions, .settings-action-buttons {
     display: flex;
     align-items: center;
     gap: .65rem;
@@ -347,11 +347,20 @@ body.settings-administration-page #regFormContainer {
 }
 
 .settings-actions {
-    background: #f3f3f3;
+    background: #fffbea;
+    border: 1px solid #b78b19;
+    border-bottom-width: .25rem;
+    box-shadow: 0 -.2rem .6rem rgb(0 0 0 / 18%);
     bottom: 0;
-    padding: .65rem;
+    justify-content: space-between;
+    margin-top: 1rem;
+    padding: .85rem 1rem;
     position: sticky;
     z-index: 2
+}
+
+.pending-changes-status {
+    color: #5f4300
 }
 
 .danger-button {
@@ -458,7 +467,19 @@ body.settings-administration-page #regFormContainer {
     }
 
     .settings-actions {
+        align-items: stretch;
+        flex-direction: column;
         position: static
+    }
+
+    .settings-action-buttons {
+        align-items: stretch;
+        flex-direction: column
+    }
+
+    .settings-action-buttons button {
+        min-height: 2.75rem;
+        width: 100%
     }
 }
 
