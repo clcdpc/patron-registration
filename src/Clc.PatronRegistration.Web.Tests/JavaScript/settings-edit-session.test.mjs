@@ -28,7 +28,47 @@ const documentStub = {
 const context = { document: documentStub, window: {}, globalThis: {}, Event };
 context.globalThis = context;
 vm.runInNewContext(readFileSync(new URL("../../Clc.PatronRegistration.Web/wwwroot/js/settings.js", import.meta.url), "utf8"), context);
-const { initializeRow, blockActiveEdit, populateReviewList, handleSaveAttempt } = context.SettingsEditSessions;
+const { initializeSettingsContext, initializeRow, blockActiveEdit, populateReviewList, handleSaveAttempt } = context.SettingsEditSessions;
+
+function settingsContextFixture() {
+    const organization = new Control("branch-2");
+    const formCode = new Control("youth");
+    organization.disabled = false;
+    formCode.disabled = false;
+    const submissions = [];
+    const form = {
+        querySelector(selector) {
+            return selector === "#organization-scope" ? organization : formCode;
+        },
+        requestSubmit() {
+            const values = {};
+            if (!organization.disabled) values.organizationId = organization.value;
+            if (!formCode.disabled) values.formCode = formCode.value;
+            submissions.push(values);
+        }
+    };
+    return { form, organization, formCode, submissions };
+}
+
+test("settings context changes submit the applicable GET values but initialization does not", () => {
+    const organizationChange = settingsContextFixture();
+    initializeSettingsContext(organizationChange.form);
+    assert.deepEqual(organizationChange.submissions, []);
+    organizationChange.organization.listeners.change();
+    assert.deepEqual(organizationChange.submissions, [{ organizationId: "branch-2" }]);
+
+    const formChange = settingsContextFixture();
+    initializeSettingsContext(formChange.form);
+    formChange.formCode.listeners.change();
+    assert.deepEqual(formChange.submissions, [{ organizationId: "branch-2", formCode: "youth" }]);
+});
+
+test("settings context markup only renders View settings as a noscript fallback", () => {
+    const markup = readFileSync(new URL("../../Clc.PatronRegistration.Web/Views/Settings/Index.cshtml", import.meta.url), "utf8");
+    assert.doesNotMatch(markup, /<\/noscript>\s*<button[^>]*>View settings<\/button>/);
+    assert.match(markup, /<noscript>\s*<button type="submit">View settings<\/button>\s*<\/noscript>/);
+    assert.equal((markup.match(/>View settings<\/button>/g) ?? []).length, 1);
+});
 
 test("scoped CSS makes every hidden settings element non-rendering", () => {
     const css = readFileSync(new URL("../../Clc.PatronRegistration.Web/wwwroot/css/settings.css", import.meta.url), "utf8");

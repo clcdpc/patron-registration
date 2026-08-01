@@ -7,6 +7,20 @@
     let approved = false;
     let submitter = null;
 
+    function initializeSettingsContext(contextForm) {
+        if (!contextForm) return;
+        const organizationScope = contextForm.querySelector("#organization-scope");
+        const formCodeScope = contextForm.querySelector("#form-code-scope");
+
+        organizationScope?.addEventListener("change", () => {
+            if (formCodeScope) formCodeScope.disabled = true;
+            contextForm.requestSubmit();
+        });
+        formCodeScope?.addEventListener("change", () => contextForm.requestSubmit());
+    }
+
+    initializeSettingsContext(document.querySelector(".settings-context"));
+
     function initializeRow(row) {
         const change = row.querySelector(".edit-setting");
         const inherit = row.querySelector(".inherit-setting");
@@ -148,7 +162,7 @@
         return "review";
     }
 
-    globalThis.SettingsEditSessions = { initializeRow, blockActiveEdit, populateReviewList, handleSaveAttempt };
+    globalThis.SettingsEditSessions = { initializeSettingsContext, initializeRow, blockActiveEdit, populateReviewList, handleSaveAttempt };
 
     document.querySelectorAll(".reveal-secret").forEach((button) => {
         button.addEventListener("click", () => {
