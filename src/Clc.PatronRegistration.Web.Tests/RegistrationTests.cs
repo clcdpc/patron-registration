@@ -67,7 +67,6 @@ namespace Clc.PatronRegistration.Tests
             _mockSettings.Setup(s => s.DriversLicenseButtonEnabledIpAddresses).Returns([]);
             _mockDbHelper.Setup(db => db.CheckPatronIsDuplicate(
                 It.IsAny<int>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<DateTime>())).Returns(false);
-            DbHelper.Global = _mockDbHelper.Object;
             _mockMelissaClient.Setup(client => client.PersonatorRequest(It.IsAny<Clc.Melissa.Models.PersonatorRequestRecord>()))
                 .Returns(new RestResponse<Clc.Melissa.Models.PersonatorResponse>
                 {
@@ -112,15 +111,24 @@ namespace Clc.PatronRegistration.Tests
                 PostalCode = "43215"
             };
 
-            var result = registration.CreateRegistration(
-                "203.0.113.1", new ModelStateDictionary(), _mockSettings.Object, _mockDbHelper.Object,
-                _mockPapiClient.Object, _mockMelissaClient.Object, _mockEmailSender.Object);
+            var previousGlobal = DbHelper.Global;
+            try
+            {
+                DbHelper.Global = _mockDbHelper.Object;
+                var result = registration.CreateRegistration(
+                    "203.0.113.1", new ModelStateDictionary(), _mockSettings.Object, _mockDbHelper.Object,
+                    _mockPapiClient.Object, _mockMelissaClient.Object, _mockEmailSender.Object);
 
-            Assert.AreEqual(RegistrationStatus.Success, result.Status);
-            Assert.IsNotNull(captured);
-            Assert.AreEqual(expectedPatronCode, captured.PatronCode);
-            Assert.AreEqual(plusNameMatch ? AddressVerificationStatus.ValidPlusNameMatch : AddressVerificationStatus.Valid,
-                registration.AddressVerificationStatus);
+                Assert.AreEqual(RegistrationStatus.Success, result.Status);
+                Assert.IsNotNull(captured);
+                Assert.AreEqual(expectedPatronCode, captured.PatronCode);
+                Assert.AreEqual(plusNameMatch ? AddressVerificationStatus.ValidPlusNameMatch : AddressVerificationStatus.Valid,
+                    registration.AddressVerificationStatus);
+            }
+            finally
+            {
+                DbHelper.Global = previousGlobal;
+            }
         }
 
         [TestMethod]
