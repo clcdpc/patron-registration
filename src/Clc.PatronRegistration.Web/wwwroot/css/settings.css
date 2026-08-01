@@ -309,6 +309,17 @@ body.settings-administration-page #regFormContainer {
     flex: 1 1 24rem
 }
 
+.edit-actions {
+    align-items: center;
+    display: inline-flex;
+    gap: .65rem
+}
+
+.inheritance-message {
+    flex: 1 1 24rem;
+    margin: .35rem 0
+}
+
 .technical-details {
     margin-top: .5rem
 }

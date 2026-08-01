@@ -6,30 +6,89 @@
     let approved = false;
     let submitter = null;
 
-    function setRowEnabled(row, enabled) {
-        row.dataset.dirty = enabled ? "true" : "false";
-        row.querySelectorAll(".change-index, .change-key, .operation, .setting-value")
-            .forEach((control) => {
-                control.disabled = !enabled;
-            });
-        if (enabled) {
-            const operation = row.querySelector(".operation");
-            const value = row.querySelector(".setting-value");
-            if (operation?.value === "RemoveOverride" && value) {
-                value.disabled = true;
-            }
-            (operation?.value === "RemoveOverride" ? operation : value)?.focus();
+    document.querySelectorAll(".setting-row").forEach((row) => {
+        const change = row.querySelector(".edit-setting");
+        const inherit = row.querySelector(".inherit-setting");
+        const apply = row.querySelector(".apply-setting");
+        const cancel = row.querySelector(".cancel-setting");
+        const actions = row.querySelector(".edit-actions");
+        const editor = row.querySelector(".value-editor");
+        const message = row.querySelector(".inheritance-message");
+        const operation = row.querySelector(".operation");
+        const value = row.querySelector(".setting-value");
+        let session = null;
+
+        function setBindingEnabled(enabled, selectedOperation) {
+            row.querySelectorAll(".change-index, .change-key, .operation")
+                .forEach((control) => { control.disabled = !enabled; });
+            value.disabled = !enabled || selectedOperation === "RemoveOverride";
+        }
+
+        function showNormalState() {
+            change.hidden = false;
+            if (inherit) inherit.hidden = operation.value === "RemoveOverride" && row.dataset.dirty === "true";
+            actions.hidden = true;
+            editor.hidden = true;
+            message.hidden = true;
+        }
+
+        function beginEdit(candidateOperation) {
+            session = {
+                operation: operation.value,
+                value: value.value,
+                dirty: row.dataset.dirty === "true",
+                indexDisabled: row.querySelector(".change-index").disabled,
+                keyDisabled: row.querySelector(".change-key").disabled,
+                operationDisabled: operation.disabled,
+                valueDisabled: value.disabled
+            };
+            row.dataset.candidateOperation = candidateOperation;
+            setBindingEnabled(false, candidateOperation);
+            value.disabled = candidateOperation === "RemoveOverride";
+            change.hidden = true;
+            if (inherit) inherit.hidden = true;
+            actions.hidden = false;
+            editor.hidden = candidateOperation === "RemoveOverride";
+            message.hidden = candidateOperation !== "RemoveOverride";
             row.setAttribute("open", "");
             row.closest(".setting-category, .dynamic-settings")?.setAttribute("open", "");
+            (candidateOperation === "Upsert" ? value : apply).focus();
         }
-    }
 
-    document.querySelectorAll(".setting-row").forEach((row) => {
-        row.querySelector(".edit-setting")?.addEventListener("click", () => setRowEnabled(row, true));
-        row.querySelector(".operation")?.addEventListener("change", (event) => {
-            const value = row.querySelector(".setting-value");
-            value.disabled = event.target.value === "RemoveOverride";
-        });
+        function applyEdit() {
+            const candidateOperation = row.dataset.candidateOperation;
+            if (candidateOperation === "Upsert" && !value.reportValidity()) return;
+            operation.value = candidateOperation;
+            row.dataset.appliedOperation = candidateOperation;
+            row.dataset.dirty = "true";
+            setBindingEnabled(true, candidateOperation);
+            delete row.dataset.candidateOperation;
+            session = null;
+            showNormalState();
+        }
+
+        function cancelEdit() {
+            operation.value = session.operation;
+            value.value = session.value;
+            if (value.nextElementSibling?.classList.contains("html-preview")) {
+                value.dispatchEvent(new Event("input"));
+            }
+            row.dataset.dirty = session.dirty.toString();
+            row.querySelector(".change-index").disabled = session.indexDisabled;
+            row.querySelector(".change-key").disabled = session.keyDisabled;
+            operation.disabled = session.operationDisabled;
+            value.disabled = session.valueDisabled;
+            delete row.dataset.candidateOperation;
+            session = null;
+            showNormalState();
+            change.focus();
+        }
+
+        change?.addEventListener("click", () => beginEdit("Upsert"));
+        inherit?.addEventListener("click", () => beginEdit("RemoveOverride"));
+        apply?.addEventListener("click", applyEdit);
+        cancel?.addEventListener("click", cancelEdit);
+        showNormalState();
     });
 
     document.querySelectorAll(".reveal-secret").forEach((button) => {
