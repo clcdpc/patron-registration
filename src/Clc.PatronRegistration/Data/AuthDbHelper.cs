@@ -40,7 +40,7 @@ namespace Clc.PatronRegistration.Data
             using (var sql = new SqlConnection(ConnectionString))
             {
                 var emailDomain = username.Split('@')[1];
-                var sqlCommand = "select top 1 ed.LibraryId from clc_web_membership.dbo.EmailDomains ed where (ed.ApplicationName = @application or ed.ApplicationName is null) and ed.EmailDomain = @emailDomain order by ApplicationName";
+                var sqlCommand = "select top 1 ed.LibraryId from clc_web_membership.dbo.EmailDomains ed where (ed.ApplicationName = @application or ed.ApplicationName is null) and ed.EmailDomain = @emailDomain order by ApplicationName desc";
 
                 return sql.QueryFirst<int>(sqlCommand, new { application = config.ApplicationName, emailDomain });
             }
