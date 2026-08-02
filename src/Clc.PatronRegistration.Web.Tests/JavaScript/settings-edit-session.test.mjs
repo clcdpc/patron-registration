@@ -168,8 +168,9 @@ test("save actions share the hidden pending region while Remove draft change sta
     const indexMarkup = readFileSync(new URL("../../Clc.PatronRegistration.Web/Views/Settings/Index.cshtml", import.meta.url), "utf8");
     const rowMarkup = readFileSync(new URL("../../Clc.PatronRegistration.Web/Views/Settings/_SettingRow.cshtml", import.meta.url), "utf8");
     const actions = indexMarkup.match(/<div class="settings-actions" hidden>[\s\S]*?<\/div>\s*<\/div>/)?.[0] ?? "";
-    assert.match(actions, /Review and save now/);
-    assert.match(actions, /Save changes to draft/);
+    assert.match(actions, /Save \{count\} \{noun\} live/);
+    assert.match(actions, /Add \{count\} \{noun\} to shared draft/);
+    assert.match(actions, /Discard pending changes/);
     assert.match(actions, /role="status" aria-live="polite"/);
     assert.doesNotMatch(actions, /Remove draft change/);
     assert.match(rowMarkup, /Remove draft change/);

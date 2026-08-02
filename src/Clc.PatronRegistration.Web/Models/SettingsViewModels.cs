@@ -158,6 +158,11 @@ public sealed class DraftChangesRequest
     public List<SettingMutationInput> Changes { get; set; } = [];
 }
 
+public sealed record PreviewLinkCreatedViewModel(
+    string PreviewUrl, long DraftId, int OrganizationId, string OrganizationDisplayName,
+    string FormCode, string FormDisplayName, int OperationalBranchId,
+    string OperationalBranchDisplayName, bool AllowLiveSubmission);
+
 public sealed class PreviewLinkRequest
 {
     private string formCode = string.Empty;

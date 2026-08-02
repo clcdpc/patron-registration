@@ -620,3 +620,17 @@ body.settings-administration-page #regFormContainer {
     .audit-event-content { display: block }
     .audit-technical-details { display: none }
 }
+
+.draft-panel { display:grid; gap:1rem; border:2px solid #315b7d; border-radius:.4rem; padding:1rem; margin-block:1rem }
+.draft-status, .draft-lifecycle, .preview-tools { min-width:0 }
+.draft-lifecycle, .preview-tools { border-top:1px solid #aaa; padding-top:.8rem }
+.preview-links { display:grid; gap:.7rem; margin-top:1rem }
+.preview-link-item { border:1px solid #bbb; border-radius:.3rem; padding:.7rem }
+.preview-link-item h4, .preview-link-item p { margin:.25rem 0 }
+.status-badge { border:1px solid currentColor; border-radius:1rem; font-weight:700; padding:.15rem .5rem }
+.preview-live-warning, .preview-mode-banner { padding:.8rem; border:2px solid currentColor }
+.preview-safe { color:#175c2b }.preview-live { color:#8a1c1c }
+.settings-success { background:#e7f5e9; border:2px solid #247239; padding:.75rem; margin-block:.75rem }
+dialog { max-width:min(46rem,calc(100% - 2rem)); max-height:calc(100% - 2rem); overflow:auto }
+dialog::backdrop { background:rgb(0 0 0 / .55) }
+@media(max-width:40rem){ .draft-panel .button-row { align-items:stretch; flex-direction:column } }

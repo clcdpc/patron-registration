@@ -253,6 +253,7 @@ public sealed class SettingsController(
         try
         {
             var draftId = repository.CreateDraft(organizationId, formCode, CreateAudit(organizationId, formCode));
+            TempData["SettingsStatus"] = $"Shared draft #{draftId} was created.";
             return RedirectToAction(nameof(Index), new { organizationId, formCode, draftId });
         }
         catch (DBConcurrencyException exception)
@@ -285,6 +286,7 @@ public sealed class SettingsController(
         try
         {
             repository.SaveDraftChanges(draftId, mutations, CatalogByKey, CreateAudit(request.OrganizationId, request.FormCode));
+            TempData["SettingsStatus"] = $"{mutations.Count} {(mutations.Count == 1 ? "change was" : "changes were")} added to shared draft #{draftId}.";
         }
         catch (DBConcurrencyException exception)
         {
@@ -317,6 +319,7 @@ public sealed class SettingsController(
         try
         {
             repository.RemoveDraftChange(draftId, settingKey, CatalogByKey, authorization.Describe(User).IsGlobal, CreateAudit(organizationId, formCode));
+            TempData["SettingsStatus"] = $"A change was removed from shared draft #{draftId}.";
         }
         catch (UnauthorizedAccessException)
         {
@@ -349,6 +352,7 @@ public sealed class SettingsController(
         {
             repository.CommitDraft(draftId, CatalogByKey, authorization.Describe(User).IsGlobal, CreateAudit(organizationId, formCode));
             cacheInvalidator.LiveSettingsChanged();
+            TempData["SettingsStatus"] = $"Shared draft #{draftId} was published.";
         }
         catch (UnauthorizedAccessException)
         {
@@ -389,6 +393,7 @@ public sealed class SettingsController(
         try
         {
             repository.DiscardDraft(draftId, CatalogByKey, authorization.Describe(User).IsGlobal, CreateAudit(organizationId, formCode));
+            TempData["SettingsStatus"] = $"Shared draft #{draftId} was discarded.";
         }
         catch (UnauthorizedAccessException)
         {
@@ -427,7 +432,7 @@ public sealed class SettingsController(
         }
         try
         {
-            repository.CreatePreviewLink(draftId, token.Hash, request.AllowLiveSubmission, operationalBranchId.Value, CatalogByKey,
+            var previewLinkId = repository.CreatePreviewLink(draftId, token.Hash, request.AllowLiveSubmission, operationalBranchId.Value, CatalogByKey,
                 authorization.Describe(User).IsGlobal, CreateAudit(request.OrganizationId, request.FormCode));
         }
         catch (UnauthorizedAccessException)
@@ -440,8 +445,10 @@ public sealed class SettingsController(
             return Conflict(exception.Message);
         }
         var previewUrl = Url.Action("Index", "Preview", new { token = token.Plaintext }, Request.Scheme)!;
+        var formName = request.FormCode.Length == 0 ? "Default form" : request.FormCode;
+        var branchName = GetOrganizationName(operationalBranchId.Value);
         SetPreviewTokenResponseHeaders();
-        return View("PreviewLinkCreated", model: previewUrl);
+        return View("PreviewLinkCreated", new PreviewLinkCreatedViewModel(previewUrl, draftId, request.OrganizationId, GetOrganizationName(request.OrganizationId), request.FormCode, formName, operationalBranchId.Value, branchName, request.AllowLiveSubmission));
     }
 
     [HttpPost("preview-links/{previewLinkId:long}/revoke")]
@@ -461,6 +468,7 @@ public sealed class SettingsController(
         try
         {
             repository.RevokePreviewLink(previewLinkId, CatalogByKey, authorization.Describe(User).IsGlobal, CreateAudit(link.OrganizationId, link.FormCode));
+            TempData["SettingsStatus"] = $"Preview link #{previewLinkId} was revoked.";
         }
         catch (UnauthorizedAccessException)
         {
