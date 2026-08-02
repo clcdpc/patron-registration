@@ -7,6 +7,18 @@ using Microsoft.Data.SqlClient;
 
 namespace Clc.PatronRegistration.Tests;
 
+internal enum DatabaseCleanupMode { None, BestEffort, Strict }
+
+internal static class DatabaseCleanupModeSelector
+{
+    internal static DatabaseCleanupMode Select(string? configured, string? unavailableReason) =>
+        string.IsNullOrWhiteSpace(configured)
+            ? DatabaseCleanupMode.None
+            : unavailableReason is not null
+                ? DatabaseCleanupMode.BestEffort
+                : DatabaseCleanupMode.Strict;
+}
+
 [TestClass]
 [DoNotParallelize]
 public sealed class SettingsAdministrationRepositoryIntegrationTests
@@ -78,7 +90,19 @@ public sealed class SettingsAdministrationRepositoryIntegrationTests
     public static void DeleteDatabase()
     {
         var configured = Environment.GetEnvironmentVariable(ConnectionVariable);
-        if (!string.IsNullOrWhiteSpace(configured)) DropDatabaseCore(configured);
+        switch (DatabaseCleanupModeSelector.Select(configured, unavailableReason))
+        {
+            case DatabaseCleanupMode.None:
+                return;
+            case DatabaseCleanupMode.BestEffort:
+                TryDropDatabase(configured!);
+                return;
+            case DatabaseCleanupMode.Strict:
+                DropDatabaseCore(configured!);
+                return;
+            default:
+                throw new InvalidOperationException("Unknown SQL integration database cleanup mode.");
+        }
     }
 
     [TestInitialize]
@@ -339,4 +363,25 @@ delete dbo.RegistrationSettingScopeVersions;");
     }
     private sealed record DraftState(long BaselineVersion, DateTime ModifiedAtUtc, string ModifiedBy);
     private sealed record AuditState(string EventType, string? MetadataJson, string? FailureReason, string? PreviousValue, string? NewValue, bool IsSensitive);
+}
+
+[TestClass]
+public sealed class DatabaseCleanupModeSelectorTests
+{
+    [DataTestMethod]
+    [DataRow(null)]
+    [DataRow("")]
+    [DataRow("   ")]
+    public void Select_NoConfiguredConnectionSkipsCleanup(string? configured) =>
+        Assert.AreEqual(DatabaseCleanupMode.None, DatabaseCleanupModeSelector.Select(configured, "unavailable"));
+
+    [TestMethod]
+    public void Select_UnavailableInfrastructureUsesBestEffortCleanup() =>
+        Assert.AreEqual(DatabaseCleanupMode.BestEffort,
+            DatabaseCleanupModeSelector.Select("Server=test", "SQL Server unavailable"));
+
+    [TestMethod]
+    public void Select_SuccessfulFixtureUsesStrictCleanup() =>
+        Assert.AreEqual(DatabaseCleanupMode.Strict,
+            DatabaseCleanupModeSelector.Select("Server=test", null));
 }
