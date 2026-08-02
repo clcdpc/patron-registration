@@ -241,62 +241,45 @@ public sealed class SettingsController(
         return RedirectToAction(nameof(Index), new { organizationId = request.OrganizationId, formCode = request.FormCode });
     }
 
-    [HttpPost("drafts")]
+    [HttpPost("drafts/changes")]
     [ValidateAntiForgeryToken]
-    public IActionResult CreateDraft(int organizationId, string formCode = "")
+    public IActionResult SaveToSharedDraft(SaveToSharedDraftRequest request)
     {
-        formCode = FormCodeNormalizer.Normalize(formCode);
-        if (!ValidateScope(organizationId, formCode))
+        if (!ValidateScope(request.OrganizationId, request.FormCode))
         {
+            AuditRejected(request.OrganizationId, request.FormCode, "Save-to-draft scope tampering rejected.");
             return Forbid();
-        }
-        try
-        {
-            var draftId = repository.CreateDraft(organizationId, formCode, CreateAudit(organizationId, formCode));
-            TempData["SettingsStatus"] = $"Shared draft #{draftId} was created.";
-            return RedirectToAction(nameof(Index), new { organizationId, formCode, draftId });
-        }
-        catch (DBConcurrencyException exception)
-        {
-            return Conflict(exception.Message);
-        }
-        catch (SqlException exception) when (exception.Number == 1205)
-        {
-            return Conflict("Draft creation conflicted with another settings change. Reload and try again.");
-        }
-    }
-
-    [HttpPost("drafts/{draftId:long}/changes")]
-    [ValidateAntiForgeryToken]
-    public IActionResult SaveDraft(long draftId, DraftChangesRequest request)
-    {
-        var draft = AuthorizedActiveDraft(draftId, request.OrganizationId, request.FormCode);
-        if (draft is null)
-        {
-            return DraftUnavailableResult(draftId, request.OrganizationId, request.FormCode);
         }
         var mutations = ValidateMutations(request.Changes, request.OrganizationId);
         if (!ModelState.IsValid)
         {
-            repository.WriteAudit("ValidationFailed", false, CreateAudit(request.OrganizationId, request.FormCode), "Draft changes were invalid.", draftId);
+            repository.WriteAudit("ValidationFailed", false, CreateAudit(request.OrganizationId, request.FormCode), "Draft changes were invalid.", request.ExpectedDraftId);
             TempData["SettingsError"] = string.Join(" ", ModelState.Values.SelectMany(value => value.Errors).Select(error => error.ErrorMessage));
             TempData["SettingsErrorGroup"] = request.Changes.FirstOrDefault(change => ModelState.ContainsKey(change.Key))?.Key.Split('.')[0];
             return RedirectToAction(nameof(Index), new { organizationId = request.OrganizationId, formCode = request.FormCode });
         }
         try
         {
-            repository.SaveDraftChanges(draftId, mutations, CatalogByKey, CreateAudit(request.OrganizationId, request.FormCode));
-            TempData["SettingsStatus"] = $"{mutations.Count} {(mutations.Count == 1 ? "change was" : "changes were")} added to shared draft #{draftId}.";
+            var result = repository.SaveToSharedDraft(request.OrganizationId, request.FormCode, request.ExpectedDraftId,
+                mutations, CatalogByKey, CreateAudit(request.OrganizationId, request.FormCode));
+            TempData["SettingsStatus"] = result.DraftCreated
+                ? $"Shared draft #{result.DraftId} was created with {mutations.Count} {(mutations.Count == 1 ? "change" : "changes")}."
+                : $"{mutations.Count} {(mutations.Count == 1 ? "change was" : "changes were")} added to shared draft #{result.DraftId}.";
         }
         catch (DBConcurrencyException)
         {
             return DraftConflictResult(request.OrganizationId, request.FormCode);
         }
-        catch (InvalidOperationException exception)
+        catch (SqlException exception) when (exception.Number is 1205 or 2601 or 2627)
+        {
+            return DraftConflictResult(request.OrganizationId, request.FormCode);
+        }
+        catch (InvalidOperationException)
         {
             repository.WriteAudit("ValidationFailed", false,
-                CreateAudit(request.OrganizationId, request.FormCode), "Draft changes were invalid.", draftId);
-            return BadRequest(exception.Message);
+                CreateAudit(request.OrganizationId, request.FormCode), "Draft changes were invalid.", request.ExpectedDraftId);
+            TempData["SettingsError"] = "The draft changes could not be saved. Reloaded values are shown below.";
+            return RedirectToAction(nameof(Index), new { organizationId = request.OrganizationId, formCode = request.FormCode });
         }
         return RedirectToAction(nameof(Index), new { organizationId = request.OrganizationId, formCode = request.FormCode });
     }

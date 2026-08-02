@@ -153,14 +153,16 @@ public static class SettingsAuditVisibility
         includeSensitive ? rows : rows.Where(row => !row.IsSensitive);
 }
 
+public sealed record SaveToDraftResult(long DraftId, bool DraftCreated);
+
 public interface ISettingsAdministrationRepository
 {
     long GetVersion(int organizationId, string formCode);
     long GetCacheGeneration();
     SettingDraft? GetDraft(long draftId);
     SettingDraft? GetActiveDraft(int organizationId, string formCode);
-    long CreateDraft(int organizationId, string formCode, AuditContext audit);
-    void SaveDraftChanges(long draftId, IReadOnlyList<SettingMutation> changes, IReadOnlyDictionary<string, SettingDefinition> catalog, AuditContext audit);
+    SaveToDraftResult SaveToSharedDraft(int organizationId, string formCode, long? expectedDraftId,
+        IReadOnlyList<SettingMutation> changes, IReadOnlyDictionary<string, SettingDefinition> catalog, AuditContext audit);
     void RemoveDraftChange(long draftId, string settingKey, IReadOnlyDictionary<string, SettingDefinition> catalog, bool canManageSensitive, AuditContext audit);
     void CommitDraft(long draftId, IReadOnlyDictionary<string, SettingDefinition> catalog, bool canManageSensitive, AuditContext audit);
     void DiscardDraft(long draftId, IReadOnlyDictionary<string, SettingDefinition> catalog, bool canManageSensitive, AuditContext audit);
@@ -240,39 +242,34 @@ public sealed class SettingsAdministrationRepository(IDbHelperSettings settings)
         return new SettingDraft(row.DraftId, row.OrganizationId, row.FormCode, row.BaselineVersion, Enum.Parse<DraftStatus>(row.Status), changes);
     }
 
-    public long CreateDraft(int organizationId, string formCode, AuditContext audit)
+    public SaveToDraftResult SaveToSharedDraft(int organizationId, string formCode, long? expectedDraftId,
+        IReadOnlyList<SettingMutation> changes, IReadOnlyDictionary<string, SettingDefinition> catalog, AuditContext audit)
     {
+        if (changes.Count == 0) throw new InvalidOperationException("Submit at least one setting change.");
+        DraftOperationValidation.RequireSupported(changes);
         formCode = FormCodeNormalizer.Normalize(formCode);
         using var connection = Open();
         using var transaction = connection.BeginTransaction(IsolationLevel.Serializable);
         var existing = connection.QuerySingleOrDefault<long?>(
             "select DraftId from dbo.RegistrationSettingDrafts with(updlock,holdlock) where OrganizationId=@organizationId and FormCode=@formCode and Status='Active'",
             new { organizationId, formCode }, transaction);
-        if (existing.HasValue)
+        if (expectedDraftId.HasValue && existing != expectedDraftId)
         {
-            transaction.Commit();
-            return existing.Value;
+            throw new DBConcurrencyException("The expected shared draft is no longer active.");
         }
-
-        // Repository transactions acquire only the locks they need, in this global order:
-        // draft, preview link, metadata, scope version, then live settings.
-        EnsureVersionRow(connection, transaction, organizationId, formCode);
-        var version = ReadVersion(connection, transaction, organizationId, formCode);
-        var draftId = connection.QuerySingle<long>(@"
+        var created = !existing.HasValue;
+        var draftId = existing.GetValueOrDefault();
+        if (created)
+        {
+            // Lock order: draft range, scope version, then draft changes.
+            EnsureVersionRow(connection, transaction, organizationId, formCode);
+            var version = ReadVersion(connection, transaction, organizationId, formCode);
+            draftId = connection.QuerySingle<long>(@"
 insert dbo.RegistrationSettingDrafts(OrganizationId,FormCode,BaselineVersion,Status,CreatedBy,ModifiedBy)
 output inserted.DraftId values(@organizationId,@formCode,@version,'Active',@actor,@actor)",
-            new { organizationId, formCode, version, actor = audit.ActorName ?? "unknown" }, transaction);
-        InsertAudit(connection, transaction, "DraftCreated", true, audit, draftId: draftId);
-        transaction.Commit();
-        return draftId;
-    }
-
-    public void SaveDraftChanges(long draftId, IReadOnlyList<SettingMutation> changes, IReadOnlyDictionary<string, SettingDefinition> catalog, AuditContext audit)
-    {
-        DraftOperationValidation.RequireSupported(changes);
-        using var connection = Open();
-        using var transaction = connection.BeginTransaction(IsolationLevel.Serializable);
-        EnsureActiveDraft(connection, transaction, draftId);
+                new { organizationId, formCode, version, actor = audit.ActorName ?? "unknown" }, transaction);
+            InsertAudit(connection, transaction, "DraftCreated", true, audit, draftId: draftId);
+        }
         var containedSensitiveChanges = DraftContainsSensitiveChanges(connection, transaction, draftId, catalog);
         foreach (var change in changes)
         {
@@ -311,6 +308,7 @@ if @@ROWCOUNT=0
         }
         InsertAudit(connection, transaction, "DraftEdited", true, audit, draftId: draftId, metadataJson: $"{{\"changeCount\":{changes.Count}}}");
         transaction.Commit();
+        return new SaveToDraftResult(draftId, created);
     }
 
     public void RemoveDraftChange(long draftId, string settingKey, IReadOnlyDictionary<string, SettingDefinition> catalog, bool canManageSensitive, AuditContext audit)

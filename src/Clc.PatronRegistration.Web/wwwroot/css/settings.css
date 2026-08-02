@@ -539,27 +539,6 @@ body.settings-administration-page #regFormContainer {
         width: 100%
     }
 
-.draft-panel {
-    align-items: center;
-    border-block: 1px solid #ddd;
-    display: flex;
-    gap: .65rem;
-    margin: .5rem 0;
-    padding: .45rem 0
-}
-
-    .draft-panel > div {
-        align-items: center;
-        display: flex;
-        flex-wrap: wrap;
-        gap: .65rem;
-        width: 100%
-    }
-
-    .draft-panel p {
-        margin: .2rem 0
-    }
-
 .setting-row[data-presentation-state="notset"] .summary-value, .setting-row[data-presentation-state="notset"] .setting-status {
     color: #666
 }
@@ -588,11 +567,6 @@ body.settings-administration-page #regFormContainer {
         .settings-context > strong {
             margin-bottom: .1rem
         }
-
-    .draft-panel, .draft-panel > div {
-        align-items: stretch;
-        flex-direction: column
-    }
 
         .draft-panel button, .settings-context button {
             width: 100%

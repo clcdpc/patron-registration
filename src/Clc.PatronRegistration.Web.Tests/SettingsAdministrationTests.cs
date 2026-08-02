@@ -155,7 +155,7 @@ public class SettingsAdministrationTests
     public void SettingsRequests_CanonicalizeNullDefaultFormCodes()
     {
         Assert.AreEqual(string.Empty, new SaveSettingsRequest { FormCode = null! }.FormCode);
-        Assert.AreEqual(string.Empty, new DraftChangesRequest { FormCode = null! }.FormCode);
+        Assert.AreEqual(string.Empty, new SaveToSharedDraftRequest { FormCode = null! }.FormCode);
         Assert.AreEqual(string.Empty, new PreviewLinkRequest { FormCode = null! }.FormCode);
         Assert.AreEqual(string.Empty, new FormCodeRequest { FormCode = null! }.FormCode);
     }
@@ -390,6 +390,12 @@ public class SettingsAdministrationTests
         StringAssert.Contains(index, "Show shared draft changes only");
         StringAssert.Contains(index, "if (draftChangeCount > 0)");
         StringAssert.Contains(index, "Review @draftChangeCount shared draft @(draftChangeCount == 1 ? \"change\" : \"changes\")");
+        StringAssert.Contains(index, "@if (Model.ActiveDraft is not null)");
+        StringAssert.Contains(index, "data-label-template=\"Save {count} {noun} to shared draft\"");
+        StringAssert.Contains(index, "data-label-template=\"Add {count} {noun} to shared draft\"");
+        StringAssert.Contains(index, "name=\"ExpectedDraftId\"");
+        Assert.IsFalse(index.Contains("Create shared draft", StringComparison.Ordinal));
+        Assert.IsFalse(index.Contains("No shared draft", StringComparison.Ordinal));
         StringAssert.Contains(css, ".settings-search input[type=\"search\"]");
         Assert.IsFalse(css.Contains(".settings-search input {", StringComparison.Ordinal));
         StringAssert.Contains(row, "$\"Draft: {presentation.Value}\"");
@@ -618,13 +624,13 @@ public class SettingsAdministrationTests
     }
 
     [TestMethod]
-    public void CreateDraft_LocksDraftRangeBeforeScopeVersion()
+    public void SaveToSharedDraft_LocksDraftRangeBeforeScopeVersion()
     {
         var root = FindRepositoryRoot();
         var source = File.ReadAllText(Path.Combine(root,
             "src/Clc.PatronRegistration.Web/Settings/SettingsAdministrationRepository.cs"));
-        var start = source.IndexOf("public long CreateDraft", StringComparison.Ordinal);
-        var end = source.IndexOf("public void SaveDraftChanges", start, StringComparison.Ordinal);
+        var start = source.IndexOf("public SaveToDraftResult SaveToSharedDraft", StringComparison.Ordinal);
+        var end = source.IndexOf("public void RemoveDraftChange", start, StringComparison.Ordinal);
         var method = source[start..end];
         var draftLock = method.IndexOf("RegistrationSettingDrafts with(updlock,holdlock)", StringComparison.Ordinal);
         var versionLock = method.IndexOf("EnsureVersionRow", StringComparison.Ordinal);
