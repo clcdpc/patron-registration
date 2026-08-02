@@ -195,17 +195,16 @@
 </dialog>
 
 <dialog id="unsaved-changes-dialog" aria-labelledby="unsaved-title">
-    <h2 id="unsaved-title">Pending changes</h2>
+    <h2 id="unsaved-title">Unsaved changes</h2>
     <p data-unsaved-message></p>
-    <p><small>Saving reloads this page. Repeat the action after the save completes.</small></p>
+    <p>
+        Continuing will revert changes made in this browser.
+        Changes already saved to the shared draft or live settings
+        will not be affected.
+    </p>
     <div class="button-row">
-        @if (Model.ActiveDraft is not null)
-        {
-            <button type="button" data-guard-save-draft>Save changes to shared draft</button>
-        }
-        <button type="button" data-guard-save-live>Save changes live</button>
-        <button type="button" data-guard-discard>Discard pending changes and continue</button>
-        <button type="button" data-dialog-cancel>Cancel</button>
+        <button type="button" class="danger-button" data-guard-discard>Discard changes and continue</button>
+        <button type="button" data-dialog-cancel>Keep editing</button>
     </div>
 </dialog>
 @if (Model.ActiveDraft is not null)

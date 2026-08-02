@@ -191,6 +191,37 @@ test("save actions share the hidden pending region while Remove draft change sta
     assert.match(rowMarkup, /Remove draft change/);
 });
 
+test("unsaved-work dialog offers only discard and keep editing while saves remain in settings actions", () => {
+    const markup = readFileSync(new URL("../../Clc.PatronRegistration.Web/Views/Settings/Index.cshtml", import.meta.url), "utf8");
+    const dialog = markup.match(/<dialog id="unsaved-changes-dialog"[\s\S]*?<\/dialog>/)?.[0] ?? "";
+    const actions = markup.match(/<div class="settings-actions" hidden>[\s\S]*?<\/form>/)?.[0] ?? "";
+
+    assert.match(dialog, /data-guard-discard/);
+    assert.match(dialog, /Discard changes and continue/);
+    assert.match(dialog, /data-dialog-cancel/);
+    assert.match(dialog, /Keep editing/);
+    const buttons = [...dialog.matchAll(/<button[\s\S]*?<\/button>/g)].map((match) => match[0]);
+    assert.equal(buttons.length, 2);
+    assert.equal(buttons.some((button) => /save/i.test(button)), false);
+    assert.doesNotMatch(markup, /data-guard-save-(?:live|draft)/);
+    assert.match(actions, /Save \{count\} \{noun\} live/);
+    assert.match(actions, /Add \{count\} \{noun\} to shared draft/);
+});
+
+test("unsaved-work dialog has no save handlers or save submission workflow", () => {
+    const script = readFileSync(new URL("../../Clc.PatronRegistration.Web/wwwroot/js/settings.js", import.meta.url), "utf8");
+    assert.doesNotMatch(script, /data-guard-save-(?:live|draft)/);
+});
+
+test("keeping edits closes the unsaved-work dialog without discarding browser changes", () => {
+    const script = readFileSync(new URL("../../Clc.PatronRegistration.Web/wwwroot/js/settings.js", import.meta.url), "utf8");
+    const cancellationStart = script.indexOf('document.querySelectorAll("[data-dialog-cancel]")');
+    const cancellationEnd = script.indexOf('document.querySelector("[data-guard-discard]")', cancellationStart);
+    const cancellationHandler = script.slice(cancellationStart, cancellationEnd);
+    assert.match(cancellationHandler, /cancelWorkflowDialog/);
+    assert.doesNotMatch(cancellationHandler, /discardPendingChanges|requestSubmit|location\./);
+});
+
 test("active edits block both save paths and cannot enter review", () => {
     for (const dirty of [false, true]) {
         const fixture = rowFixture({ dirty });
