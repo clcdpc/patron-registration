@@ -54,6 +54,7 @@
         let session = null;
         const summaryValue = row.querySelector(".summary-value");
         const settingStatus = row.querySelector(".setting-status");
+        const reveal = row.querySelector(".reveal-secret");
         const serverState = {
             operation: operation.value,
             value: value.value,
@@ -66,7 +67,11 @@
             summaryValue: summaryValue?.textContent,
             summaryTitle: summaryValue?.getAttribute?.("title"),
             status: settingStatus?.textContent,
-            inheritHidden: inherit?.hidden ?? true
+            inheritHidden: inherit?.hidden ?? true,
+            inputType: value.type,
+            revealText: reveal?.textContent,
+            revealExpanded: reveal?.getAttribute?.("aria-expanded"),
+            revealLabel: reveal?.getAttribute?.("aria-label")
         };
 
         function setBindingEnabled(enabled, selectedOperation) {
@@ -165,6 +170,12 @@
             }
             if (settingStatus) settingStatus.textContent = serverState.status;
             if (inherit) inherit.hidden = serverState.inheritHidden;
+            if (serverState.inputType) value.type = serverState.inputType;
+            if (reveal) {
+                reveal.textContent = serverState.revealText;
+                reveal.setAttribute("aria-expanded", serverState.revealExpanded ?? "false");
+                reveal.setAttribute("aria-label", serverState.revealLabel ?? `Reveal ${row.dataset.displayName}`);
+            }
             session = null;
             showNormalState();
             value.dispatchEvent?.(new Event("input"));
@@ -369,11 +380,7 @@
         dialog.close();
         form.requestSubmit(reviewSubmitter);
     });
-    document.querySelector("#cancel-save")?.addEventListener("click", () => {
-        dialog.close();
-        dialog._trigger?.focus();
-        approved = false;
-    });
+    document.querySelector("#cancel-save")?.addEventListener("click", () => cancelWorkflowDialog(dialog));
 
     navigationGuard = (action, trigger) => {
         if (hasCandidate()) {
@@ -404,14 +411,28 @@
             target.querySelector("button:not([disabled])")?.focus();
         }, button);
     }));
-    document.querySelectorAll("[data-dialog-cancel]").forEach((button) => button.addEventListener("click", () => {
-        const owner = button.closest("dialog");
-        if (!owner.open) return;
-        owner.close();
+    function cancelWorkflowDialog(owner) {
+        if (!owner) return;
+        if (owner.open) owner.close();
         restoreContextControl(owner._trigger);
         owner._trigger?.focus();
         pending = null;
         submitting = false;
+        if (owner === dialog) {
+            approved = false;
+            reviewSubmitter = null;
+        }
+        owner._resetApproval?.();
+    }
+    function bindDialogCancellation(owner) {
+        owner.addEventListener("cancel", (event) => {
+            event.preventDefault();
+            cancelWorkflowDialog(owner);
+        });
+    }
+    document.querySelectorAll("dialog").forEach(bindDialogCancellation);
+    document.querySelectorAll("[data-dialog-cancel]").forEach((button) => button.addEventListener("click", () => {
+        cancelWorkflowDialog(button.closest("dialog"));
     }));
     document.querySelector("[data-guard-discard]")?.addEventListener("click", () => {
         unsavedDialog.close();
@@ -454,7 +475,12 @@
             return false;
         }
     }
-    globalThis.SettingsWorkflow = { continuePipeline, lifecycleSubmit, needsLiveConfirmation, disableDirtyMutations, discardPendingChanges, restoreContextControl, applyFilters, copyPreviewUrl, unsavedMessage };
+    globalThis.SettingsWorkflow = {
+        continuePipeline, lifecycleSubmit, needsLiveConfirmation, disableDirtyMutations, discardPendingChanges,
+        restoreContextControl, applyFilters, copyPreviewUrl, unsavedMessage, cancelWorkflowDialog, bindDialogCancellation,
+        workflowState: () => ({ pending, submitting, approved }),
+        setWorkflowState: (state) => { pending = state.pending; submitting = state.submitting; approved = state.approved; }
+    };
 
     const copyButton = document.querySelector("[data-copy-preview-url]");
     copyButton?.addEventListener("click", () => copyPreviewUrl(
