@@ -689,13 +689,20 @@ body.settings-administration-page #regFormContainer {
 .preview-create-live:hover { background: #ffe9b8 }
 
 .preview-links { border-top: 1px solid #aaa; margin-top: var(--draft-section-gap); padding-top: var(--draft-section-gap) }
-.preview-link-list { display: grid; gap: .6rem }
-.preview-link-item { border: 1px solid #bbb; border-radius: .3rem; padding: .6rem .7rem }
-.preview-link-item h4 { margin: 0 0 .35rem }
-.preview-link-item p { margin: 0 }
-.preview-link-branch + .preview-link-status { margin-top: .3rem }
+.preview-link-list { border: 1px solid #bbb; border-radius: .3rem; display: grid; gap: 0; overflow: hidden }
+.preview-link-item {
+    align-items: center;
+    border: 0;
+    border-radius: 0;
+    display: grid;
+    gap: .4rem .75rem;
+    grid-template-columns: minmax(8rem,auto) minmax(13rem,1fr) auto auto;
+    padding: .45rem .6rem
+}
+.preview-link-item + .preview-link-item { border-top: 1px solid #bbb }
+.preview-link-name, .preview-link-item p { margin: 0 }
 .preview-link-status { align-items: center; display: inline-flex; flex-wrap: wrap; gap: .35rem }
-.preview-link-actions { margin-top: .5rem }
+.preview-link-actions { flex-wrap: nowrap; justify-content: flex-end; margin: 0 }
 .preview-link-actions form { margin: 0 }
 .status-badge { border:1px solid currentColor; border-radius:1rem; font-weight:700; padding:.15rem .5rem }
 .preview-mode-banner { padding:.8rem; border:2px solid currentColor }
@@ -703,12 +710,24 @@ body.settings-administration-page #regFormContainer {
 .settings-success { background:#e7f5e9; border:2px solid #247239; padding:.75rem; margin-block:.75rem }
 dialog { max-width:min(46rem,calc(100% - 2rem)); max-height:calc(100% - 2rem); overflow:auto }
 dialog::backdrop { background:rgb(0 0 0 / .55) }
+@media(max-width:55rem){
+    .preview-link-item { grid-template-columns: minmax(0,1fr) auto }
+    .preview-link-name { grid-column: 1; grid-row: 1 }
+    .preview-link-status { grid-column: 2; grid-row: 1 }
+    .preview-link-branch { grid-column: 1/-1; grid-row: 2 }
+    .preview-link-actions { grid-column: 1/-1; grid-row: 3 }
+    .preview-link-actions { justify-content: flex-start }
+}
 @media(max-width:40rem){
     .draft-panel { padding-inline: .75rem }
-    .draft-actions, .preview-link-actions { align-items: stretch }
-    .draft-actions button, .preview-link-actions form, .preview-link-actions button { width: 100% }
+    .draft-actions { align-items: stretch }
+    .draft-actions button { width: 100% }
     .preview-branch-field { align-items: stretch; flex-direction: column }
     .preview-branch-field select { max-width: 100%; min-width: 0; width: 100% }
     .preview-create-actions { grid-template-columns: 1fr }
     .draft-panel .button-row { align-items:stretch; flex-direction:column }
+}
+@media(max-width:32rem){
+    .preview-link-actions { align-items: stretch; flex-direction: column }
+    .preview-link-actions form, .preview-link-actions button { width: 100% }
 }

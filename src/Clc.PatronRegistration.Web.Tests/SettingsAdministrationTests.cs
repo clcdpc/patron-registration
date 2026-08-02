@@ -434,6 +434,11 @@ public class SettingsAdministrationTests
         Assert.IsFalse(index.Contains(">Create preview link</button>", StringComparison.Ordinal));
         StringAssert.Contains(index, "<section class=\"preview-links\" aria-labelledby=\"preview-links-title\">");
         StringAssert.Contains(index, ">Existing preview links</h4>");
+        StringAssert.Contains(index, "<article class=\"preview-link-item\" aria-labelledby=\"preview-link-@link.PreviewLinkId-title\">");
+        StringAssert.Contains(index, "<h5 id=\"preview-link-@link.PreviewLinkId-title\" class=\"preview-link-name\">");
+        Assert.IsFalse(index.Contains("<h4>Preview link #@link.PreviewLinkId</h4>", StringComparison.Ordinal));
+        StringAssert.Contains(index, "<p class=\"preview-link-branch\">");
+        StringAssert.Contains(index, "<p class=\"preview-link-status\">");
         StringAssert.Contains(index, "<div class=\"preview-link-actions\" role=\"group\" aria-label=\"Actions for preview link");
     }
 

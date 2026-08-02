@@ -135,8 +135,8 @@
           {
             var branch = Model.PreviewBranches.FirstOrDefault(b => b.OrganizationId == link.OperationalBranchId);
             var revoked = link.RevokedAtUtc.HasValue;
-            <article class="preview-link-item">
-              <h4>Preview link #@link.PreviewLinkId</h4>
+            <article class="preview-link-item" aria-labelledby="preview-link-@link.PreviewLinkId-title">
+              <h5 id="preview-link-@link.PreviewLinkId-title" class="preview-link-name">Preview link #@link.PreviewLinkId</h5>
               <p class="preview-link-branch">Operational branch: @(branch?.DisplayName ?? $"branch {link.OperationalBranchId}")</p>
               <p class="preview-link-status"><span class="status-badge">@(revoked ? "Revoked" : link.AllowLiveSubmission ? "Live" : "Safe")</span><span>— @(revoked ? "Revoked and unusable" : "Active")</span></p>
               @if (!revoked)
