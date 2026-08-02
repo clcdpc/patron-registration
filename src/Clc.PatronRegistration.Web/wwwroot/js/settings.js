@@ -41,6 +41,13 @@
         });
     }
 
+    function clearEditSessionStatus(settingsForm = form) {
+        if (settingsForm?.querySelector('.setting-row[data-candidate-operation]')) return;
+        if (!editStatus) return;
+        editStatus.hidden = true;
+        editStatus.textContent = "";
+    }
+
     function initializeRow(row, settingsForm) {
         const change = row.querySelector(".edit-setting");
         const inherit = row.querySelector(".inherit-setting");
@@ -88,12 +95,6 @@
             message.hidden = true;
         }
 
-        function clearSaveBlockMessage() {
-            if (!editStatus) return;
-            editStatus.hidden = true;
-            editStatus.textContent = "";
-        }
-
         function beginEdit(candidateOperation) {
             session = {
                 operation: operation.value,
@@ -128,7 +129,7 @@
             delete row.dataset.candidateOperation;
             session = null;
             showNormalState();
-            clearSaveBlockMessage();
+            clearEditSessionStatus();
             updatePendingActions(settingsForm);
             change.focus();
         }
@@ -148,7 +149,7 @@
             delete row.dataset.candidateOperation;
             session = null;
             showNormalState();
-            clearSaveBlockMessage();
+            clearEditSessionStatus();
             updatePendingActions(settingsForm);
             change.focus();
         }
@@ -249,7 +250,6 @@
 
     const categories = [...document.querySelectorAll(".setting-category, .dynamic-settings")];
     const draftOnly = document.querySelector("#draft-only-filter");
-    const filterEmpty = document.querySelector("#settings-filter-empty");
     const searchRegion = document.querySelector(".settings-search");
     let preFilterDisclosure = null;
     function applyFilters() {
@@ -277,16 +277,13 @@
         const emptyMessage = visible === 0 && filtering
             ? draftOnly?.checked ? "No shared draft changes match your search." : "No settings match your search."
             : "";
-        if (filterEmpty) {
-            filterEmpty.textContent = emptyMessage;
-            filterEmpty.hidden = !emptyMessage;
-        }
         if (searchStatus) {
             searchStatus.textContent = emptyMessage || (filtering
                 ? draftOnly?.checked
                     ? `${visible} shared draft ${visible === 1 ? "change" : "changes"} found`
                     : `${visible} ${visible === 1 ? "setting" : "settings"} found`
                 : "");
+            searchStatus.classList?.toggle("settings-filter-empty", Boolean(emptyMessage));
         }
         return visible;
     }
@@ -297,8 +294,9 @@
         draftOnly.checked = true;
         const visible = applyFilters();
         searchRegion?.scrollIntoView?.({ behavior: "smooth", block: "start" });
-        const first = visible ? document.querySelector('.setting-row[data-draft-change="true"]:not([hidden])') : null;
-        (first || draftOnly || search)?.focus?.();
+        const firstRow = visible ? document.querySelector('.setting-row[data-draft-change="true"]:not([hidden])') : null;
+        const firstSummary = firstRow?.querySelector("summary");
+        (firstSummary || draftOnly || search)?.focus?.();
     }
     document.querySelector("[data-review-draft]")?.addEventListener("click", reviewDraftChanges);
 
@@ -354,6 +352,7 @@
         ]);
         rows.forEach((row) => row._discardPendingChange?.());
         updatePendingActions(settingsForm);
+        clearEditSessionStatus(settingsForm);
     }
     function needsLiveConfirmation(targetForm) {
         if (targetForm.dataset.requiresLiveConfirm?.toLowerCase() === "true") return true;
@@ -528,7 +527,7 @@
         }
     }
     globalThis.SettingsWorkflow = {
-        continuePipeline, lifecycleSubmit, needsLiveConfirmation, disableDirtyMutations, discardPendingChanges,
+        continuePipeline, lifecycleSubmit, needsLiveConfirmation, disableDirtyMutations, discardPendingChanges, clearEditSessionStatus,
         restoreContextControl, applyFilters, reviewDraftChanges, copyPreviewUrl, unsavedMessage, setUnsavedDialogMode, cancelWorkflowDialog, bindDialogCancellation,
         workflowState: () => ({ pending, submitting, approved }),
         setWorkflowState: (state) => { pending = state.pending; submitting = state.submitting; approved = state.approved; }

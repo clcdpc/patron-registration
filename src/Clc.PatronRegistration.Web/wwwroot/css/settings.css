@@ -203,7 +203,7 @@ body.settings-administration-page #regFormContainer {
     outline-offset: 2px
 }
 
-.settings-filter-empty { font-weight: 700 }
+.settings-search .settings-filter-empty { font-weight: 700 }
 
 .settings-search p {
     margin: .25rem 0 0;
