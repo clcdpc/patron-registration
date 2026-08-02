@@ -48,6 +48,7 @@ public sealed class SettingsAdministrationRepositoryIntegrationTests
         }
         catch (SqlException exception)
         {
+            TryDropDatabase(configured);
             unavailableReason = $"SQL-backed repository tests could not create a temporary database using {ConnectionVariable}: " +
                 $"{exception.Message} The configured login must be able to create and drop a temporary database.";
             return;
@@ -68,7 +69,7 @@ public sealed class SettingsAdministrationRepositoryIntegrationTests
         }
         catch
         {
-            DropDatabase(configured);
+            TryDropDatabase(configured);
             throw;
         }
     }
@@ -77,14 +78,14 @@ public sealed class SettingsAdministrationRepositoryIntegrationTests
     public static void DeleteDatabase()
     {
         var configured = Environment.GetEnvironmentVariable(ConnectionVariable);
-        if (!string.IsNullOrWhiteSpace(configured)) DropDatabase(configured);
+        if (!string.IsNullOrWhiteSpace(configured)) DropDatabaseCore(configured);
     }
 
     [TestInitialize]
     public void ResetDatabase()
     {
         if (unavailableReason is not null) Assert.Inconclusive(unavailableReason);
-        Assert.IsTrue(schemaReady && databaseConnectionString is not null,
+        Assert.IsTrue(databaseCreated && schemaReady && databaseConnectionString is not null,
             "The SQL integration fixture attempted setup but did not finish deploying the schema.");
         repository = new SettingsAdministrationRepository(databaseConnectionString!);
         using var connection = Open();
@@ -298,21 +299,42 @@ delete dbo.RegistrationSettingScopeVersions;");
         command.ExecuteNonQuery();
     }
     private static string RepositoryRoot() => Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../../"));
-    private static void DropDatabase(string configured)
+    private static void DropDatabaseCore(string configured)
     {
-        if (!databaseCreated || databaseName is null) return;
+        if (databaseName is null) return;
+        var nameToDrop = databaseName;
         try
         {
             var builder = new SqlConnectionStringBuilder(configured) { InitialCatalog = "master", ConnectTimeout = 10 };
             using var connection = new SqlConnection(builder.ConnectionString);
             connection.Open();
-            Execute(connection, $"if db_id('{databaseName}') is not null begin alter database [{databaseName}] set single_user with rollback immediate; drop database [{databaseName}]; end", 30);
+            Execute(connection, $"""
+                if db_id('{nameToDrop}') is not null
+                begin
+                    alter database [{nameToDrop}] set single_user with rollback immediate;
+                    drop database [{nameToDrop}];
+                end
+                """, 30);
             databaseCreated = false;
+            schemaReady = false;
+            databaseConnectionString = null;
             databaseName = null;
         }
         catch (Exception exception)
         {
-            classContext?.WriteLine($"Could not drop temporary SQL integration database {databaseName}: {exception.Message}");
+            throw new InvalidOperationException($"Could not drop temporary SQL integration database {nameToDrop}.", exception);
+        }
+    }
+
+    private static void TryDropDatabase(string configured)
+    {
+        try
+        {
+            DropDatabaseCore(configured);
+        }
+        catch (Exception exception)
+        {
+            classContext?.WriteLine($"Best-effort cleanup failed for temporary SQL integration database {databaseName}: {exception.Message}");
         }
     }
     private sealed record DraftState(long BaselineVersion, DateTime ModifiedAtUtc, string ModifiedBy);
