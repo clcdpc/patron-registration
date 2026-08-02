@@ -441,14 +441,6 @@
         if (action?.navigate) { submitting = true; action.navigate(); }
         else if (action) continuePipeline(action, true);
     });
-    document.querySelector("[data-guard-save-live]")?.addEventListener("click", () => {
-        unsavedDialog.close(); pending = null; approved = false;
-        form.requestSubmit(form.querySelector('button[type="submit"]:not([data-submit-kind])'));
-    });
-    document.querySelector("[data-guard-save-draft]")?.addEventListener("click", () => {
-        unsavedDialog.close(); pending = null; submitting = true;
-        form.requestSubmit(form.querySelector('[data-submit-kind="draft"]'));
-    });
     document.querySelector("[data-confirm-live-preview]")?.addEventListener("click", () => {
         liveDialog.close();
         const action = pending;
