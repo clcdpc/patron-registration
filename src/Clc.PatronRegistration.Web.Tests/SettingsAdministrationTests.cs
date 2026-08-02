@@ -406,6 +406,31 @@ public class SettingsAdministrationTests
     }
 
     [TestMethod]
+    public void SettingsSharedDraftMarkup_GroupsSummaryActionsPreviewModesAndPreviewHistory()
+    {
+        var root = FindRepositoryRoot();
+        var index = File.ReadAllText(Path.Combine(root, "src/Clc.PatronRegistration.Web/Views/Settings/Index.cshtml"));
+
+        StringAssert.Contains(index, "<header class=\"draft-summary\">");
+        StringAssert.Contains(index, "id=\"draft-panel-title\">Shared draft #");
+        StringAssert.Contains(index, "class=\"draft-scope\"");
+        StringAssert.Contains(index, "class=\"draft-counts\"");
+        StringAssert.Contains(index, "change\" : \"changes\") stored;");
+        StringAssert.Contains(index, "active preview @(activePreviewCount == 1 ? \"link\" : \"links\")");
+        StringAssert.Contains(index, "<div class=\"draft-actions\" aria-label=\"Draft lifecycle actions\">");
+        foreach (var action in new[] { "data-review-draft", ">Publish draft</button>", ">Discard shared draft</button>" })
+            StringAssert.Contains(index, action);
+
+        StringAssert.Contains(index, "<section class=\"preview-tools\" aria-labelledby=\"preview-tools-title\">");
+        Assert.AreEqual(2, index.Split("<label class=\"preview-mode-option\">").Length - 1);
+        Assert.AreEqual(2, index.Split("<span class=\"preview-mode-copy\"><strong>").Length - 1);
+        Assert.AreEqual(2, index.Split("</strong><small>").Length - 1);
+        StringAssert.Contains(index, "<section class=\"preview-links\" aria-labelledby=\"preview-links-title\">");
+        StringAssert.Contains(index, ">Existing preview links</h3>");
+        StringAssert.Contains(index, "<div class=\"preview-link-actions\" aria-label=\"Actions for preview link");
+    }
+
+    [TestMethod]
     public void SettingsHelp_UsesCurrentBrowserAndSharedDraftControlNames()
     {
         var root = FindRepositoryRoot();
