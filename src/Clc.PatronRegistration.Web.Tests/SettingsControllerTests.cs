@@ -255,12 +255,17 @@ public class SettingsControllerTests
     public void ReplacingPreviewMode_ReturnsOneTimeReplacementUrl()
     {
         var repository = new Mock<ISettingsAdministrationRepository>();
-        var draft = NonSensitiveDraft();
+        var draft = NonSensitiveDraft() with { FormCode = "kids" };
         repository.Setup(service => service.GetDraft(draft.DraftId)).Returns(draft);
         repository.Setup(service => service.GetPreviewLink(12)).Returns(PreviewLink(draft));
         repository.Setup(service => service.ReplacePreviewLinkMode(12, It.IsAny<byte[]>(), true,
                 It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), false, It.IsAny<AuditContext>()))
             .Returns(13);
+        repository.Setup(service => service.GetFormCodes(2, 1)).Returns(
+        [
+            new FormCodeMetadata(2, "kids", "Kids registration", null, DateTime.UtcNow, "a", DateTime.UtcNow, "a")
+        ]);
+        repository.Setup(service => service.GetLegacyFormCodes()).Returns([]);
         var controller = CreateController(repository, LibraryAuthorization());
         var url = new Mock<IUrlHelper>();
         url.Setup(helper => helper.Action(It.IsAny<UrlActionContext>())).Returns("https://example.test/preview/replacement");
@@ -270,7 +275,14 @@ public class SettingsControllerTests
 
         var view = (ViewResult)result;
         Assert.AreEqual("PreviewLinkCreated", view.ViewName);
-        Assert.AreEqual("https://example.test/preview/replacement", view.Model);
+        var model = (PreviewLinkCreatedViewModel)view.Model!;
+        Assert.AreEqual("https://example.test/preview/replacement", model.PreviewUrl);
+        Assert.AreEqual(draft.DraftId, model.DraftId);
+        Assert.AreEqual(draft.OrganizationId, model.OrganizationId);
+        Assert.AreEqual(draft.FormCode, model.FormCode);
+        Assert.AreEqual("Kids registration", model.FormDisplayName);
+        Assert.AreEqual(3, model.OperationalBranchId);
+        Assert.IsTrue(model.AllowLiveSubmission);
         repository.Verify(service => service.ReplacePreviewLinkMode(12,
             It.Is<byte[]>(hash => hash.Length == 32), true,
             It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), false, It.IsAny<AuditContext>()), Times.Once);
@@ -627,6 +639,48 @@ public class SettingsControllerTests
     }
 
     [TestMethod]
+    public void SuccessfulDraftActions_SetSafeStatusMessages()
+    {
+        var repository = new Mock<ISettingsAdministrationRepository>();
+        repository.Setup(service => service.CreateDraft(3, string.Empty, It.IsAny<AuditContext>())).Returns(14);
+        var controller = CreateController(repository, LibraryAuthorization());
+
+        var result = controller.CreateDraft(3);
+
+        Assert.IsInstanceOfType<RedirectToActionResult>(result);
+        Assert.AreEqual("Shared draft #14 was created.", controller.TempData["SettingsStatus"]);
+    }
+
+    [TestMethod]
+    public void PreviewCreation_ReturnsContextualStronglyTypedModel()
+    {
+        var repository = new Mock<ISettingsAdministrationRepository>();
+        repository.Setup(service => service.GetDraft(10))
+            .Returns(new SettingDraft(10, 3, "kids", 0, DraftStatus.Active, []));
+        repository.Setup(service => service.GetFormCodes(2, 1)).Returns(
+        [
+            new FormCodeMetadata(2, "kids", "Kids registration", null, DateTime.UtcNow, "a", DateTime.UtcNow, "a")
+        ]);
+        repository.Setup(service => service.GetLegacyFormCodes()).Returns([]);
+        var controller = CreateController(repository, GlobalAuthorization());
+        var url = new Mock<IUrlHelper>();
+        url.Setup(helper => helper.Action(It.IsAny<UrlActionContext>())).Returns("https://example.test/preview/plaintext");
+        controller.Url = url.Object;
+
+        var view = (ViewResult)controller.CreatePreviewLink(10, new PreviewLinkRequest
+        {
+            OrganizationId = 3, FormCode = "kids", OperationalBranchId = 3, AllowLiveSubmission = false
+        });
+
+        var model = (PreviewLinkCreatedViewModel)view.Model!;
+        Assert.AreEqual("https://example.test/preview/plaintext", model.PreviewUrl);
+        Assert.AreEqual(10, model.DraftId);
+        Assert.AreEqual("Kids registration", model.FormDisplayName);
+        Assert.AreEqual("Branch", model.OperationalBranchDisplayName);
+        Assert.IsFalse(model.AllowLiveSubmission);
+    }
+
+    [TestMethod]
     public void PreviewTokenDisplayResponse_DisablesCachingAndReferrers()
     {
         var repository = new Mock<ISettingsAdministrationRepository>();
@@ -937,7 +991,7 @@ public class SettingsControllerTests
     }
 
     [TestMethod]
-    public void RemoveDraftChange_ConcurrencyReturnsConflictInsteadOfUnhandledError()
+    public void RemoveDraftChange_ConcurrencyRedirectsWithContext()
     {
         var repository = new Mock<ISettingsAdministrationRepository>();
         var draft = new SettingDraft(23, 3, string.Empty, 0, DraftStatus.Active,
@@ -949,7 +1003,7 @@ public class SettingsControllerTests
 
         var result = controller.RemoveDraftChange(draft.DraftId, 3, string.Empty, "registration_text");
 
-        Assert.IsInstanceOfType<ConflictObjectResult>(result);
+        AssertDraftConflictRedirect(controller, result, 3, string.Empty);
     }
 
     [TestMethod]
@@ -998,7 +1052,7 @@ public class SettingsControllerTests
     }
 
     [TestMethod]
-    public void SavingAfterAnotherAdministratorDiscardedDraft_ReturnsConflict()
+    public void SavingAfterAnotherAdministratorDiscardedDraft_RedirectsWithContextualConflictMessage()
     {
         var repository = RaceRepository();
         repository.Setup(service => service.SaveDraftChanges(24, It.IsAny<IReadOnlyList<SettingMutation>>(),
@@ -1012,23 +1066,24 @@ public class SettingsControllerTests
             Changes = [new SettingMutationInput { Key = "registration_text", Operation = "Upsert", Value = "new" }]
         });
 
-        Assert.IsInstanceOfType<ConflictObjectResult>(result);
+        AssertDraftConflictRedirect(controller, result, 3, string.Empty);
     }
 
     [TestMethod]
-    public void CommittingAfterConcurrentDraftEdit_ReturnsConflict()
+    public void CommittingAfterConcurrentDraftEdit_RedirectsWithContextualConflictMessage()
     {
         var repository = RaceRepository();
         repository.Setup(service => service.CommitDraft(24, It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), false, It.IsAny<AuditContext>()))
             .Throws(new System.Data.DBConcurrencyException("The draft baseline is stale."));
 
-        var result = CreateController(repository, LibraryAuthorization()).CommitDraft(24, 3);
+        var controller = CreateController(repository, LibraryAuthorization());
+        var result = controller.CommitDraft(24, 3);
 
-        Assert.IsInstanceOfType<ConflictObjectResult>(result);
+        AssertDraftConflictRedirect(controller, result, 3, string.Empty);
     }
 
     [TestMethod]
-    public void DiscardingOrPreviewingAfterConcurrentCommit_ReturnsConflict()
+    public void DiscardingOrPreviewingAfterConcurrentCommit_RedirectsWithContextualConflictMessage()
     {
         var repository = RaceRepository();
         repository.Setup(service => service.DiscardDraft(24, It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), false, It.IsAny<AuditContext>()))
@@ -1038,13 +1093,13 @@ public class SettingsControllerTests
             .Throws(new System.Data.DBConcurrencyException("The shared draft is no longer active."));
         var controller = CreateController(repository, LibraryAuthorization());
 
-        Assert.IsInstanceOfType<ConflictObjectResult>(controller.DiscardDraft(24, 3));
-        Assert.IsInstanceOfType<ConflictObjectResult>(controller.CreatePreviewLink(24,
-            new PreviewLinkRequest { OrganizationId = 3, OperationalBranchId = 3 }));
+        AssertDraftConflictRedirect(controller, controller.DiscardDraft(24, 3), 3, string.Empty);
+        AssertDraftConflictRedirect(controller, controller.CreatePreviewLink(24,
+            new PreviewLinkRequest { OrganizationId = 3, OperationalBranchId = 3 }), 3, string.Empty);
     }
 
     [TestMethod]
-    public void TogglingOrRevokingConcurrentlyChangedLink_ReturnsConflict()
+    public void TogglingOrRevokingConcurrentlyChangedLink_RedirectsWithContextualConflictMessage()
     {
         var repository = RaceRepository();
         repository.Setup(service => service.GetPreviewLink(12)).Returns(PreviewLink(NonSensitiveDraft()));
@@ -1056,8 +1111,17 @@ public class SettingsControllerTests
             .Throws(new System.Data.DBConcurrencyException("The preview link was revoked."));
         var controller = CreateController(repository, LibraryAuthorization());
 
-        Assert.IsInstanceOfType<ConflictObjectResult>(controller.ReplacePreviewLinkMode(12, true));
-        Assert.IsInstanceOfType<ConflictObjectResult>(controller.RevokePreviewLink(12));
+        AssertDraftConflictRedirect(controller, controller.ReplacePreviewLinkMode(12, true), 3, string.Empty);
+        AssertDraftConflictRedirect(controller, controller.RevokePreviewLink(12), 3, string.Empty);
+    }
+
+    private static void AssertDraftConflictRedirect(SettingsController controller, IActionResult result, int organizationId, string formCode)
+    {
+        var redirect = (RedirectToActionResult)result;
+        Assert.AreEqual(nameof(SettingsController.Index), redirect.ActionName);
+        Assert.AreEqual(organizationId, redirect.RouteValues!["organizationId"]);
+        Assert.AreEqual(formCode, redirect.RouteValues["formCode"]);
+        StringAssert.Contains((string)controller.TempData["SettingsError"]!, "changed while you were working");
     }
 
     private static Mock<ISettingsAdministrationRepository> RaceRepository()

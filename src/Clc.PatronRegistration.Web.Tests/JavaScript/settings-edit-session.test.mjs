@@ -259,3 +259,72 @@ test("review uses only an applied operation and masks sensitive values", () => {
     assert.doesNotMatch(list.children[0].textContent, /applied value/);
     assert.match(list.children[0].textContent, /••••••••/);
 });
+
+test("context selectors retain committed values and can be restored when navigation is cancelled", () => {
+    const { setNavigationGuard } = context.SettingsEditSessions;
+    for (const selectorName of ["organization", "formCode"]) {
+        const fixture = settingsContextFixture();
+        fixture.organization.value = "branch-1";
+        fixture.formCode.value = "default";
+        initializeSettingsContext(fixture.form);
+        const control = fixture[selectorName];
+        control.value = selectorName === "organization" ? "branch-2" : "kids";
+        setNavigationGuard((_action, trigger) => {
+            trigger.value = trigger.dataset.committedValue;
+        });
+        control.listeners.change();
+        assert.equal(control.value, selectorName === "organization" ? "branch-1" : "default");
+        assert.equal(fixture.submissions.length, 0);
+    }
+    setNavigationGuard(null);
+});
+
+test("guarded row action is marked separately and dirty mutations are never posted with it", () => {
+    const markup = readFileSync(new URL("../../Clc.PatronRegistration.Web/Views/Settings/_SettingRow.cshtml", import.meta.url), "utf8");
+    const script = readFileSync(new URL("../../Clc.PatronRegistration.Web/wwwroot/js/settings.js", import.meta.url), "utf8");
+    assert.match(markup, /Remove draft change[\s\S]*data-submit-kind="guarded"|data-submit-kind="guarded"[\s\S]*Remove draft change/);
+    assert.match(script, /kind === "guarded"/);
+    assert.match(script, /disableDirtyMutations/);
+    assert.match(script, /\.setting-row\[data-dirty=\\?"true\\?"\]/);
+});
+
+test("preview mode pipeline distinguishes safe, safe-to-live, and live-to-safe actions", () => {
+    const { needsLiveConfirmation } = context.SettingsWorkflow;
+    const preview = (selected) => ({
+        dataset: {}, matches: (value) => value === "[data-preview-form]",
+        querySelector: () => ({ value: selected })
+    });
+    assert.equal(needsLiveConfirmation(preview("false")), false);
+    assert.equal(needsLiveConfirmation(preview("true")), true);
+    assert.equal(needsLiveConfirmation({ dataset: { requiresLiveConfirm: "true" }, matches: () => false }), true);
+    assert.equal(needsLiveConfirmation({ dataset: { requiresLiveConfirm: "false" }, matches: () => false }), false);
+});
+
+test("search result wording distinguishes settings from saved draft changes", () => {
+    const script = readFileSync(new URL("../../Clc.PatronRegistration.Web/wwwroot/js/settings.js", import.meta.url), "utf8");
+    assert.match(script, /draft .*change.*found/);
+    assert.match(script, /setting.*found/);
+    assert.doesNotMatch(script, /browser.*dirty.*draft/i);
+});
+
+test("publish and discard cancellation returns focus to their trigger", () => {
+    const script = readFileSync(new URL("../../Clc.PatronRegistration.Web/wwwroot/js/settings.js", import.meta.url), "utf8");
+    assert.match(script, /owner\._trigger\?\.focus\(\)/);
+    assert.match(script, /pending = null;\s*submitting = false/);
+});
+
+test("clipboard copy reports accessible success and failure", async () => {
+    const { copyPreviewUrl } = context.SettingsWorkflow;
+    const status = { textContent: "" };
+    assert.equal(await copyPreviewUrl({ writeText: async () => {} }, "url", status), true);
+    assert.equal(status.textContent, "Preview URL copied.");
+    assert.equal(await copyPreviewUrl({ writeText: async () => { throw new Error("denied"); } }, "url", status), false);
+    assert.match(status.textContent, /Copy failed/);
+});
+
+test("beforeunload remains conditional on submission state after dialog cancellation", () => {
+    const script = readFileSync(new URL("../../Clc.PatronRegistration.Web/wwwroot/js/settings.js", import.meta.url), "utf8");
+    assert.match(script, /beforeunload/);
+    assert.match(script, /if \(!submitting && \(dirtyCount\(\) \|\| hasCandidate\(\)\)\)/);
+    assert.match(script, /pending = null;\s*submitting = false/);
+});

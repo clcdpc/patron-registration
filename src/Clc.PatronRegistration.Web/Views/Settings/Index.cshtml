@@ -101,7 +101,17 @@
     <section class="preview-tools" aria-labelledby="preview-tools-title"><h3 id="preview-tools-title">Preview tools</h3>
       <form asp-action="CreatePreviewLink" asp-route-draftId="@Model.ActiveDraft.DraftId" method="post" data-preview-form data-guard-action>
         @Html.AntiForgeryToken()<input type="hidden" name="OrganizationId" value="@Model.OrganizationId" /><input type="hidden" name="FormCode" value="@Model.FormCode" />
-        <label for="preview-operational-branch">Preview as branch</label><select id="preview-operational-branch" name="OperationalBranchId" required><option value="">Select a branch</option>@foreach(var branch in Model.PreviewBranches){<option value="@branch.OrganizationId">@branch.DisplayName</option>}</select>
+        <label for="preview-operational-branch">Preview as branch</label>
+        <select id="preview-operational-branch" name="OperationalBranchId" required>
+            @if (Model.PreviewBranches.Count != 1)
+            {
+                <option value="">Select a branch</option>
+            }
+            @foreach (var branch in Model.PreviewBranches)
+            {
+                <option value="@branch.OrganizationId" selected="@(Model.PreviewBranches.Count == 1)">@branch.DisplayName</option>
+            }
+        </select>
         <fieldset><legend>Preview mode</legend><label><input type="radio" name="AllowLiveSubmission" value="false" checked /> <strong>Safe preview</strong><small>Submissions are blocked and cannot create patron records.</small></label><label><input type="radio" name="AllowLiveSubmission" value="true" /> <strong>Live-submission preview</strong><small>Submitting this preview can create real patron records.</small></label></fieldset>
         <p class="preview-live-warning validation-summary" hidden><strong>Warning:</strong> The generated bearer URL can create real patron records.</p><button type="submit">Create preview link</button>
       </form>
@@ -184,9 +194,59 @@
     </div>
 </dialog>
 
-<dialog id="unsaved-changes-dialog" aria-labelledby="unsaved-title"><h2 id="unsaved-title">Pending changes</h2><p data-unsaved-message></p><div class="button-row">@if(Model.ActiveDraft is not null){<button type="button" data-guard-save-draft>Save changes to shared draft</button>}<button type="button" data-guard-save-live>Save changes live</button><button type="button" data-guard-discard>Discard pending changes and continue</button><button type="button" data-dialog-cancel>Cancel</button></div></dialog>
-@if(Model.ActiveDraft is not null){
-<dialog id="publish-draft-review" aria-labelledby="publish-title"><h2 id="publish-title">Publish shared draft #@Model.ActiveDraft.DraftId</h2><p>Publishing makes all listed changes live for <strong>@Model.OrganizationName</strong>, <strong>@formDisplayName</strong>.</p><ul>@foreach(var row in Model.Settings.Where(r=>r.DraftOperation.HasValue)){<li><strong>@row.Definition.DisplayName</strong>: current @SettingValuePresentation.Format(row.Definition,row.Resolution.EffectiveValue,row.Resolution.SourceOrganizationId.HasValue); proposed @(row.DraftOperation==DraftOperation.RemoveOverride ? "Use inherited value" : SettingValuePresentation.Format(row.Definition,row.DraftValue,true))</li>}</ul><p>@activePreviewCount active preview @(activePreviewCount==1?"link":"links") will become unusable.</p><form asp-action="CommitDraft" asp-route-draftId="@Model.ActiveDraft.DraftId" method="post" data-guard-action>@Html.AntiForgeryToken()<input type="hidden" name="organizationId" value="@Model.OrganizationId"/><input type="hidden" name="formCode" value="@Model.FormCode"/><button type="submit">Publish @draftChangeCount @(draftChangeCount==1?"change":"changes")</button><button type="button" data-dialog-cancel>Cancel</button></form></dialog>
-<dialog id="discard-draft-confirm" aria-labelledby="discard-title"><h2 id="discard-title">Discard shared draft #@Model.ActiveDraft.DraftId?</h2><p>@draftChangeCount draft @(draftChangeCount==1?"change":"changes") will be discarded and @activePreviewCount active preview @(activePreviewCount==1?"link":"links") will become unusable. <strong>This cannot be undone.</strong></p><form asp-action="DiscardDraft" asp-route-draftId="@Model.ActiveDraft.DraftId" method="post" data-guard-action>@Html.AntiForgeryToken()<input type="hidden" name="organizationId" value="@Model.OrganizationId"/><input type="hidden" name="formCode" value="@Model.FormCode"/><button type="submit" class="danger-button">Discard shared draft</button><button type="button" data-dialog-cancel>Cancel</button></form></dialog>}
-<dialog id="live-preview-confirm" aria-labelledby="live-preview-title"><h2 id="live-preview-title">Create a live-submission preview?</h2><p>This generated bearer URL can create real patron records. Share it only with authorized staff.</p><button type="button" data-confirm-live-preview>Create live preview link</button><button type="button" data-dialog-cancel>Cancel</button></dialog>
+<dialog id="unsaved-changes-dialog" aria-labelledby="unsaved-title">
+    <h2 id="unsaved-title">Pending changes</h2>
+    <p data-unsaved-message></p>
+    <div class="button-row">
+        @if (Model.ActiveDraft is not null)
+        {
+            <button type="button" data-guard-save-draft>Save changes to shared draft</button>
+        }
+        <button type="button" data-guard-save-live>Save changes live</button>
+        <button type="button" data-guard-discard>Discard pending changes and continue</button>
+        <button type="button" data-dialog-cancel>Cancel</button>
+    </div>
+</dialog>
+@if (Model.ActiveDraft is not null)
+{
+    <dialog id="publish-draft-review" aria-labelledby="publish-title">
+        <h2 id="publish-title">Publish shared draft #@Model.ActiveDraft.DraftId</h2>
+        <p>Publishing makes all listed changes live for <strong>@Model.OrganizationName</strong>, <strong>@formDisplayName</strong>.</p>
+        <ul>
+            @foreach (var row in Model.Settings.Where(row => row.DraftOperation.HasValue))
+            {
+                <li>
+                    <strong>@row.Definition.DisplayName</strong>:
+                    current @SettingValuePresentation.Format(row.Definition, row.Resolution.EffectiveValue, row.Resolution.SourceOrganizationId.HasValue);
+                    proposed @(row.DraftOperation == DraftOperation.RemoveOverride ? "Use inherited value" : SettingValuePresentation.Format(row.Definition, row.DraftValue, true))
+                </li>
+            }
+        </ul>
+        <p>@activePreviewCount active preview @(activePreviewCount == 1 ? "link" : "links") will become unusable.</p>
+        <form asp-action="CommitDraft" asp-route-draftId="@Model.ActiveDraft.DraftId" method="post" data-guard-action>
+            @Html.AntiForgeryToken()
+            <input type="hidden" name="organizationId" value="@Model.OrganizationId" />
+            <input type="hidden" name="formCode" value="@Model.FormCode" />
+            <button type="submit">Publish @draftChangeCount @(draftChangeCount == 1 ? "change" : "changes")</button>
+            <button type="button" data-dialog-cancel>Cancel</button>
+        </form>
+    </dialog>
+    <dialog id="discard-draft-confirm" aria-labelledby="discard-title">
+        <h2 id="discard-title">Discard shared draft #@Model.ActiveDraft.DraftId?</h2>
+        <p>@draftChangeCount draft @(draftChangeCount == 1 ? "change" : "changes") will be discarded and @activePreviewCount active preview @(activePreviewCount == 1 ? "link" : "links") will become unusable. <strong>This cannot be undone.</strong></p>
+        <form asp-action="DiscardDraft" asp-route-draftId="@Model.ActiveDraft.DraftId" method="post" data-guard-action>
+            @Html.AntiForgeryToken()
+            <input type="hidden" name="organizationId" value="@Model.OrganizationId" />
+            <input type="hidden" name="formCode" value="@Model.FormCode" />
+            <button type="submit" class="danger-button">Discard shared draft</button>
+            <button type="button" data-dialog-cancel>Cancel</button>
+        </form>
+    </dialog>
+}
+<dialog id="live-preview-confirm" aria-labelledby="live-preview-title">
+    <h2 id="live-preview-title">Create a live-submission preview?</h2>
+    <p>This generated bearer URL can create real patron records. Share it only with authorized staff.</p>
+    <button type="button" data-confirm-live-preview>Create live preview link</button>
+    <button type="button" data-dialog-cancel>Cancel</button>
+</dialog>
 <script src="~/js/settings.js"></script>
