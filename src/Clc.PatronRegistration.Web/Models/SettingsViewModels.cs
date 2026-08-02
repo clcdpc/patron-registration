@@ -150,11 +150,12 @@ public sealed class SettingMutationInput
     public string? Value { get; set; }
 }
 
-public sealed class DraftChangesRequest
+public sealed class SaveToSharedDraftRequest
 {
     private string formCode = string.Empty;
     public int OrganizationId { get; set; }
     public string FormCode { get => formCode; set => formCode = FormCodeNormalizer.Normalize(value); }
+    public long? ExpectedDraftId { get; set; }
     public List<SettingMutationInput> Changes { get; set; } = [];
 }
 

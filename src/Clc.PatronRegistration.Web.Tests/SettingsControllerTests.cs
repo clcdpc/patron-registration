@@ -436,7 +436,7 @@ public class SettingsControllerTests
             OrganizationId = 3,
             Changes = [new SettingMutationInput { Key = "label.NameFirst", Value = maliciousLabel }]
         };
-        var draft = new DraftChangesRequest
+        var draft = new SaveToSharedDraftRequest
         {
             OrganizationId = 3,
             Changes = [new SettingMutationInput { Key = "label.NameFirst", Value = maliciousLabel }]
@@ -444,27 +444,31 @@ public class SettingsControllerTests
 
         Assert.IsInstanceOfType<RedirectToActionResult>(controller.DirectSave(direct));
         controller.ModelState.Clear();
-        Assert.IsInstanceOfType<RedirectToActionResult>(controller.SaveDraft(24, draft));
+        Assert.IsInstanceOfType<RedirectToActionResult>(controller.SaveToSharedDraft(draft));
         repository.Verify(service => service.DirectSave(
             It.IsAny<int>(), It.IsAny<string>(), It.IsAny<long>(), It.IsAny<IReadOnlyList<SettingMutation>>(),
             It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), It.IsAny<AuditContext>()), Times.Never);
-        repository.Verify(service => service.SaveDraftChanges(
-            It.IsAny<long>(), It.IsAny<IReadOnlyList<SettingMutation>>(),
+        repository.Verify(service => service.SaveToSharedDraft(
+            It.IsAny<int>(), It.IsAny<string>(), It.IsAny<long?>(), It.IsAny<IReadOnlyList<SettingMutation>>(),
             It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), It.IsAny<AuditContext>()), Times.Never);
     }
 
     [TestMethod]
-    public void CreateDraft_ConcurrentRepositoryChangeReturnsConflict()
+    public void SaveToSharedDraft_ConcurrentRepositoryChangeUsesFriendlyRecovery()
     {
         var repository = new Mock<ISettingsAdministrationRepository>();
-        repository.Setup(service => service.CreateDraft(3, string.Empty, It.IsAny<AuditContext>()))
+        repository.Setup(service => service.SaveToSharedDraft(3, string.Empty, null,
+                It.IsAny<IReadOnlyList<SettingMutation>>(), It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), It.IsAny<AuditContext>()))
             .Throws(new System.Data.DBConcurrencyException("The form is changing."));
-        var authorization = LibraryAuthorization();
-        var controller = CreateController(repository, authorization);
+        var controller = CreateController(repository, LibraryAuthorization());
 
-        var result = controller.CreateDraft(3);
+        var result = controller.SaveToSharedDraft(new SaveToSharedDraftRequest
+        {
+            OrganizationId = 3,
+            Changes = [new SettingMutationInput { Key = "registration_text", Value = "new" }]
+        });
 
-        Assert.IsInstanceOfType<ConflictObjectResult>(result);
+        AssertDraftConflictRedirect(controller, result, 3, string.Empty);
     }
 
     [DataTestMethod]
@@ -645,16 +649,106 @@ public class SettingsControllerTests
     }
 
     [TestMethod]
-    public void SuccessfulDraftActions_SetSafeStatusMessages()
+    public void SuccessfulDraftCreation_ReportsFirstChanges()
     {
         var repository = new Mock<ISettingsAdministrationRepository>();
-        repository.Setup(service => service.CreateDraft(3, string.Empty, It.IsAny<AuditContext>())).Returns(14);
+        repository.Setup(service => service.SaveToSharedDraft(3, string.Empty, null,
+            It.IsAny<IReadOnlyList<SettingMutation>>(), It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), It.IsAny<AuditContext>()))
+            .Returns(new SaveToDraftResult(14, true));
         var controller = CreateController(repository, LibraryAuthorization());
 
-        var result = controller.CreateDraft(3);
+        var result = controller.SaveToSharedDraft(new SaveToSharedDraftRequest
+        {
+            OrganizationId = 3, Changes = [new SettingMutationInput { Key = "registration_text", Value = "new" }]
+        });
 
         Assert.IsInstanceOfType<RedirectToActionResult>(result);
-        Assert.AreEqual("Shared draft #14 was created.", controller.TempData["SettingsStatus"]);
+        Assert.AreEqual("Shared draft #14 was created with 1 change.", controller.TempData["SettingsStatus"]);
+    }
+
+    [DataTestMethod]
+    [DataRow(1, "1 change was added to shared draft #24.")]
+    [DataRow(2, "2 changes were added to shared draft #24.")]
+    public void SaveToSharedDraft_ExistingDraftReportsCorrectCount(int count, string message)
+    {
+        var repository = new Mock<ISettingsAdministrationRepository>();
+        repository.Setup(service => service.SaveToSharedDraft(3, string.Empty, 24,
+                It.IsAny<IReadOnlyList<SettingMutation>>(), It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), It.IsAny<AuditContext>()))
+            .Returns(new SaveToDraftResult(24, false));
+        var controller = CreateController(repository, LibraryAuthorization());
+        var changes = Enumerable.Range(0, count).Select(index => new SettingMutationInput
+        {
+            Key = index == 0 ? "registration_text" : "warning_text",
+            Value = $"value {index}"
+        }).ToList();
+
+        var result = controller.SaveToSharedDraft(new SaveToSharedDraftRequest
+            { OrganizationId = 3, ExpectedDraftId = 24, Changes = changes });
+
+        Assert.IsInstanceOfType<RedirectToActionResult>(result);
+        Assert.AreEqual(message, controller.TempData["SettingsStatus"]);
+    }
+
+    [TestMethod]
+    public void SaveToSharedDraft_ForwardsExpectedDraftIdAndNull()
+    {
+        var repository = new Mock<ISettingsAdministrationRepository>();
+        repository.Setup(service => service.SaveToSharedDraft(3, string.Empty, It.IsAny<long?>(),
+                It.IsAny<IReadOnlyList<SettingMutation>>(), It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), It.IsAny<AuditContext>()))
+            .Returns((int _, string _, long? expected, IReadOnlyList<SettingMutation> _, IReadOnlyDictionary<string, SettingDefinition> _, AuditContext _) =>
+                new SaveToDraftResult(expected ?? 25, !expected.HasValue));
+        var controller = CreateController(repository, LibraryAuthorization());
+        SaveToSharedDraftRequest Request(long? expected) => new()
+        {
+            OrganizationId = 3, ExpectedDraftId = expected,
+            Changes = [new SettingMutationInput { Key = "registration_text", Value = "value" }]
+        };
+
+        controller.SaveToSharedDraft(Request(24));
+        controller.ModelState.Clear();
+        controller.SaveToSharedDraft(Request(null));
+
+        repository.Verify(service => service.SaveToSharedDraft(3, string.Empty, 24,
+            It.IsAny<IReadOnlyList<SettingMutation>>(), It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), It.IsAny<AuditContext>()), Times.Once);
+        repository.Verify(service => service.SaveToSharedDraft(3, string.Empty, null,
+            It.IsAny<IReadOnlyList<SettingMutation>>(), It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), It.IsAny<AuditContext>()), Times.Once);
+    }
+
+    [TestMethod]
+    public void SaveToSharedDraft_EmptyChangesUsesValidationRecoveryWithoutRepositoryCall()
+    {
+        var repository = new Mock<ISettingsAdministrationRepository>();
+        var controller = CreateController(repository, LibraryAuthorization());
+
+        var result = controller.SaveToSharedDraft(new SaveToSharedDraftRequest { OrganizationId = 3, FormCode = "" });
+
+        Assert.IsInstanceOfType<RedirectToActionResult>(result);
+        var redirect = (RedirectToActionResult)result;
+        Assert.AreEqual(nameof(SettingsController.Index), redirect.ActionName);
+        Assert.AreEqual(3, redirect.RouteValues!["organizationId"]);
+        StringAssert.Contains((string)controller.TempData["SettingsError"]!, "Submit at least one setting change.");
+        repository.Verify(service => service.SaveToSharedDraft(It.IsAny<int>(), It.IsAny<string>(), It.IsAny<long?>(),
+            It.IsAny<IReadOnlyList<SettingMutation>>(), It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), It.IsAny<AuditContext>()), Times.Never);
+    }
+
+    [TestMethod]
+    public void SaveToSharedDraft_UnauthorizedSensitiveMutationUsesSafeValidationRecovery()
+    {
+        var repository = new Mock<ISettingsAdministrationRepository>();
+        var controller = CreateController(repository, LibraryAuthorization());
+
+        var result = controller.SaveToSharedDraft(new SaveToSharedDraftRequest
+        {
+            OrganizationId = 3,
+            Changes = [new SettingMutationInput { Key = "postmark_api_key", Value = "secret" }]
+        });
+
+        Assert.IsInstanceOfType<RedirectToActionResult>(result);
+        StringAssert.Contains((string)controller.TempData["SettingsError"]!, "unrecognized or inaccessible");
+        repository.Verify(service => service.WriteAudit("ValidationFailed", false, It.IsAny<AuditContext>(),
+            "Draft changes were invalid.", null, null, null), Times.Once);
+        repository.Verify(service => service.SaveToSharedDraft(It.IsAny<int>(), It.IsAny<string>(), It.IsAny<long?>(),
+            It.IsAny<IReadOnlyList<SettingMutation>>(), It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), It.IsAny<AuditContext>()), Times.Never);
     }
 
     [TestMethod]
@@ -1069,14 +1163,15 @@ public class SettingsControllerTests
     public void SavingAfterAnotherAdministratorDiscardedDraft_RedirectsWithContextualConflictMessage()
     {
         var repository = RaceRepository();
-        repository.Setup(service => service.SaveDraftChanges(24, It.IsAny<IReadOnlyList<SettingMutation>>(),
+        repository.Setup(service => service.SaveToSharedDraft(3, string.Empty, 24, It.IsAny<IReadOnlyList<SettingMutation>>(),
                 It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), It.IsAny<AuditContext>()))
             .Throws(new System.Data.DBConcurrencyException("The shared draft is no longer active."));
         var controller = CreateController(repository, LibraryAuthorization());
 
-        var result = controller.SaveDraft(24, new DraftChangesRequest
+        var result = controller.SaveToSharedDraft(new SaveToSharedDraftRequest
         {
             OrganizationId = 3,
+            ExpectedDraftId = 24,
             Changes = [new SettingMutationInput { Key = "registration_text", Operation = "Upsert", Value = "new" }]
         });
 

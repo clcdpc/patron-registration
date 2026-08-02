@@ -78,24 +78,21 @@
         <noscript><button type="submit">View settings</button></noscript>
 </form>
 
-<section class="draft-panel" aria-labelledby="draft-panel-title" data-has-draft="@(Model.ActiveDraft is not null ? "true" : "false")">
+@if (Model.ActiveDraft is not null)
+{
+<section class="draft-panel" aria-labelledby="draft-panel-title" data-has-draft="true">
     <div class="draft-status">
-        <h2 id="draft-panel-title">@(Model.ActiveDraft is null ? "No shared draft" : $"Shared draft #{Model.ActiveDraft.DraftId}")</h2>
+        <h2 id="draft-panel-title">Shared draft #@Model.ActiveDraft.DraftId</h2>
         <p><strong>@Model.OrganizationName</strong> — <strong>@formDisplayName</strong></p>
-        @if (Model.ActiveDraft is null) { <p>Browser changes can be saved live, or create a shared draft for collaborative review.</p> }
-        else {
-            <p>@draftChangeCount @(draftChangeCount == 1 ? "change" : "changes") stored; @activePreviewCount active preview @(activePreviewCount == 1 ? "link" : "links").</p>
-            @if (draftChangeCount == 0) { <p class="draft-empty"><strong>This shared draft has no changes.</strong></p> }
-        }
+        <p>@draftChangeCount @(draftChangeCount == 1 ? "change" : "changes") stored; @activePreviewCount active preview @(activePreviewCount == 1 ? "link" : "links").</p>
+        @if (draftChangeCount == 0) { <p class="draft-empty"><strong>This shared draft has no changes.</strong></p> }
         @if (hasRestrictedDraftChanges && !canManageRestrictedDraft) { <p class="validation-summary" role="status"><strong>Restricted draft:</strong> A global administrator must publish, discard, preview, or remove restricted changes.</p> }
     </div>
     <div class="draft-lifecycle" aria-label="Draft lifecycle actions">
     @if (draftChangeCount > 0) {
         <button type="button" data-review-draft>Review @draftChangeCount shared draft @(draftChangeCount == 1 ? "change" : "changes")</button>
     }
-    @if (Model.ActiveDraft is null) {
-        <form asp-action="CreateDraft" method="post" data-guard-action>@Html.AntiForgeryToken()<input type="hidden" name="organizationId" value="@Model.OrganizationId" /><input type="hidden" name="formCode" value="@Model.FormCode" /><button type="submit">Create shared draft</button></form>
-    } else if (canManageDraftLifecycle) {
+    @if (canManageDraftLifecycle) {
         <button type="button" data-open-dialog="publish-draft-review" disabled="@(draftChangeCount == 0)">Publish draft</button>
         <button type="button" class="danger-button" data-open-dialog="discard-draft-confirm">Discard shared draft</button>
     }
@@ -121,6 +118,7 @@
       @if(Model.PreviewLinks.Count > 0){<div class="preview-links" aria-label="Preview link history">@foreach(var link in Model.PreviewLinks.OrderBy(l=>l.RevokedAtUtc.HasValue)){var branch=Model.PreviewBranches.FirstOrDefault(b=>b.OrganizationId==link.OperationalBranchId);var revoked=link.RevokedAtUtc.HasValue;<article class="preview-link-item"><h4>Preview link #@link.PreviewLinkId</h4><p>Operational branch: @(branch?.DisplayName ?? $"branch {link.OperationalBranchId}")</p><p><span class="status-badge">@(revoked ? "Revoked" : link.AllowLiveSubmission ? "Live" : "Safe")</span> — @(revoked ? "Revoked and unusable" : "Active")</p>@if(!revoked){<div class="button-row"><form asp-action="ReplacePreviewLinkMode" asp-route-previewLinkId="@link.PreviewLinkId" method="post" data-requires-live-confirm="@(!link.AllowLiveSubmission)" data-guard-action>@Html.AntiForgeryToken()<input type="hidden" name="allowLiveSubmission" value="@(!link.AllowLiveSubmission)"/><button type="submit">Replace with @(link.AllowLiveSubmission ? "safe" : "live") link</button></form><form asp-action="RevokePreviewLink" asp-route-previewLinkId="@link.PreviewLinkId" method="post" data-guard-action>@Html.AntiForgeryToken()<button type="submit">Revoke preview link</button></form></div>}</article>}</div>}
     </section>}
 </section>
+}
 <section class="settings-search" aria-labelledby="search-label">
     <label id="search-label" for="setting-search">Search settings</label>
     <input id="setting-search" type="search" autocomplete="off" placeholder="Search by setting name or description" />
@@ -133,6 +131,7 @@
     <input type="hidden" name="OrganizationId" value="@Model.OrganizationId" />
     <input type="hidden" name="FormCode" value="@Model.FormCode" />
     <input type="hidden" name="ExpectedVersion" value="@Model.ScopeVersion" />
+    @if (Model.ActiveDraft is not null) { <input type="hidden" name="ExpectedDraftId" value="@Model.ActiveDraft.DraftId" /> }
     <p id="edit-session-status" class="validation-summary" role="alert" tabindex="-1" hidden></p>
 
     <section aria-labelledby="ordinary-heading">
@@ -178,10 +177,13 @@
         <strong class="pending-changes-status" role="status" aria-live="polite"></strong>
         <div class="settings-action-buttons">
             @if (Model.ActiveDraft is not null) {
-                <button type="submit" formaction="@Url.Action("SaveDraft", new { draftId = Model.ActiveDraft.DraftId })" data-submit-kind="draft" data-label-template="Add {count} {noun} to shared draft">Add changes to shared draft</button>
+                <button type="submit" formaction="@Url.Action("SaveToSharedDraft")" data-submit-kind="draft" data-label-template="Add {count} {noun} to shared draft">Add changes to shared draft</button>
                 <button type="submit" data-label-template="Save {count} {noun} live instead">Save changes live instead</button>
                 <small>Saving live does not publish or modify the existing shared draft.</small>
-            } else { <button type="submit" data-label-template="Save {count} {noun} live">Save changes live</button> }
+            } else {
+                <button type="submit" formaction="@Url.Action("SaveToSharedDraft")" data-submit-kind="draft" data-label-template="Save {count} {noun} to shared draft">Save changes to shared draft</button>
+                <button type="submit" data-label-template="Save {count} {noun} live">Save changes live</button>
+            }
             <button type="button" data-discard-pending>Discard browser changes</button>
         </div>
     </div>
