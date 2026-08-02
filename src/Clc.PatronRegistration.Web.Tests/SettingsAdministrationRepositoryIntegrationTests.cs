@@ -15,6 +15,9 @@ public sealed class SettingsAdministrationRepositoryIntegrationTests
     private static string? databaseName;
     private static string? databaseConnectionString;
     private static string? unavailableReason;
+    private static bool databaseCreated;
+    private static bool schemaReady;
+    private static TestContext? classContext;
     private SettingsAdministrationRepository repository = null!;
 
     private static readonly SettingDefinition First = new("test.first", "First", "Test value", SettingValueType.ShortString);
@@ -24,8 +27,9 @@ public sealed class SettingsAdministrationRepositoryIntegrationTests
         new[] { First, Second, Secret }.ToDictionary(item => item.Key, StringComparer.OrdinalIgnoreCase);
 
     [ClassInitialize]
-    public static void CreateDatabase(TestContext _)
+    public static void CreateDatabase(TestContext context)
     {
+        classContext = context;
         var configured = Environment.GetEnvironmentVariable(ConnectionVariable);
         if (string.IsNullOrWhiteSpace(configured))
         {
@@ -33,33 +37,39 @@ public sealed class SettingsAdministrationRepositoryIntegrationTests
             return;
         }
 
+        databaseName = $"PatronRegistrationTests_{Guid.NewGuid():N}";
         try
         {
             var adminBuilder = new SqlConnectionStringBuilder(configured) { InitialCatalog = "master", ConnectTimeout = 10 };
-            databaseName = $"PatronRegistrationTests_{Guid.NewGuid():N}";
-            using (var connection = new SqlConnection(adminBuilder.ConnectionString))
-            {
-                connection.Open();
-                Execute(connection, $"CREATE DATABASE [{databaseName}]");
-            }
+            using var connection = new SqlConnection(adminBuilder.ConnectionString);
+            connection.Open();
+            Execute(connection, $"CREATE DATABASE [{databaseName}]");
+            databaseCreated = true;
+        }
+        catch (SqlException exception)
+        {
+            unavailableReason = $"SQL-backed repository tests could not create a temporary database using {ConnectionVariable}: " +
+                $"{exception.Message} The configured login must be able to create and drop a temporary database.";
+            return;
+        }
 
-            var databaseBuilder = new SqlConnectionStringBuilder(configured)
-            {
-                InitialCatalog = databaseName,
-                ConnectTimeout = 10
-            };
-            databaseConnectionString = databaseBuilder.ConnectionString;
-            using var database = new SqlConnection(databaseConnectionString);
+        try
+        {
+            var databaseBuilder = new SqlConnectionStringBuilder(configured) { InitialCatalog = databaseName, ConnectTimeout = 10 };
+            var candidateConnectionString = databaseBuilder.ConnectionString;
+            using var database = new SqlConnection(candidateConnectionString);
             database.Open();
             foreach (var file in new[] { "001-settings-administration.sql", "002-preview-operational-branch.sql", "003-expand-audit-setting-values.sql" })
             {
                 Execute(database, File.ReadAllText(Path.Combine(RepositoryRoot(), "database", file)), 30);
             }
+            databaseConnectionString = candidateConnectionString;
+            schemaReady = true;
         }
-        catch (Exception exception)
+        catch
         {
-            unavailableReason = $"SQL-backed repository fixture could not start using {ConnectionVariable}: {exception.Message}";
             DropDatabase(configured);
+            throw;
         }
     }
 
@@ -74,6 +84,8 @@ public sealed class SettingsAdministrationRepositoryIntegrationTests
     public void ResetDatabase()
     {
         if (unavailableReason is not null) Assert.Inconclusive(unavailableReason);
+        Assert.IsTrue(schemaReady && databaseConnectionString is not null,
+            "The SQL integration fixture attempted setup but did not finish deploying the schema.");
         repository = new SettingsAdministrationRepository(databaseConnectionString!);
         using var connection = Open();
         Execute(connection, @"delete dbo.RegistrationSettingAuditEvents;
@@ -81,6 +93,24 @@ delete dbo.RegistrationSettingPreviewLinks;
 delete dbo.RegistrationSettingDraftChanges;
 delete dbo.RegistrationSettingDrafts;
 delete dbo.RegistrationSettingScopeVersions;");
+    }
+
+    [TestMethod]
+    public void Fixture_DeploysRequiredSettingsAdministrationSchema()
+    {
+        var requiredObjects = new[]
+        {
+            "dbo.RegistrationSettingScopeVersions",
+            "dbo.RegistrationSettingDrafts",
+            "dbo.RegistrationSettingDraftChanges",
+            "dbo.RegistrationSettingAuditEvents"
+        };
+        foreach (var requiredObject in requiredObjects)
+        {
+            Assert.AreEqual(1, Scalar<int>($"select case when object_id('{requiredObject}', 'U') is null then 0 else 1 end"),
+                $"Required schema object {requiredObject} was not deployed.");
+        }
+        Assert.AreEqual(1, Scalar<int>("select count(*) from sys.indexes where object_id=object_id('dbo.RegistrationSettingDrafts') and name='UX_RSD_ActiveScope' and is_unique=1 and has_filter=1"));
     }
 
     [TestMethod]
@@ -182,8 +212,12 @@ delete dbo.RegistrationSettingScopeVersions;");
         Task<(SaveToDraftResult? Result, Exception? Error)> Start(SettingMutation mutation) => Task.Run(() =>
         {
             barrier.SignalAndWait(TimeSpan.FromSeconds(10));
-            try { return (new SettingsAdministrationRepository(databaseConnectionString!).SaveToSharedDraft(101, "form", null, [mutation], Catalog, Audit()), null); }
-            catch (Exception exception) { return ((SaveToDraftResult?)null, exception); }
+            try
+            {
+                return ((SaveToDraftResult?)new SettingsAdministrationRepository(databaseConnectionString!)
+                    .SaveToSharedDraft(101, "form", null, [mutation], Catalog, Audit()), (Exception?)null);
+            }
+            catch (Exception exception) { return ((SaveToDraftResult?)null, (Exception?)exception); }
         });
 
         var tasks = new[] { Start(Upsert(First, "one")), Start(Upsert(Second, "two")) };
@@ -222,9 +256,13 @@ delete dbo.RegistrationSettingScopeVersions;");
         Assert.IsTrue(audits.All(row => !row.IsSensitive));
     }
 
-    private void SeedVersion(long version) => Execute(Open(),
-        "insert dbo.RegistrationSettingScopeVersions(OrganizationId,FormCode,Version) values(101,'form',@version)",
-        parameters: command => command.Parameters.AddWithValue("@version", version));
+    private void SeedVersion(long version)
+    {
+        using var connection = Open();
+        Execute(connection,
+            "insert dbo.RegistrationSettingScopeVersions(OrganizationId,FormCode,Version) values(101,'form',@version)",
+            parameters: command => command.Parameters.AddWithValue("@version", version));
+    }
     private long ReadScopeVersion() => Scalar<long>("select Version from dbo.RegistrationSettingScopeVersions where OrganizationId=101 and FormCode='form'");
     private int CountActiveDrafts() => Scalar<int>("select count(*) from dbo.RegistrationSettingDrafts where OrganizationId=101 and FormCode='form' and Status='Active'");
     private DraftState ReadDraft(long draftId) => QuerySingle("select BaselineVersion,ModifiedAtUtc,ModifiedBy from dbo.RegistrationSettingDrafts where DraftId=@id",
@@ -255,19 +293,27 @@ delete dbo.RegistrationSettingScopeVersions;");
     private static SqlCommand Command(SqlConnection connection, string sql) => new(sql, connection) { CommandTimeout = 15 };
     private static void Execute(SqlConnection connection, string sql, int timeout = 15, Action<SqlCommand>? parameters = null)
     {
-        using (connection)
-        {
-            using var command = new SqlCommand(sql, connection) { CommandTimeout = timeout };
-            parameters?.Invoke(command);
-            command.ExecuteNonQuery();
-        }
+        using var command = new SqlCommand(sql, connection) { CommandTimeout = timeout };
+        parameters?.Invoke(command);
+        command.ExecuteNonQuery();
     }
     private static string RepositoryRoot() => Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../../"));
     private static void DropDatabase(string configured)
     {
-        if (databaseName is null) return;
-        try { var builder = new SqlConnectionStringBuilder(configured) { InitialCatalog = "master", ConnectTimeout = 10 }; using var connection = new SqlConnection(builder.ConnectionString); connection.Open(); Execute(connection, $"if db_id('{databaseName}') is not null begin alter database [{databaseName}] set single_user with rollback immediate; drop database [{databaseName}]; end", 30); }
-        catch { /* Class cleanup must not hide test results. */ }
+        if (!databaseCreated || databaseName is null) return;
+        try
+        {
+            var builder = new SqlConnectionStringBuilder(configured) { InitialCatalog = "master", ConnectTimeout = 10 };
+            using var connection = new SqlConnection(builder.ConnectionString);
+            connection.Open();
+            Execute(connection, $"if db_id('{databaseName}') is not null begin alter database [{databaseName}] set single_user with rollback immediate; drop database [{databaseName}]; end", 30);
+            databaseCreated = false;
+            databaseName = null;
+        }
+        catch (Exception exception)
+        {
+            classContext?.WriteLine($"Could not drop temporary SQL integration database {databaseName}: {exception.Message}");
+        }
     }
     private sealed record DraftState(long BaselineVersion, DateTime ModifiedAtUtc, string ModifiedBy);
     private sealed record AuditState(string EventType, string? MetadataJson, string? FailureReason, string? PreviousValue, string? NewValue, bool IsSensitive);
