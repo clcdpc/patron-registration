@@ -52,6 +52,22 @@
         const operation = row.querySelector(".operation");
         const value = row.querySelector(".setting-value");
         let session = null;
+        const summaryValue = row.querySelector(".summary-value");
+        const settingStatus = row.querySelector(".setting-status");
+        const serverState = {
+            operation: operation.value,
+            value: value.value,
+            dirty: row.dataset.dirty === "true",
+            appliedOperation: row.dataset.appliedOperation,
+            indexDisabled: row.querySelector(".change-index").disabled,
+            keyDisabled: row.querySelector(".change-key").disabled,
+            operationDisabled: operation.disabled,
+            valueDisabled: value.disabled,
+            summaryValue: summaryValue?.textContent,
+            summaryTitle: summaryValue?.getAttribute?.("title"),
+            status: settingStatus?.textContent,
+            inheritHidden: inherit?.hidden ?? true
+        };
 
         function setBindingEnabled(enabled, selectedOperation) {
             row.querySelectorAll(".change-index, .change-key, .operation")
@@ -131,6 +147,28 @@
             updatePendingActions(settingsForm);
             change.focus();
         }
+
+        row._discardPendingChange = () => {
+            operation.value = serverState.operation;
+            value.value = serverState.value;
+            row.dataset.dirty = "false";
+            row.dataset.appliedOperation = serverState.appliedOperation;
+            delete row.dataset.candidateOperation;
+            row.querySelector(".change-index").disabled = serverState.indexDisabled;
+            row.querySelector(".change-key").disabled = serverState.keyDisabled;
+            operation.disabled = serverState.operationDisabled;
+            value.disabled = serverState.valueDisabled;
+            if (summaryValue) {
+                summaryValue.textContent = serverState.summaryValue;
+                if (serverState.summaryTitle === null) summaryValue.removeAttribute?.("title");
+                else summaryValue.setAttribute?.("title", serverState.summaryTitle);
+            }
+            if (settingStatus) settingStatus.textContent = serverState.status;
+            if (inherit) inherit.hidden = serverState.inheritHidden;
+            session = null;
+            showNormalState();
+            value.dispatchEvent?.(new Event("input"));
+        };
 
         change?.addEventListener("click", () => beginEdit("Upsert"));
         inherit?.addEventListener("click", () => beginEdit("RemoveOverride"));
@@ -254,6 +292,14 @@
         form?.querySelectorAll('.setting-row[data-dirty="true"] .change-index, .setting-row[data-dirty="true"] .change-key, .setting-row[data-dirty="true"] .operation, .setting-row[data-dirty="true"] .setting-value')
             .forEach((control) => { control.disabled = true; });
     }
+    function discardPendingChanges(settingsForm = form) {
+        const rows = new Set([
+            ...(settingsForm?.querySelectorAll('.setting-row[data-dirty="true"]') || []),
+            ...(settingsForm?.querySelectorAll('.setting-row[data-candidate-operation]') || [])
+        ]);
+        rows.forEach((row) => row._discardPendingChange?.());
+        updatePendingActions(settingsForm);
+    }
     function needsLiveConfirmation(targetForm) {
         if (targetForm.dataset.requiresLiveConfirm?.toLowerCase() === "true") return true;
         return targetForm.matches?.("[data-preview-form]") && targetForm.querySelector('[name="AllowLiveSubmission"]:checked')?.value === "true";
@@ -370,8 +416,9 @@
     document.querySelector("[data-guard-discard]")?.addEventListener("click", () => {
         unsavedDialog.close();
         const action = pending;
-        if (action?.navigate) { disableDirtyMutations(); submitting = true; action.navigate(); }
-        else if (action) continuePipeline({ ...action, prepare: () => { disableDirtyMutations(); action.prepare?.(); } }, true);
+        discardPendingChanges();
+        if (action?.navigate) { submitting = true; action.navigate(); }
+        else if (action) continuePipeline(action, true);
     });
     document.querySelector("[data-guard-save-live]")?.addEventListener("click", () => {
         unsavedDialog.close(); pending = null; approved = false;
@@ -407,7 +454,7 @@
             return false;
         }
     }
-    globalThis.SettingsWorkflow = { continuePipeline, lifecycleSubmit, needsLiveConfirmation, disableDirtyMutations, restoreContextControl, applyFilters, copyPreviewUrl, unsavedMessage };
+    globalThis.SettingsWorkflow = { continuePipeline, lifecycleSubmit, needsLiveConfirmation, disableDirtyMutations, discardPendingChanges, restoreContextControl, applyFilters, copyPreviewUrl, unsavedMessage };
 
     const copyButton = document.querySelector("[data-copy-preview-url]");
     copyButton?.addEventListener("click", () => copyPreviewUrl(

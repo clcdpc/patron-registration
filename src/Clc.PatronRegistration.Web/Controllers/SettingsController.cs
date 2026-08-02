@@ -422,7 +422,6 @@ public sealed class SettingsController(
             AuditRestrictedDraftRejection(request.OrganizationId, request.FormCode, "Preview-link creation was rejected.");
             return Forbid();
         }
-        var token = previewTokens.Create();
         var operationalBranchId = ResolveOperationalBranch(request.OrganizationId, request.OperationalBranchId);
         if (!operationalBranchId.HasValue)
         {
@@ -430,6 +429,10 @@ public sealed class SettingsController(
             TempData["SettingsError"] = "Select an operational branch authorized for this preview scope.";
             return RedirectToAction(nameof(Index), new { organizationId = request.OrganizationId, formCode = request.FormCode });
         }
+        var organizationName = OrganizationDisplayName(request.OrganizationId);
+        var formName = GetFormDisplayName(request.OrganizationId, request.FormCode);
+        var branchName = OrganizationDisplayName(operationalBranchId.Value);
+        var token = previewTokens.Create();
         try
         {
             repository.CreatePreviewLink(draftId, token.Hash, request.AllowLiveSubmission, operationalBranchId.Value, CatalogByKey,
@@ -445,9 +448,10 @@ public sealed class SettingsController(
             return DraftConflictResult(request.OrganizationId, request.FormCode);
         }
         var previewUrl = Url.Action("Index", "Preview", new { token = token.Plaintext }, Request.Scheme)!;
-        var formName = GetFormDisplayName(request.OrganizationId, request.FormCode);
         SetPreviewTokenResponseHeaders();
-        return View("PreviewLinkCreated", new PreviewLinkCreatedViewModel(previewUrl, draftId, request.OrganizationId, OrganizationDisplayName(request.OrganizationId), request.FormCode, formName, operationalBranchId.Value, OrganizationDisplayName(operationalBranchId.Value), request.AllowLiveSubmission));
+        return View("PreviewLinkCreated", new PreviewLinkCreatedViewModel(
+            previewUrl, draftId, request.OrganizationId, organizationName, request.FormCode, formName,
+            operationalBranchId.Value, branchName, request.AllowLiveSubmission));
     }
 
     [HttpPost("preview-links/{previewLinkId:long}/revoke")]
@@ -499,6 +503,9 @@ public sealed class SettingsController(
         {
             return RedirectToAction(nameof(Index), new { organizationId = link.OrganizationId, formCode = link.FormCode });
         }
+        var organizationName = OrganizationDisplayName(link.OrganizationId);
+        var formName = GetFormDisplayName(link.OrganizationId, link.FormCode);
+        var branchName = OrganizationDisplayName(link.OperationalBranchId);
         var replacementToken = previewTokens.Create();
         try
         {
@@ -522,9 +529,8 @@ public sealed class SettingsController(
         var previewUrl = Url.Action("Index", "Preview", new { token = replacementToken.Plaintext }, Request.Scheme)!;
         SetPreviewTokenResponseHeaders();
         return View("PreviewLinkCreated", new PreviewLinkCreatedViewModel(
-            previewUrl, link.DraftId, link.OrganizationId, OrganizationDisplayName(link.OrganizationId),
-            link.FormCode, GetFormDisplayName(link.OrganizationId, link.FormCode),
-            link.OperationalBranchId, OrganizationDisplayName(link.OperationalBranchId), allowLiveSubmission));
+            previewUrl, link.DraftId, link.OrganizationId, organizationName, link.FormCode, formName,
+            link.OperationalBranchId, branchName, allowLiveSubmission));
     }
 
     [HttpGet("audit")]
@@ -757,9 +763,20 @@ public sealed class SettingsController(
         var libraryId = organizationId == settingsOptions.SystemOrganizationId
             ? settingsOptions.SystemOrganizationId
             : GetLibraryId(organizationId);
-        var metadata = repository.GetFormCodes(libraryId, settingsOptions.SystemOrganizationId) ?? [];
-        return metadata.LastOrDefault(form =>
-            form.FormCode.Equals(formCode, StringComparison.OrdinalIgnoreCase))?.DisplayName ?? formCode;
+        try
+        {
+            var metadata = repository.GetFormCodes(libraryId, settingsOptions.SystemOrganizationId) ?? [];
+            return metadata.LastOrDefault(form =>
+                form.FormCode.Equals(formCode, StringComparison.OrdinalIgnoreCase))?.DisplayName ?? formCode;
+        }
+        catch (SqlException)
+        {
+            return formCode;
+        }
+        catch (InvalidOperationException)
+        {
+            return formCode;
+        }
     }
 
     private SettingDraft? AuthorizedActiveDraft(long draftId, int organizationId, string formCode)
@@ -933,8 +950,10 @@ public sealed class SettingsController(
 
     private int GetLibraryId(int organizationId) => cache.OrganizationCache.GetLibrary(organizationId).OrganizationID;
 
-    private string OrganizationDisplayName(int organizationId) =>
-        cache.OrganizationCache.FirstOrDefault(organization => organization.OrganizationID == organizationId)?.Name ?? $"Organization {organizationId}";
+    private string OrganizationDisplayName(int organizationId) => organizationId == settingsOptions.SystemOrganizationId
+        ? "System defaults"
+        : cache.OrganizationCache.FirstOrDefault(organization => organization.OrganizationID == organizationId)?.Name
+            ?? $"Organization {organizationId}";
 
     private string GetOrganizationName(int organizationId) => organizationId == settingsOptions.SystemOrganizationId
         ? "System defaults"

@@ -255,16 +255,22 @@ public class SettingsControllerTests
     public void ReplacingPreviewMode_ReturnsOneTimeReplacementUrl()
     {
         var repository = new Mock<ISettingsAdministrationRepository>();
+        var metadataResolved = false;
         var draft = NonSensitiveDraft() with { FormCode = "kids" };
         repository.Setup(service => service.GetDraft(draft.DraftId)).Returns(draft);
         repository.Setup(service => service.GetPreviewLink(12)).Returns(PreviewLink(draft));
         repository.Setup(service => service.ReplacePreviewLinkMode(12, It.IsAny<byte[]>(), true,
                 It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), false, It.IsAny<AuditContext>()))
+            .Callback(() => Assert.IsTrue(metadataResolved, "Display metadata must be resolved before replacement persistence."))
             .Returns(13);
-        repository.Setup(service => service.GetFormCodes(2, 1)).Returns(
-        [
-            new FormCodeMetadata(2, "kids", "Kids registration", null, DateTime.UtcNow, "a", DateTime.UtcNow, "a")
-        ]);
+        repository.Setup(service => service.GetFormCodes(2, 1)).Returns(() =>
+        {
+            metadataResolved = true;
+            return
+            [
+                new FormCodeMetadata(2, "kids", "Kids registration", null, DateTime.UtcNow, "a", DateTime.UtcNow, "a")
+            ];
+        });
         repository.Setup(service => service.GetLegacyFormCodes()).Returns([]);
         var controller = CreateController(repository, LibraryAuthorization());
         var url = new Mock<IUrlHelper>();
@@ -655,13 +661,21 @@ public class SettingsControllerTests
     public void PreviewCreation_ReturnsContextualStronglyTypedModel()
     {
         var repository = new Mock<ISettingsAdministrationRepository>();
+        var metadataResolved = false;
         repository.Setup(service => service.GetDraft(10))
             .Returns(new SettingDraft(10, 3, "kids", 0, DraftStatus.Active, []));
-        repository.Setup(service => service.GetFormCodes(2, 1)).Returns(
-        [
-            new FormCodeMetadata(2, "kids", "Kids registration", null, DateTime.UtcNow, "a", DateTime.UtcNow, "a")
-        ]);
+        repository.Setup(service => service.GetFormCodes(2, 1)).Returns(() =>
+        {
+            metadataResolved = true;
+            return
+            [
+                new FormCodeMetadata(2, "kids", "Kids registration", null, DateTime.UtcNow, "a", DateTime.UtcNow, "a")
+            ];
+        });
         repository.Setup(service => service.GetLegacyFormCodes()).Returns([]);
+        repository.Setup(service => service.CreatePreviewLink(10, It.IsAny<byte[]>(), false, 3,
+                It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), true, It.IsAny<AuditContext>()))
+            .Callback(() => Assert.IsTrue(metadataResolved, "Display metadata must be resolved before preview persistence."));
         var controller = CreateController(repository, GlobalAuthorization());
         var url = new Mock<IUrlHelper>();
         url.Setup(helper => helper.Action(It.IsAny<UrlActionContext>())).Returns("https://example.test/preview/plaintext");

@@ -328,3 +328,37 @@ test("beforeunload remains conditional on submission state after dialog cancella
     assert.match(script, /if \(!submitting && \(dirtyCount\(\) \|\| hasCandidate\(\)\)\)/);
     assert.match(script, /pending = null;\s*submitting = false/);
 });
+
+test("discardPendingChanges restores dirty rows to their server-rendered controls and count", () => {
+    const fixture = pendingActionsFixture([{}]);
+    const row = fixture.rows[0];
+    const original = {
+        operation: row.controls.operation.value,
+        value: row.controls.value.value,
+        valueDisabled: row.controls.value.disabled,
+        operationDisabled: row.controls.operation.disabled
+    };
+    row.controls.change.click();
+    row.controls.value.value = "browser-only value";
+    row.controls.apply.click();
+    assert.equal(row.row.dataset.dirty, "true");
+
+    context.SettingsWorkflow.discardPendingChanges(fixture.form);
+
+    assert.equal(row.row.dataset.dirty, "false");
+    assert.equal(row.row.dataset.candidateOperation, undefined);
+    assert.equal(row.controls.operation.value, original.operation);
+    assert.equal(row.controls.value.value, original.value);
+    assert.equal(row.controls.value.disabled, original.valueDisabled);
+    assert.equal(row.controls.operation.disabled, original.operationDisabled);
+    assert.equal(fixture.actions.hidden, true);
+    assert.equal(fixture.status.textContent, "");
+});
+
+test("discard-and-continue pipeline cleans rows before subsequent lifecycle confirmation", () => {
+    const script = readFileSync(new URL("../../Clc.PatronRegistration.Web/wwwroot/js/settings.js", import.meta.url), "utf8");
+    const handler = script.match(/\[data-guard-discard\][\s\S]*?\n    \}\);/)?.[0] ?? "";
+    assert.match(handler, /discardPendingChanges\(\)/);
+    assert.match(handler, /continuePipeline\(action, true\)/);
+    assert.doesNotMatch(handler, /disableDirtyMutations/);
+});
