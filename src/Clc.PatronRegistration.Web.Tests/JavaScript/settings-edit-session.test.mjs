@@ -191,7 +191,7 @@ test("save actions share the hidden pending region while Remove draft change sta
     const actions = indexMarkup.match(/<div class="settings-actions" hidden>[\s\S]*?<\/div>\s*<\/div>/)?.[0] ?? "";
     assert.match(actions, /Save \{count\} \{noun\} live/);
     assert.match(actions, /Add \{count\} \{noun\} to shared draft/);
-    assert.match(actions, /Discard browser changes/);
+    assert.match(actions, /Discard unsaved changes/);
     assert.match(actions, /role="status" aria-live="polite"/);
     assert.doesNotMatch(actions, /Remove draft change/);
     assert.match(rowMarkup, /Remove draft change/);

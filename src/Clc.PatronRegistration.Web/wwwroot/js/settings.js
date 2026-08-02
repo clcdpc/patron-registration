@@ -330,7 +330,7 @@
         const message = unsavedDialog?.querySelector("[data-unsaved-message]");
         const explanation = unsavedDialog?.querySelector("[data-unsaved-explanation]");
         const confirm = unsavedDialog?.querySelector("[data-guard-discard]");
-        if (title) title.textContent = explicit ? "Discard browser changes?" : "Unsaved changes";
+        if (title) title.textContent = explicit ? "Discard unsaved changes?" : "Unsaved changes";
         if (message) message.textContent = explicit
             ? "This will discard changes made in this browser."
             : unsavedMessage(count);

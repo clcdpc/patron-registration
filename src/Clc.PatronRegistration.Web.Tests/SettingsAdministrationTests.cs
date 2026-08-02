@@ -412,7 +412,7 @@ public class SettingsAdministrationTests
         var help = File.ReadAllText(Path.Combine(root, "src/Clc.PatronRegistration.Web/Views/Settings/Help.cshtml"));
 
         foreach (var current in new[] { "Save N changes live", "Add N changes to shared draft", "Save N changes live instead",
-            "Discard browser changes", "Show shared draft changes only", "Review N shared draft changes",
+            "Discard unsaved changes", "Show shared draft changes only", "Review N shared draft changes",
             "Discard shared draft", "Safe preview", "Live-submission preview" })
             StringAssert.Contains(help, current);
         foreach (var obsolete in new[] { "Review and save now", "Save changes to draft", ">Discard draft<",
