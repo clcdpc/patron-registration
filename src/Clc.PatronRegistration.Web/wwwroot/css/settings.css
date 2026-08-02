@@ -626,22 +626,22 @@ body.settings-administration-page #regFormContainer {
 }
 
 .draft-panel {
-    --draft-compact-gap: .4rem;
-    --draft-control-gap: .65rem;
-    --draft-section-gap: 1.15rem;
+    --draft-compact-gap: .3rem;
+    --draft-control-gap: .5rem;
+    --draft-section-gap: .75rem;
     border: 2px solid #315b7d;
     border-radius: .4rem;
     display: grid;
     gap: var(--draft-section-gap);
     margin-block: 1rem;
     min-width: 0;
-    padding: .85rem 1rem 1rem
+    padding: .65rem .75rem .75rem
 }
 
 .draft-summary, .draft-actions, .preview-tools { min-width: 0 }
 .draft-summary h2 { margin: 0 0 .25rem }
 .draft-summary .draft-scope { color: #454545; margin: 0 }
-.draft-summary .draft-counts { margin: .55rem 0 0 }
+.draft-summary .draft-counts { margin: .35rem 0 0 }
 .draft-summary .draft-empty, .draft-summary .validation-summary { margin-top: .65rem }
 
 .draft-actions, .preview-link-actions {
@@ -659,13 +659,12 @@ body.settings-administration-page #regFormContainer {
     padding-top: var(--draft-section-gap)
 }
 
-.preview-tools > h3, .preview-links > h4 { margin: 0 0 .65rem }
-.preview-tools > form { display: grid; gap: .75rem; min-width: 0 }
+.preview-tools > h3, .preview-links > h4 { margin: 0 0 .4rem }
+.preview-tools > form { display: grid; gap: .5rem; min-width: 0 }
 .preview-branch-field { align-items: center; display: flex; flex-wrap: wrap; gap: .4rem .65rem }
 .preview-branch-field label { font-weight: 600 }
 .preview-branch-field select { box-sizing: border-box; max-width: 24rem; min-height: 2.4rem; min-width: min(18rem,100%); width: auto }
 
-.preview-tools > form > h4 { margin: .15rem 0 -.35rem }
 .preview-create-actions {
     display: grid;
     gap: var(--draft-control-gap);
@@ -676,11 +675,11 @@ body.settings-administration-page #regFormContainer {
 .preview-create-option {
     box-sizing: border-box;
     display: grid;
-    gap: .25rem;
-    min-height: 5rem;
+    gap: .15rem;
+    min-height: 3.75rem;
     min-width: 0;
     overflow-wrap: anywhere;
-    padding: .65rem .75rem;
+    padding: .45rem .6rem;
     text-align: left;
     width: 100%
 }
@@ -690,13 +689,13 @@ body.settings-administration-page #regFormContainer {
 .preview-create-live:hover { background: #ffe9b8 }
 
 .preview-links { border-top: 1px solid #aaa; margin-top: var(--draft-section-gap); padding-top: var(--draft-section-gap) }
-.preview-link-list { display: grid; gap: .75rem }
-.preview-link-item { border: 1px solid #bbb; border-radius: .3rem; padding: .85rem .9rem }
-.preview-link-item h4 { margin: 0 0 .55rem }
+.preview-link-list { display: grid; gap: .6rem }
+.preview-link-item { border: 1px solid #bbb; border-radius: .3rem; padding: .6rem .7rem }
+.preview-link-item h4 { margin: 0 0 .35rem }
 .preview-link-item p { margin: 0 }
-.preview-link-branch + .preview-link-status { margin-top: .5rem }
+.preview-link-branch + .preview-link-status { margin-top: .3rem }
 .preview-link-status { align-items: center; display: inline-flex; flex-wrap: wrap; gap: .35rem }
-.preview-link-actions { margin-top: .75rem }
+.preview-link-actions { margin-top: .5rem }
 .preview-link-actions form { margin: 0 }
 .status-badge { border:1px solid currentColor; border-radius:1rem; font-weight:700; padding:.15rem .5rem }
 .preview-mode-banner { padding:.8rem; border:2px solid currentColor }

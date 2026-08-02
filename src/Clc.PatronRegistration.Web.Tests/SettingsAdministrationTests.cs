@@ -422,9 +422,14 @@ public class SettingsAdministrationTests
             StringAssert.Contains(index, action);
 
         StringAssert.Contains(index, "<section class=\"preview-tools\" aria-labelledby=\"preview-tools-title\">");
-        StringAssert.Contains(index, "<div class=\"preview-create-actions\" role=\"group\" aria-labelledby=\"preview-create-title\">");
-        StringAssert.Contains(index, "type=\"submit\" name=\"AllowLiveSubmission\" value=\"false\" class=\"preview-create-option preview-create-safe\"");
-        StringAssert.Contains(index, "type=\"submit\" name=\"AllowLiveSubmission\" value=\"true\" class=\"preview-create-option preview-create-live\"");
+        StringAssert.Contains(index, "<div class=\"preview-create-actions\" role=\"group\" aria-label=\"Create preview link\">");
+        Assert.IsFalse(index.Contains("id=\"preview-create-title\"", StringComparison.Ordinal));
+        var safeAction = index.IndexOf("type=\"submit\" name=\"AllowLiveSubmission\" value=\"false\" class=\"preview-create-option preview-create-safe\"", StringComparison.Ordinal);
+        var liveAction = index.IndexOf("type=\"submit\" name=\"AllowLiveSubmission\" value=\"true\" class=\"preview-create-option preview-create-live\"", StringComparison.Ordinal);
+        Assert.IsTrue(safeAction >= 0);
+        Assert.IsTrue(liveAction > safeAction);
+        StringAssert.Contains(index, "<span>Cannot create patron records.</span>");
+        StringAssert.Contains(index, "<span>Can create real patron records.</span>");
         Assert.IsFalse(index.Contains("type=\"radio\" name=\"AllowLiveSubmission\"", StringComparison.Ordinal));
         Assert.IsFalse(index.Contains(">Create preview link</button>", StringComparison.Ordinal));
         StringAssert.Contains(index, "<section class=\"preview-links\" aria-labelledby=\"preview-links-title\">");
