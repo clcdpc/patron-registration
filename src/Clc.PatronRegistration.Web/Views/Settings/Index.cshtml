@@ -209,16 +209,19 @@
         </details>
     }
 
-    <div class="settings-actions">
-        <button type="submit">Review and save now</button>
-        @if (Model.ActiveDraft is not null)
-        {
-            <button type="submit"
-                    formaction="@Url.Action("SaveDraft", new { draftId = Model.ActiveDraft.DraftId })"
-                    data-submit-kind="draft">
-                Save changes to draft
-            </button>
-        }
+    <div class="settings-actions" hidden>
+        <strong class="pending-changes-status" role="status" aria-live="polite"></strong>
+        <div class="settings-action-buttons">
+            <button type="submit">Review and save now</button>
+            @if (Model.ActiveDraft is not null)
+            {
+                <button type="submit"
+                        formaction="@Url.Action("SaveDraft", new { draftId = Model.ActiveDraft.DraftId })"
+                        data-submit-kind="draft">
+                    Save changes to draft
+                </button>
+            }
+        </div>
     </div>
 </form>
 
