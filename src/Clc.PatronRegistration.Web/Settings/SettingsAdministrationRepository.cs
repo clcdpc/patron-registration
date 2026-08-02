@@ -184,11 +184,20 @@ public interface ISettingsAdministrationRepository
     void WriteAudit(string eventType, bool succeeded, AuditContext audit, string? failureReason = null, long? draftId = null, long? previewLinkId = null, string? metadataJson = null);
 }
 
-public sealed class SettingsAdministrationRepository(IDbHelperSettings settings) : ISettingsAdministrationRepository
+public sealed class SettingsAdministrationRepository : ISettingsAdministrationRepository
 {
+    private readonly string connectionString;
+
+    public SettingsAdministrationRepository(IDbHelperSettings settings)
+        : this($"Server={settings.db_hostname};Database={settings.db_name};Trusted_Connection=True;Encrypt=False;")
+    {
+    }
+
+    internal SettingsAdministrationRepository(string connectionString) => this.connectionString = connectionString;
+
     private SqlConnection Open()
     {
-        var connection = new SqlConnection($"Server={settings.db_hostname};Database={settings.db_name};Trusted_Connection=True;Encrypt=False;");
+        var connection = new SqlConnection(connectionString);
         connection.Open();
         return connection;
     }

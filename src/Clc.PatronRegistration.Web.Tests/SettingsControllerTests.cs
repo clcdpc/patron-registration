@@ -666,6 +666,91 @@ public class SettingsControllerTests
         Assert.AreEqual("Shared draft #14 was created with 1 change.", controller.TempData["SettingsStatus"]);
     }
 
+    [DataTestMethod]
+    [DataRow(1, "1 change was added to shared draft #24.")]
+    [DataRow(2, "2 changes were added to shared draft #24.")]
+    public void SaveToSharedDraft_ExistingDraftReportsCorrectCount(int count, string message)
+    {
+        var repository = new Mock<ISettingsAdministrationRepository>();
+        repository.Setup(service => service.SaveToSharedDraft(3, string.Empty, 24,
+                It.IsAny<IReadOnlyList<SettingMutation>>(), It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), It.IsAny<AuditContext>()))
+            .Returns(new SaveToDraftResult(24, false));
+        var controller = CreateController(repository, LibraryAuthorization());
+        var changes = Enumerable.Range(0, count).Select(index => new SettingMutationInput
+        {
+            Key = index == 0 ? "registration_text" : "warning_text",
+            Value = $"value {index}"
+        }).ToList();
+
+        var result = controller.SaveToSharedDraft(new SaveToSharedDraftRequest
+            { OrganizationId = 3, ExpectedDraftId = 24, Changes = changes });
+
+        Assert.IsInstanceOfType<RedirectToActionResult>(result);
+        Assert.AreEqual(message, controller.TempData["SettingsStatus"]);
+    }
+
+    [TestMethod]
+    public void SaveToSharedDraft_ForwardsExpectedDraftIdAndNull()
+    {
+        var repository = new Mock<ISettingsAdministrationRepository>();
+        repository.Setup(service => service.SaveToSharedDraft(3, string.Empty, It.IsAny<long?>(),
+                It.IsAny<IReadOnlyList<SettingMutation>>(), It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), It.IsAny<AuditContext>()))
+            .Returns((int _, string _, long? expected, IReadOnlyList<SettingMutation> _, IReadOnlyDictionary<string, SettingDefinition> _, AuditContext _) =>
+                new SaveToDraftResult(expected ?? 25, !expected.HasValue));
+        var controller = CreateController(repository, LibraryAuthorization());
+        SaveToSharedDraftRequest Request(long? expected) => new()
+        {
+            OrganizationId = 3, ExpectedDraftId = expected,
+            Changes = [new SettingMutationInput { Key = "registration_text", Value = "value" }]
+        };
+
+        controller.SaveToSharedDraft(Request(24));
+        controller.ModelState.Clear();
+        controller.SaveToSharedDraft(Request(null));
+
+        repository.Verify(service => service.SaveToSharedDraft(3, string.Empty, 24,
+            It.IsAny<IReadOnlyList<SettingMutation>>(), It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), It.IsAny<AuditContext>()), Times.Once);
+        repository.Verify(service => service.SaveToSharedDraft(3, string.Empty, null,
+            It.IsAny<IReadOnlyList<SettingMutation>>(), It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), It.IsAny<AuditContext>()), Times.Once);
+    }
+
+    [TestMethod]
+    public void SaveToSharedDraft_EmptyChangesUsesValidationRecoveryWithoutRepositoryCall()
+    {
+        var repository = new Mock<ISettingsAdministrationRepository>();
+        var controller = CreateController(repository, LibraryAuthorization());
+
+        var result = controller.SaveToSharedDraft(new SaveToSharedDraftRequest { OrganizationId = 3, FormCode = "" });
+
+        Assert.IsInstanceOfType<RedirectToActionResult>(result);
+        var redirect = (RedirectToActionResult)result;
+        Assert.AreEqual(nameof(SettingsController.Index), redirect.ActionName);
+        Assert.AreEqual(3, redirect.RouteValues!["organizationId"]);
+        StringAssert.Contains((string)controller.TempData["SettingsError"]!, "Submit at least one setting change.");
+        repository.Verify(service => service.SaveToSharedDraft(It.IsAny<int>(), It.IsAny<string>(), It.IsAny<long?>(),
+            It.IsAny<IReadOnlyList<SettingMutation>>(), It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), It.IsAny<AuditContext>()), Times.Never);
+    }
+
+    [TestMethod]
+    public void SaveToSharedDraft_UnauthorizedSensitiveMutationUsesSafeValidationRecovery()
+    {
+        var repository = new Mock<ISettingsAdministrationRepository>();
+        var controller = CreateController(repository, LibraryAuthorization());
+
+        var result = controller.SaveToSharedDraft(new SaveToSharedDraftRequest
+        {
+            OrganizationId = 3,
+            Changes = [new SettingMutationInput { Key = "postmark_api_key", Value = "secret" }]
+        });
+
+        Assert.IsInstanceOfType<RedirectToActionResult>(result);
+        StringAssert.Contains((string)controller.TempData["SettingsError"]!, "unrecognized or inaccessible");
+        repository.Verify(service => service.WriteAudit("ValidationFailed", false, It.IsAny<AuditContext>(),
+            "Draft changes were invalid.", null, null, null), Times.Once);
+        repository.Verify(service => service.SaveToSharedDraft(It.IsAny<int>(), It.IsAny<string>(), It.IsAny<long?>(),
+            It.IsAny<IReadOnlyList<SettingMutation>>(), It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), It.IsAny<AuditContext>()), Times.Never);
+    }
+
     [TestMethod]
     public void PreviewCreation_ReturnsContextualStronglyTypedModel()
     {
