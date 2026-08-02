@@ -108,23 +108,24 @@
 
     <section id="save-now">
         <h2>Save a change immediately</h2>
-        <p><strong>Review and save now</strong> displays pending changes for confirmation. Verify the selected organization and form in the review dialog. Confirming applies the changes to the live registration settings; cancelling the review does not save anything.</p>
-        <p>Use an immediate save for small, understood changes that do not need a preview. Merely selecting <strong>Change</strong> does not make a value live.</p>
+        <p><strong>Save N changes live</strong> (or <strong>Save N changes live instead</strong> when a shared draft exists) opens a review before applying browser changes to live registration settings. Browser changes exist only in your current browser until you save or discard them.</p>
+        <p><strong>Discard browser changes</strong> restores the page to its saved state without changing live settings or anything already stored in the shared draft.</p>
     </section>
 
     <section id="shared-draft">
         <h2>Work with a shared draft</h2>
-        <p><strong>Create shared draft</strong> creates a draft for the selected organization and form. It is visible to other authorized staff working in that same context. <strong>Save changes to draft</strong> stores changes without making them live, and <strong>Draft change</strong> identifies settings currently changed by the draft.</p>
-        <p><strong>Remove draft change</strong> removes that pending change. <strong>Publish draft</strong> applies all remaining draft changes to the live settings. <strong>Discard draft</strong> removes the draft without publishing it.</p>
-        <p class="settings-help-note"><strong>Remember:</strong> Draft changes are not live until published, and a draft applies only to the selected organization and form. Review every change before publishing because another authorized staff member may have contributed to the same shared draft.</p>
+        <p><strong>Create shared draft</strong> creates stored work for the selected organization and form. <strong>Add N changes to shared draft</strong> stores browser changes without making them live. Shared draft changes are visible to other authorized staff.</p>
+        <p>Use <strong>Review N shared draft changes</strong> or <strong>Show shared draft changes only</strong> to find stored changes. The filter composes with search and does not include unsaved browser changes unless those settings already have a stored shared draft change.</p>
+        <p><strong>Remove draft change</strong> removes one stored change. <strong>Publish draft</strong> applies all remaining shared draft changes live. <strong>Discard shared draft</strong> is a separate destructive action that removes the entire draft without publishing it.</p>
+        <p class="settings-help-note"><strong>Remember:</strong> Discarding browser changes does not alter the shared draft. Review every shared draft change before publishing because another authorized staff member may have contributed to it.</p>
     </section>
 
     <section id="preview-draft">
         <h2>Preview draft changes</h2>
-        <p>Preview links are available only while a shared draft is active. <strong>Preview as branch</strong> determines which branch context the registration page uses. A normal safe preview lets staff inspect the form without creating a real patron record. Share preview links only with staff who need them.</p>
+        <p>Preview links are available only while a shared draft is active. <strong>Preview as branch</strong> determines the branch context. <strong>Safe preview</strong> blocks submissions and cannot create patron records. Share preview links only with staff who need them.</p>
         <aside class="settings-help-warning" aria-labelledby="live-preview-warning">
             <h3 id="live-preview-warning">Warning: live-submission preview</h3>
-            <p><strong>Allow this preview to create real patron records</strong> changes the preview into a live-submission preview. Treat it like the real registration form: completing it can create an actual patron record.</p>
+            <p><strong>Live-submission preview</strong> can create real patron records. Treat it like the live registration form.</p>
         </aside>
         <p><strong>Revoke link</strong> disables an existing preview URL. Replacing safe/live mode revokes the old URL and creates a new one. Publishing or discarding the draft makes its preview links unusable.</p>
     </section>
@@ -153,7 +154,7 @@
             <li>Select <strong>Change</strong>.</li>
             <li>Choose <strong>Set a value here</strong>.</li>
             <li>Enter the value.</li>
-            <li>Use <strong>Review and save now</strong>, or save it to a shared draft.</li>
+            <li>Use <strong>Save N changes live</strong>, or <strong>Add N changes to shared draft</strong>.</li>
         </ol>
         <h3>Return a branch setting to the library value</h3>
         <ol>

@@ -153,19 +153,19 @@ test("pending actions follow applied dirty rows rather than edit sessions or ser
     first.controls.change.click();
     first.controls.apply.click();
     assert.equal(fixture.actions.hidden, false);
-    assert.equal(fixture.status.textContent, "1 pending change");
+    assert.equal(fixture.status.textContent, "1 unsaved browser change");
 
     first.controls.change.click();
     first.controls.apply.click();
-    assert.equal(fixture.status.textContent, "1 pending change", "reapplying a dirty row does not increment the count");
+    assert.equal(fixture.status.textContent, "1 unsaved browser change", "reapplying a dirty row does not increment the count");
     first.controls.change.click();
     first.controls.cancel.click();
     assert.equal(fixture.actions.hidden, false, "cancelling a dirty row edit preserves its applied change");
-    assert.equal(fixture.status.textContent, "1 pending change");
+    assert.equal(fixture.status.textContent, "1 unsaved browser change");
 
     second.controls.change.click();
     second.controls.apply.click();
-    assert.equal(fixture.status.textContent, "2 pending changes");
+    assert.equal(fixture.status.textContent, "2 unsaved browser changes");
 });
 
 test("failed validation and server-loaded draft operations do not create browser-pending changes", () => {
@@ -185,7 +185,7 @@ test("save actions share the hidden pending region while Remove draft change sta
     const actions = indexMarkup.match(/<div class="settings-actions" hidden>[\s\S]*?<\/div>\s*<\/div>/)?.[0] ?? "";
     assert.match(actions, /Save \{count\} \{noun\} live/);
     assert.match(actions, /Add \{count\} \{noun\} to shared draft/);
-    assert.match(actions, /Discard pending changes/);
+    assert.match(actions, /Discard browser changes/);
     assert.match(actions, /role="status" aria-live="polite"/);
     assert.doesNotMatch(actions, /Remove draft change/);
     assert.match(rowMarkup, /Remove draft change/);
@@ -403,7 +403,7 @@ test("discardPendingChanges restores dirty rows to their server-rendered control
 
 test("discard-and-continue pipeline cleans rows before subsequent lifecycle confirmation", () => {
     const script = readFileSync(new URL("../../Clc.PatronRegistration.Web/wwwroot/js/settings.js", import.meta.url), "utf8");
-    const handler = script.match(/\[data-guard-discard\][\s\S]*?\n    \}\);/)?.[0] ?? "";
+    const handler = [...script.matchAll(/document\.querySelector\("\[data-guard-discard\]"\)[\s\S]*?\n    \}\);/g)].at(-1)?.[0] ?? "";
     assert.match(handler, /discardPendingChanges\(\)/);
     assert.match(handler, /continuePipeline\(action, true\)/);
     assert.doesNotMatch(handler, /disableDirtyMutations/);
@@ -472,4 +472,48 @@ test("discarding a revealed sensitive edit restores password and accessible reve
     assert.equal(row.controls.reveal.textContent, "Reveal secret");
     assert.equal(row.controls.reveal.getAttribute("aria-expanded"), "false");
     assert.equal(row.controls.reveal.getAttribute("aria-label"), "Reveal Example");
+});
+
+test("shared draft filter markup and CSS keep the checkbox intrinsic", () => {
+    const markup = readFileSync(new URL("../../Clc.PatronRegistration.Web/Views/Settings/Index.cshtml", import.meta.url), "utf8");
+    const css = readFileSync(new URL("../../Clc.PatronRegistration.Web/wwwroot/css/settings.css", import.meta.url), "utf8");
+    assert.match(markup, /id="draft-only-filter"[\s\S]*Show shared draft changes only/);
+    assert.match(css, /\.settings-search input\[type="search"\]/);
+    assert.doesNotMatch(css, /\.settings-search input\s*\{/);
+    assert.match(css, /\.inline-check input\[type="checkbox"\][\s\S]*width:\s*auto/);
+});
+
+test("draft summaries identify proposed values without automatically opening rows", () => {
+    const row = readFileSync(new URL("../../Clc.PatronRegistration.Web/Views/Settings/_SettingRow.cshtml", import.meta.url), "utf8");
+    assert.match(row, /hasDraftOperation \? \$"Draft: \{presentation\.Value\}"/);
+    assert.match(row, /definition\.IsSensitive/);
+    assert.doesNotMatch(row, /<details class="setting-row"[^>]*open=/);
+});
+
+test("review action is conditional, client-side, and preserves the search query", () => {
+    const markup = readFileSync(new URL("../../Clc.PatronRegistration.Web/Views/Settings/Index.cshtml", import.meta.url), "utf8");
+    const script = readFileSync(new URL("../../Clc.PatronRegistration.Web/wwwroot/js/settings.js", import.meta.url), "utf8");
+    assert.match(markup, /if \(draftChangeCount > 0\)[\s\S]*data-review-draft>Review @draftChangeCount shared draft/);
+    assert.match(script, /function reviewDraftChanges\(\)[\s\S]*draftOnly\.checked = true;[\s\S]*applyFilters\(\)/);
+    assert.doesNotMatch(script.match(/function reviewDraftChanges\(\)[\s\S]*?\n    \}/)?.[0] ?? "", /search\.value\s*=/);
+    assert.match(script, /scrollIntoView/);
+});
+
+test("filter sessions capture and restore disclosure state and report empty results", () => {
+    const script = readFileSync(new URL("../../Clc.PatronRegistration.Web/wwwroot/js/settings.js", import.meta.url), "utf8");
+    assert.match(script, /filtering && preFilterDisclosure === null/);
+    assert.match(script, /new Map\(categories\.map/);
+    assert.match(script, /preFilterDisclosure\.forEach/);
+    assert.match(script, /preFilterDisclosure = null/);
+    assert.match(script, /No settings match your search\./);
+    assert.match(script, /No shared draft changes match your search\./);
+});
+
+test("explicit browser discard uses restoration rather than reload or submission", () => {
+    const script = readFileSync(new URL("../../Clc.PatronRegistration.Web/wwwroot/js/settings.js", import.meta.url), "utf8");
+    const handler = script.match(/document\.querySelector\("\[data-discard-pending\]"\)[\s\S]*?\n    \}\);/)?.[0] ?? "";
+    assert.match(handler, /explicitDiscard/);
+    assert.match(handler, /showModal/);
+    assert.doesNotMatch(handler, /reload|requestSubmit|location\./);
+    assert.match(script, /action\?\.explicitDiscard[\s\S]*discardPendingChanges|discardPendingChanges\(\)[\s\S]*action\?\.explicitDiscard/);
 });

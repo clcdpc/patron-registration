@@ -35,7 +35,7 @@
         const count = settingsForm.querySelectorAll('.setting-row[data-dirty="true"]').length;
         const status = actions.querySelector(".pending-changes-status");
         actions.hidden = count === 0;
-        if (status) status.textContent = count === 0 ? "" : `${count} pending ${count === 1 ? "change" : "changes"}`;
+        if (status) status.textContent = count === 0 ? "" : `${count} unsaved browser ${count === 1 ? "change" : "changes"}`;
         actions.querySelectorAll?.("[data-label-template]")?.forEach((button) => {
             button.textContent = button.dataset.labelTemplate.replace("{count}", count).replace("{noun}", count === 1 ? "change" : "changes");
         });
@@ -248,10 +248,16 @@
     });
 
     const categories = [...document.querySelectorAll(".setting-category, .dynamic-settings")];
-    categories.forEach((category) => category.dataset.initialOpen = category.open.toString());
     const draftOnly = document.querySelector("#draft-only-filter");
+    const filterEmpty = document.querySelector("#settings-filter-empty");
+    const searchRegion = document.querySelector(".settings-search");
+    let preFilterDisclosure = null;
     function applyFilters() {
         const query = search?.value.trim().toLowerCase() || "";
+        const filtering = Boolean(query) || Boolean(draftOnly?.checked);
+        if (filtering && preFilterDisclosure === null) {
+            preFilterDisclosure = new Map(categories.map((category) => [category, category.open]));
+        }
         let visible = 0;
         document.querySelectorAll(".setting-row").forEach((row) => {
             const matchesDraft = !draftOnly?.checked || row.dataset.draftChange === "true";
@@ -261,19 +267,40 @@
         });
         categories.forEach((category) => {
             const hasMatch = category.querySelector(".setting-row:not([hidden])") !== null;
-            category.hidden = (Boolean(query) || draftOnly?.checked) && !hasMatch;
-            category.open = (query || draftOnly?.checked) && hasMatch ? true : category.dataset.initialOpen === "true";
+            category.hidden = filtering && !hasMatch;
+            if (filtering) category.open = hasMatch;
         });
-        if (searchStatus) {
-            searchStatus.textContent = query || draftOnly?.checked
-                ? draftOnly?.checked
-                    ? `${visible} draft ${visible === 1 ? "change" : "changes"} found`
-                    : `${visible} ${visible === 1 ? "setting" : "settings"} found`
-                : "";
+        if (!filtering && preFilterDisclosure !== null) {
+            preFilterDisclosure.forEach((wasOpen, category) => { category.open = wasOpen; category.hidden = false; });
+            preFilterDisclosure = null;
         }
+        const emptyMessage = visible === 0 && filtering
+            ? draftOnly?.checked ? "No shared draft changes match your search." : "No settings match your search."
+            : "";
+        if (filterEmpty) {
+            filterEmpty.textContent = emptyMessage;
+            filterEmpty.hidden = !emptyMessage;
+        }
+        if (searchStatus) {
+            searchStatus.textContent = emptyMessage || (filtering
+                ? draftOnly?.checked
+                    ? `${visible} shared draft ${visible === 1 ? "change" : "changes"} found`
+                    : `${visible} ${visible === 1 ? "setting" : "settings"} found`
+                : "");
+        }
+        return visible;
     }
     search?.addEventListener("input", applyFilters);
     draftOnly?.addEventListener("change", applyFilters);
+    function reviewDraftChanges() {
+        if (!draftOnly) return;
+        draftOnly.checked = true;
+        const visible = applyFilters();
+        searchRegion?.scrollIntoView?.({ behavior: "smooth", block: "start" });
+        const first = visible ? document.querySelector('.setting-row[data-draft-change="true"]:not([hidden])') : null;
+        (first || draftOnly || search)?.focus?.();
+    }
+    document.querySelector("[data-review-draft]")?.addEventListener("click", reviewDraftChanges);
 
     document.querySelectorAll(".html-preview").forEach((frame) => {
         const source = frame.previousElementSibling;
@@ -298,6 +325,23 @@
     }
     function unsavedMessage(count) {
         return `You have ${count} ${count === 1 ? "change" : "changes"} that ${count === 1 ? "has" : "have"} not been saved.`;
+    }
+    function setUnsavedDialogMode(mode, count = 0) {
+        const explicit = mode === "explicit-discard";
+        const title = unsavedDialog?.querySelector("#unsaved-title");
+        const message = unsavedDialog?.querySelector("[data-unsaved-message]");
+        const explanation = unsavedDialog?.querySelector("[data-unsaved-explanation]");
+        const confirm = unsavedDialog?.querySelector("[data-guard-discard]");
+        if (title) title.textContent = explicit ? "Discard browser changes?" : "Unsaved changes";
+        if (message) message.textContent = explicit
+            ? "This will discard changes made in this browser."
+            : unsavedMessage(count);
+        if (explanation) explanation.textContent = explicit
+            ? "Changes already saved to the shared draft or live settings will not be affected."
+            : "Continuing will revert changes made in this browser. Changes already saved to the shared draft or live settings will not be affected.";
+        if (confirm) confirm.textContent = explicit
+            ? `Discard ${count} browser ${count === 1 ? "change" : "changes"}`
+            : "Discard changes and continue";
     }
     function disableDirtyMutations() {
         form?.querySelectorAll('.setting-row[data-dirty="true"] .change-index, .setting-row[data-dirty="true"] .change-key, .setting-row[data-dirty="true"] .operation, .setting-row[data-dirty="true"] .setting-value')
@@ -331,7 +375,7 @@
         const count = dirtyCount();
         if (!skipDirty && count) {
             pending = action;
-            unsavedDialog.querySelector("[data-unsaved-message]").textContent = unsavedMessage(count);
+            setUnsavedDialogMode("guard", count);
             unsavedDialog._trigger = action.trigger;
             unsavedDialog.showModal();
             unsavedDialog.querySelector("[data-dialog-cancel]").focus();
@@ -391,7 +435,7 @@
         if (!dirtyCount()) { submitting = true; action(); return true; }
         pending = { navigate: action, trigger };
         unsavedDialog._trigger = trigger;
-        unsavedDialog.querySelector("[data-unsaved-message]").textContent = unsavedMessage(dirtyCount());
+        setUnsavedDialogMode("guard", dirtyCount());
         unsavedDialog.showModal();
         unsavedDialog.querySelector("[data-dialog-cancel]").focus();
         return false;
@@ -438,7 +482,13 @@
         unsavedDialog.close();
         const action = pending;
         discardPendingChanges();
-        if (action?.navigate) { submitting = true; action.navigate(); }
+        if (action?.explicitDiscard) {
+            pending = null;
+            submitting = false;
+            const changeButton = action.focusTarget?.querySelector?.(".edit-setting");
+            if (changeButton) changeButton.focus();
+            else search?.focus?.();
+        } else if (action?.navigate) { submitting = true; action.navigate(); }
         else if (action) continuePipeline(action, true);
     });
     document.querySelector("[data-confirm-live-preview]")?.addEventListener("click", () => {
@@ -447,7 +497,17 @@
         if (action) continuePipeline(action, true, true);
     });
     document.querySelector("[data-discard-pending]")?.addEventListener("click", (event) => {
-        navigationGuard(() => location.reload(), event.currentTarget);
+        const affectedRows = [
+            ...(form?.querySelectorAll('.setting-row[data-dirty="true"]') || []),
+            ...(form?.querySelectorAll('.setting-row[data-candidate-operation]') || [])
+        ];
+        const uniqueRows = [...new Set(affectedRows)];
+        if (!uniqueRows.length) return;
+        pending = { explicitDiscard: true, focusTarget: uniqueRows[0] };
+        unsavedDialog._trigger = event.currentTarget;
+        setUnsavedDialogMode("explicit-discard", uniqueRows.length);
+        unsavedDialog.showModal();
+        unsavedDialog.querySelector("[data-dialog-cancel]").focus();
     });
     window.addEventListener?.("beforeunload", (event) => {
         if (!submitting && (dirtyCount() || hasCandidate())) { event.preventDefault(); event.returnValue = ""; }
@@ -469,7 +529,7 @@
     }
     globalThis.SettingsWorkflow = {
         continuePipeline, lifecycleSubmit, needsLiveConfirmation, disableDirtyMutations, discardPendingChanges,
-        restoreContextControl, applyFilters, copyPreviewUrl, unsavedMessage, cancelWorkflowDialog, bindDialogCancellation,
+        restoreContextControl, applyFilters, reviewDraftChanges, copyPreviewUrl, unsavedMessage, setUnsavedDialogMode, cancelWorkflowDialog, bindDialogCancellation,
         workflowState: () => ({ pending, submitting, approved }),
         setWorkflowState: (state) => { pending = state.pending; submitting = state.submitting; approved = state.approved; }
     };
