@@ -64,6 +64,7 @@ public sealed record SettingDefinition(string Key, string DisplayName, string De
     SettingGroup Group = SettingGroup.Ordinary, bool IsSensitive = false, bool AllowEmpty = true,
     IReadOnlyList<string>? AllowedValues = null, int SortOrder = 0, SettingCategory? Category = null)
 {
+    public const int MaximumExpirationDateYears = 100;
     private static readonly HashSet<string> PositiveIdentifierKeys = new(StringComparer.OrdinalIgnoreCase)
     {
         "add_to_record_set_id",
@@ -110,6 +111,10 @@ public sealed record SettingDefinition(string Key, string DisplayName, string De
         }
         return ValueType switch
         {
+            SettingValueType.NullableInteger when Key.Equals("expiration_date_years", StringComparison.OrdinalIgnoreCase) &&
+                (!int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var expirationYears) ||
+                 expirationYears < 0 || expirationYears > MaximumExpirationDateYears) =>
+                $"Enter a whole number from 0 through {MaximumExpirationDateYears}, or leave empty.",
             SettingValueType.Boolean when !bool.TryParse(value, out _) => "Enter true or false.",
             SettingValueType.Integer when !int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out _) => "Enter a whole number.",
             SettingValueType.NullableInteger when value.Length > 0 && !int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out _) => "Enter a whole number or leave empty.",

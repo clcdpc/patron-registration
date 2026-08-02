@@ -11,6 +11,22 @@ namespace Clc.PatronRegistration.Tests;
 [TestClass]
 public class SettingsAdministrationTests
 {
+    [DataTestMethod]
+    [DataRow(null, true)]
+    [DataRow("", true)]
+    [DataRow("0", true)]
+    [DataRow("1", true)]
+    [DataRow("100", true)]
+    [DataRow("101", false)]
+    [DataRow("-1", false)]
+    [DataRow("9999", false)]
+    [DataRow("not-a-number", false)]
+    public void ExpirationDateYears_UsesBoundedNullableRange(string? value, bool valid)
+    {
+        var definition = new SettingCatalog().All.Single(item => item.Key == "expiration_date_years");
+        Assert.AreEqual(valid, definition.Validate(value ?? string.Empty) is null);
+    }
+
     private static readonly string[] SupportedOrdinaryKeys =
     [
         "header_image_url", "css_file", "warning_text", "custom_form_footer_html", "registration_text", "registration_form_header",

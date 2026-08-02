@@ -457,7 +457,7 @@ public class SettingsControllerTests
     public void SaveToSharedDraft_ConcurrentRepositoryChangeUsesFriendlyRecovery()
     {
         var repository = new Mock<ISettingsAdministrationRepository>();
-        repository.Setup(service => service.SaveToSharedDraft(3, string.Empty, null,
+        repository.Setup(service => service.SaveToSharedDraft(3, string.Empty, It.IsAny<long>(), null,
                 It.IsAny<IReadOnlyList<SettingMutation>>(), It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), It.IsAny<AuditContext>()))
             .Throws(new System.Data.DBConcurrencyException("The form is changing."));
         var controller = CreateController(repository, LibraryAuthorization());
@@ -652,7 +652,7 @@ public class SettingsControllerTests
     public void SuccessfulDraftCreation_ReportsFirstChanges()
     {
         var repository = new Mock<ISettingsAdministrationRepository>();
-        repository.Setup(service => service.SaveToSharedDraft(3, string.Empty, null,
+        repository.Setup(service => service.SaveToSharedDraft(3, string.Empty, It.IsAny<long>(), null,
             It.IsAny<IReadOnlyList<SettingMutation>>(), It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), It.IsAny<AuditContext>()))
             .Returns(new SaveToDraftResult(14, true));
         var controller = CreateController(repository, LibraryAuthorization());
@@ -672,7 +672,7 @@ public class SettingsControllerTests
     public void SaveToSharedDraft_ExistingDraftReportsCorrectCount(int count, string message)
     {
         var repository = new Mock<ISettingsAdministrationRepository>();
-        repository.Setup(service => service.SaveToSharedDraft(3, string.Empty, 24,
+        repository.Setup(service => service.SaveToSharedDraft(3, string.Empty, It.IsAny<long>(), 24,
                 It.IsAny<IReadOnlyList<SettingMutation>>(), It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), It.IsAny<AuditContext>()))
             .Returns(new SaveToDraftResult(24, false));
         var controller = CreateController(repository, LibraryAuthorization());
@@ -693,9 +693,9 @@ public class SettingsControllerTests
     public void SaveToSharedDraft_ForwardsExpectedDraftIdAndNull()
     {
         var repository = new Mock<ISettingsAdministrationRepository>();
-        repository.Setup(service => service.SaveToSharedDraft(3, string.Empty, It.IsAny<long?>(),
+        repository.Setup(service => service.SaveToSharedDraft(3, string.Empty, It.IsAny<long>(), It.IsAny<long?>(),
                 It.IsAny<IReadOnlyList<SettingMutation>>(), It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), It.IsAny<AuditContext>()))
-            .Returns((int _, string _, long? expected, IReadOnlyList<SettingMutation> _, IReadOnlyDictionary<string, SettingDefinition> _, AuditContext _) =>
+            .Returns((int _, string _, long expectedVersion, long? expected, IReadOnlyList<SettingMutation> _, IReadOnlyDictionary<string, SettingDefinition> _, AuditContext _) =>
                 new SaveToDraftResult(expected ?? 25, !expected.HasValue));
         var controller = CreateController(repository, LibraryAuthorization());
         SaveToSharedDraftRequest Request(long? expected) => new()
@@ -708,9 +708,9 @@ public class SettingsControllerTests
         controller.ModelState.Clear();
         controller.SaveToSharedDraft(Request(null));
 
-        repository.Verify(service => service.SaveToSharedDraft(3, string.Empty, 24,
+        repository.Verify(service => service.SaveToSharedDraft(3, string.Empty, It.IsAny<long>(), 24,
             It.IsAny<IReadOnlyList<SettingMutation>>(), It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), It.IsAny<AuditContext>()), Times.Once);
-        repository.Verify(service => service.SaveToSharedDraft(3, string.Empty, null,
+        repository.Verify(service => service.SaveToSharedDraft(3, string.Empty, It.IsAny<long>(), null,
             It.IsAny<IReadOnlyList<SettingMutation>>(), It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), It.IsAny<AuditContext>()), Times.Once);
     }
 
@@ -1139,7 +1139,7 @@ public class SettingsControllerTests
     {
         var repository = RaceRepository();
         repository.Setup(service => service.GetPreviewLink(12)).Returns(PreviewLink(NonSensitiveDraft()));
-        repository.Setup(service => service.CreatePreviewLink(24, It.IsAny<byte[]>(), false, 3,
+        repository.Setup(service => service.CreatePreviewLink(24, It.IsAny<byte[]>(), false, 3, It.IsAny<DateTime>(),
                 It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), false, It.IsAny<AuditContext>()))
             .Throws(new UnauthorizedAccessException());
         repository.Setup(service => service.ReplacePreviewLinkMode(12, It.IsAny<byte[]>(), true,
@@ -1163,7 +1163,7 @@ public class SettingsControllerTests
     public void SavingAfterAnotherAdministratorDiscardedDraft_RedirectsWithContextualConflictMessage()
     {
         var repository = RaceRepository();
-        repository.Setup(service => service.SaveToSharedDraft(3, string.Empty, 24, It.IsAny<IReadOnlyList<SettingMutation>>(),
+        repository.Setup(service => service.SaveToSharedDraft(3, string.Empty, It.IsAny<long>(), 24, It.IsAny<IReadOnlyList<SettingMutation>>(),
                 It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), It.IsAny<AuditContext>()))
             .Throws(new System.Data.DBConcurrencyException("The shared draft is no longer active."));
         var controller = CreateController(repository, LibraryAuthorization());
@@ -1197,7 +1197,7 @@ public class SettingsControllerTests
         var repository = RaceRepository();
         repository.Setup(service => service.DiscardDraft(24, It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), false, It.IsAny<AuditContext>()))
             .Throws(new System.Data.DBConcurrencyException("The shared draft is no longer active."));
-        repository.Setup(service => service.CreatePreviewLink(24, It.IsAny<byte[]>(), false, 3,
+        repository.Setup(service => service.CreatePreviewLink(24, It.IsAny<byte[]>(), false, 3, It.IsAny<DateTime>(),
                 It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), false, It.IsAny<AuditContext>()))
             .Throws(new System.Data.DBConcurrencyException("The shared draft is no longer active."));
         var controller = CreateController(repository, LibraryAuthorization());

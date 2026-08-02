@@ -92,7 +92,7 @@ namespace Clc.PatronRegistration
 
         [DbConfiguredDisplayName]
         [DbConfiguredRequired]
-        public string User5 { get; set; } = string.Empty;
+        public string? User5 { get; set; } = string.Empty;
 
         [RegularExpression(@"^\d{5}$", ErrorMessage = "Invalid ZIP")]
         [MaxLength(5)]

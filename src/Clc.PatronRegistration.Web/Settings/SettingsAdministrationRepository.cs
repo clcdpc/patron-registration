@@ -161,12 +161,15 @@ public interface ISettingsAdministrationRepository
     long GetCacheGeneration();
     SettingDraft? GetDraft(long draftId);
     SettingDraft? GetActiveDraft(int organizationId, string formCode);
+    SaveToDraftResult SaveToSharedDraft(int organizationId, string formCode, long expectedVersion, long? expectedDraftId,
+        IReadOnlyList<SettingMutation> changes, IReadOnlyDictionary<string, SettingDefinition> catalog, AuditContext audit);
     SaveToDraftResult SaveToSharedDraft(int organizationId, string formCode, long? expectedDraftId,
         IReadOnlyList<SettingMutation> changes, IReadOnlyDictionary<string, SettingDefinition> catalog, AuditContext audit);
     void RemoveDraftChange(long draftId, string settingKey, IReadOnlyDictionary<string, SettingDefinition> catalog, bool canManageSensitive, AuditContext audit);
     void CommitDraft(long draftId, IReadOnlyDictionary<string, SettingDefinition> catalog, bool canManageSensitive, AuditContext audit);
     void DiscardDraft(long draftId, IReadOnlyDictionary<string, SettingDefinition> catalog, bool canManageSensitive, AuditContext audit);
     void DirectSave(int organizationId, string formCode, long expectedVersion, IReadOnlyList<SettingMutation> changes, IReadOnlyDictionary<string, SettingDefinition> catalog, AuditContext audit);
+    long CreatePreviewLink(long draftId, byte[] tokenHash, bool allowLiveSubmission, int operationalBranchId, DateTime expiresAtUtc, IReadOnlyDictionary<string, SettingDefinition> catalog, bool canManageSensitive, AuditContext audit);
     long CreatePreviewLink(long draftId, byte[] tokenHash, bool allowLiveSubmission, int operationalBranchId, IReadOnlyDictionary<string, SettingDefinition> catalog, bool canManageSensitive, AuditContext audit);
     PreviewContextSnapshot? ResolvePreviewContext(byte[] tokenHash, DateTime nowUtc);
     PreviewLinkRecord? GetPreviewLink(long previewLinkId);
@@ -251,7 +254,7 @@ public sealed class SettingsAdministrationRepository : ISettingsAdministrationRe
         return new SettingDraft(row.DraftId, row.OrganizationId, row.FormCode, row.BaselineVersion, Enum.Parse<DraftStatus>(row.Status), changes);
     }
 
-    public SaveToDraftResult SaveToSharedDraft(int organizationId, string formCode, long? expectedDraftId,
+    public SaveToDraftResult SaveToSharedDraft(int organizationId, string formCode, long expectedVersion, long? expectedDraftId,
         IReadOnlyList<SettingMutation> changes, IReadOnlyDictionary<string, SettingDefinition> catalog, AuditContext audit)
     {
         if (changes.Count == 0) throw new InvalidOperationException("Submit at least one setting change.");
@@ -259,9 +262,10 @@ public sealed class SettingsAdministrationRepository : ISettingsAdministrationRe
         formCode = FormCodeNormalizer.Normalize(formCode);
         using var connection = Open();
         using var transaction = connection.BeginTransaction(IsolationLevel.Serializable);
-        var existing = connection.QuerySingleOrDefault<long?>(
-            "select DraftId from dbo.RegistrationSettingDrafts with(updlock,holdlock) where OrganizationId=@organizationId and FormCode=@formCode and Status='Active'",
+        var activeDraft = connection.QuerySingleOrDefault<ActiveDraftRow>(
+            "select DraftId,BaselineVersion from dbo.RegistrationSettingDrafts with(updlock,holdlock) where OrganizationId=@organizationId and FormCode=@formCode and Status='Active'",
             new { organizationId, formCode }, transaction);
+        var existing = activeDraft?.DraftId;
         if (expectedDraftId.HasValue && existing != expectedDraftId)
         {
             throw new DBConcurrencyException("The expected shared draft is no longer active.");
@@ -273,11 +277,19 @@ public sealed class SettingsAdministrationRepository : ISettingsAdministrationRe
             // Lock order: draft range, scope version, then draft changes.
             EnsureVersionRow(connection, transaction, organizationId, formCode);
             var version = ReadVersion(connection, transaction, organizationId, formCode);
+            if (version != expectedVersion)
+            {
+                throw new DBConcurrencyException("Live settings changed after this page was loaded.");
+            }
             draftId = connection.QuerySingle<long>(@"
 insert dbo.RegistrationSettingDrafts(OrganizationId,FormCode,BaselineVersion,Status,CreatedBy,ModifiedBy)
-output inserted.DraftId values(@organizationId,@formCode,@version,'Active',@actor,@actor)",
-                new { organizationId, formCode, version, actor = audit.ActorName ?? "unknown" }, transaction);
+output inserted.DraftId values(@organizationId,@formCode,@expectedVersion,'Active',@actor,@actor)",
+                new { organizationId, formCode, expectedVersion, actor = audit.ActorName ?? "unknown" }, transaction);
             InsertAudit(connection, transaction, "DraftCreated", true, audit, draftId: draftId);
+        }
+        else if (!expectedDraftId.HasValue && activeDraft!.BaselineVersion != expectedVersion)
+        {
+            throw new DBConcurrencyException("Live settings changed after this page was loaded.");
         }
         var containedSensitiveChanges = DraftContainsSensitiveChanges(connection, transaction, draftId, catalog);
         foreach (var change in changes)
@@ -319,6 +331,10 @@ if @@ROWCOUNT=0
         transaction.Commit();
         return new SaveToDraftResult(draftId, created);
     }
+
+    public SaveToDraftResult SaveToSharedDraft(int organizationId, string formCode, long? expectedDraftId,
+        IReadOnlyList<SettingMutation> changes, IReadOnlyDictionary<string, SettingDefinition> catalog, AuditContext audit) =>
+        SaveToSharedDraft(organizationId, formCode, GetVersion(organizationId, formCode), expectedDraftId, changes, catalog, audit);
 
     public void RemoveDraftChange(long draftId, string settingKey, IReadOnlyDictionary<string, SettingDefinition> catalog, bool canManageSensitive, AuditContext audit)
     {
@@ -408,20 +424,27 @@ update dbo.RegistrationSettingPreviewLinks set RevokedAtUtc=coalesce(RevokedAtUt
         transaction.Commit();
     }
 
-    public long CreatePreviewLink(long draftId, byte[] tokenHash, bool allowLiveSubmission, int operationalBranchId, IReadOnlyDictionary<string, SettingDefinition> catalog, bool canManageSensitive, AuditContext audit)
+    public long CreatePreviewLink(long draftId, byte[] tokenHash, bool allowLiveSubmission, int operationalBranchId, DateTime expiresAtUtc, IReadOnlyDictionary<string, SettingDefinition> catalog, bool canManageSensitive, AuditContext audit)
     {
         using var connection = Open();
         using var transaction = connection.BeginTransaction(IsolationLevel.Serializable);
         EnsureActiveDraft(connection, transaction, draftId);
+        if (expiresAtUtc.Kind != DateTimeKind.Utc || expiresAtUtc <= DateTime.UtcNow)
+            throw new ArgumentOutOfRangeException(nameof(expiresAtUtc));
         EnsureCanManageRestrictedDraft(connection, transaction, draftId, catalog, canManageSensitive);
         var previewLinkId = connection.QuerySingle<long>(@"
-insert dbo.RegistrationSettingPreviewLinks(DraftId,TokenHash,AllowLiveSubmission,OperationalBranchId,CreatedBy,ModifiedBy)
-output inserted.PreviewLinkId values(@draftId,@tokenHash,@allowLiveSubmission,@operationalBranchId,@actor,@actor)",
-            new { draftId, tokenHash, allowLiveSubmission, operationalBranchId, actor = audit.ActorName ?? "unknown" }, transaction);
+insert dbo.RegistrationSettingPreviewLinks(DraftId,TokenHash,AllowLiveSubmission,OperationalBranchId,CreatedBy,ModifiedBy,ExpiresAtUtc)
+output inserted.PreviewLinkId values(@draftId,@tokenHash,@allowLiveSubmission,@operationalBranchId,@actor,@actor,@expiresAtUtc)",
+            new { draftId, tokenHash, allowLiveSubmission, operationalBranchId, expiresAtUtc, actor = audit.ActorName ?? "unknown" }, transaction);
         InsertAudit(connection, transaction, "PreviewLinkCreated", true, audit, draftId: draftId, previewLinkId: previewLinkId);
         transaction.Commit();
         return previewLinkId;
     }
+
+    public long CreatePreviewLink(long draftId, byte[] tokenHash, bool allowLiveSubmission, int operationalBranchId,
+        IReadOnlyDictionary<string, SettingDefinition> catalog, bool canManageSensitive, AuditContext audit) =>
+        CreatePreviewLink(draftId, tokenHash, allowLiveSubmission, operationalBranchId,
+            DateTime.UtcNow.AddHours(24), catalog, canManageSensitive, audit);
 
     public PreviewContextSnapshot? ResolvePreviewContext(byte[] tokenHash, DateTime nowUtc)
     {
@@ -453,7 +476,7 @@ select p.PreviewLinkId,p.DraftId,p.TokenHash,p.AllowLiveSubmission,p.RevokedAtUt
 from dbo.RegistrationSettingPreviewLinks p with(updlock,holdlock)
 join dbo.RegistrationSettingDrafts d on d.DraftId=p.DraftId
 where p.TokenHash=@tokenHash and p.DraftId=@draftId and p.RevokedAtUtc is null
- and (p.ExpiresAtUtc is null or p.ExpiresAtUtc>@nowUtc) and d.Status='Active'",
+ and p.ExpiresAtUtc>@nowUtc and d.Status='Active'",
             new { tokenHash, draftId = candidateDraftId.Value, nowUtc }, transaction);
         if (link is null)
         {
@@ -940,7 +963,7 @@ select p.PreviewLinkId
 from dbo.RegistrationSettingPreviewLinks p with(updlock,holdlock)
 join dbo.RegistrationSettingDrafts d on d.DraftId=p.DraftId
 where p.PreviewLinkId=@previewLinkId and p.DraftId=@candidateDraftId and p.RevokedAtUtc is null
- and (p.ExpiresAtUtc is null or p.ExpiresAtUtc>@nowUtc) and d.Status='Active'",
+ and p.ExpiresAtUtc>@nowUtc and d.Status='Active'",
             new { previewLinkId, candidateDraftId, nowUtc }, transaction);
         if (!activeLink.HasValue)
         {
@@ -1021,4 +1044,5 @@ values(
     private sealed record DraftRow(long DraftId, int OrganizationId, string FormCode, long BaselineVersion, string Status);
     private sealed record DraftChangeRow(string SettingKey, string Operation, string? Value);
     private sealed record PreviewLinkModeRow(bool AllowLiveSubmission, int OperationalBranchId, DateTime? ExpiresAtUtc);
+    private sealed record ActiveDraftRow(long DraftId, long BaselineVersion);
 }
