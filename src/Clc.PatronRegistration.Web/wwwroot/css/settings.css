@@ -661,22 +661,23 @@ body.settings-administration-page #regFormContainer {
 
 .preview-tools > h3, .preview-links > h4 { margin: 0 0 .4rem }
 .preview-tools > form { display: grid; gap: .5rem; min-width: 0 }
-.preview-branch-field { align-items: center; display: flex; flex-wrap: wrap; gap: .4rem .65rem }
+.preview-create-row { align-items: stretch; display: flex; flex-wrap: wrap; gap: var(--draft-control-gap); max-width: 100%; width: fit-content }
+.preview-branch-field { align-items: center; display: flex; flex: 0 1 auto; gap: .4rem .5rem }
 .preview-branch-field label { font-weight: 600 }
 .preview-branch-field select { box-sizing: border-box; max-width: 24rem; min-height: 2.4rem; min-width: min(18rem,100%); width: auto }
 
 .preview-create-actions {
     display: grid;
     gap: var(--draft-control-gap);
-    grid-template-columns: repeat(2,minmax(0,1fr));
-    max-width: 48rem;
+    grid-template-columns: minmax(13rem,15rem) minmax(16rem,19rem);
+    max-width: 100%;
 }
 
 .preview-create-option {
     box-sizing: border-box;
     display: grid;
     gap: .15rem;
-    min-height: 3.75rem;
+    min-height: 3.25rem;
     min-width: 0;
     overflow-wrap: anywhere;
     padding: .45rem .6rem;
@@ -695,8 +696,9 @@ body.settings-administration-page #regFormContainer {
     border: 0;
     border-radius: 0;
     display: grid;
-    gap: .4rem .75rem;
-    grid-template-columns: minmax(8rem,auto) minmax(13rem,1fr) auto auto;
+    gap: .4rem .55rem;
+    grid-template-columns: minmax(8rem,max-content) minmax(13rem,24rem) max-content max-content;
+    justify-content: start;
     padding: .45rem .6rem
 }
 .preview-link-item + .preview-link-item { border-top: 1px solid #bbb }
@@ -722,7 +724,9 @@ dialog::backdrop { background:rgb(0 0 0 / .55) }
     .draft-panel { padding-inline: .75rem }
     .draft-actions { align-items: stretch }
     .draft-actions button { width: 100% }
+    .preview-create-row { width: 100% }
     .preview-branch-field { align-items: stretch; flex-direction: column }
+    .preview-branch-field, .preview-create-actions { flex-basis: 100%; width: 100% }
     .preview-branch-field select { max-width: 100%; min-width: 0; width: 100% }
     .preview-create-actions { grid-template-columns: 1fr }
     .draft-panel .button-row { align-items:stretch; flex-direction:column }

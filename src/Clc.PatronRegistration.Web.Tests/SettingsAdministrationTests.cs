@@ -422,7 +422,12 @@ public class SettingsAdministrationTests
             StringAssert.Contains(index, action);
 
         StringAssert.Contains(index, "<section class=\"preview-tools\" aria-labelledby=\"preview-tools-title\">");
-        StringAssert.Contains(index, "<div class=\"preview-create-actions\" role=\"group\" aria-label=\"Create preview link\">");
+        var createRow = index.IndexOf("<div class=\"preview-create-row\">", StringComparison.Ordinal);
+        Assert.IsTrue(createRow >= 0);
+        var branchField = index.IndexOf("<div class=\"preview-branch-field\">", createRow, StringComparison.Ordinal);
+        Assert.IsTrue(branchField > createRow);
+        var createActions = index.IndexOf("<div class=\"preview-create-actions\" role=\"group\" aria-label=\"Create preview link\">", branchField, StringComparison.Ordinal);
+        Assert.IsTrue(createActions > branchField);
         Assert.IsFalse(index.Contains("id=\"preview-create-title\"", StringComparison.Ordinal));
         var safeAction = index.IndexOf("type=\"submit\" name=\"AllowLiveSubmission\" value=\"false\" class=\"preview-create-option preview-create-safe\"", StringComparison.Ordinal);
         var liveAction = index.IndexOf("type=\"submit\" name=\"AllowLiveSubmission\" value=\"true\" class=\"preview-create-option preview-create-live\"", StringComparison.Ordinal);

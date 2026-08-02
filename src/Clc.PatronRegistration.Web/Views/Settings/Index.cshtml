@@ -102,28 +102,30 @@
       <h3 id="preview-tools-title">Preview tools</h3>
       <form asp-action="CreatePreviewLink" asp-route-draftId="@Model.ActiveDraft.DraftId" method="post" data-preview-form data-guard-action>
         @Html.AntiForgeryToken()<input type="hidden" name="OrganizationId" value="@Model.OrganizationId" /><input type="hidden" name="FormCode" value="@Model.FormCode" />
-        <div class="preview-branch-field">
-          <label for="preview-operational-branch">Preview as branch</label>
-          <select id="preview-operational-branch" name="OperationalBranchId" required>
-              @if (Model.PreviewBranches.Count != 1)
-              {
-                  <option value="">Select a branch</option>
-              }
-              @foreach (var branch in Model.PreviewBranches)
-              {
-                  <option value="@branch.OrganizationId" selected="@(Model.PreviewBranches.Count == 1)">@branch.DisplayName</option>
-              }
-          </select>
-        </div>
-        <div class="preview-create-actions" role="group" aria-label="Create preview link">
-          <button type="submit" name="AllowLiveSubmission" value="false" class="preview-create-option preview-create-safe">
-            <strong>Create safe preview</strong>
-            <span>Cannot create patron records.</span>
-          </button>
-          <button type="submit" name="AllowLiveSubmission" value="true" class="preview-create-option preview-create-live">
-            <strong>Create live-submission preview</strong>
-            <span>Can create real patron records.</span>
-          </button>
+        <div class="preview-create-row">
+          <div class="preview-branch-field">
+            <label for="preview-operational-branch">Preview as branch</label>
+            <select id="preview-operational-branch" name="OperationalBranchId" required>
+                @if (Model.PreviewBranches.Count != 1)
+                {
+                    <option value="">Select a branch</option>
+                }
+                @foreach (var branch in Model.PreviewBranches)
+                {
+                    <option value="@branch.OrganizationId" selected="@(Model.PreviewBranches.Count == 1)">@branch.DisplayName</option>
+                }
+            </select>
+          </div>
+          <div class="preview-create-actions" role="group" aria-label="Create preview link">
+            <button type="submit" name="AllowLiveSubmission" value="false" class="preview-create-option preview-create-safe">
+              <strong>Create safe preview</strong>
+              <span>Cannot create patron records.</span>
+            </button>
+            <button type="submit" name="AllowLiveSubmission" value="true" class="preview-create-option preview-create-live">
+              <strong>Create live-submission preview</strong>
+              <span>Can create real patron records.</span>
+            </button>
+          </div>
         </div>
       </form>
       @if (Model.PreviewLinks.Count > 0)
