@@ -354,16 +354,22 @@
         updatePendingActions(settingsForm);
         clearEditSessionStatus(settingsForm);
     }
-    function needsLiveConfirmation(targetForm) {
-        if (targetForm.dataset.requiresLiveConfirm?.toLowerCase() === "true") return true;
-        return targetForm.matches?.("[data-preview-form]") && targetForm.querySelector('[name="AllowLiveSubmission"]:checked')?.value === "true";
+    function needsLiveConfirmation(targetForm, submitter) {
+        if (targetForm.dataset.requiresLiveConfirm?.toLowerCase() === "true") {
+            return true;
+        }
+        if (!targetForm.matches?.("[data-preview-form]")) {
+            return false;
+        }
+        return submitter?.name === "AllowLiveSubmission"
+            && submitter.value === "true";
     }
     function finalSubmit(action) {
         pending = null;
         submitting = true;
         action.prepare?.();
         approvedForms.add(action.form);
-        action.form.requestSubmit(action.submitter || undefined);
+        action.form.requestSubmit(action.submitter);
     }
     function continuePipeline(action, skipDirty = false, skipLive = false) {
         if (hasCandidate()) {
@@ -380,7 +386,7 @@
             unsavedDialog.querySelector("[data-dialog-cancel]").focus();
             return "dirty";
         }
-        if (!skipLive && needsLiveConfirmation(action.form)) {
+        if (!skipLive && needsLiveConfirmation(action.form, action.submitter)) {
             pending = action;
             liveDialog._trigger = action.trigger;
             liveDialog.showModal();
@@ -511,10 +517,6 @@
     window.addEventListener?.("beforeunload", (event) => {
         if (!submitting && (dirtyCount() || hasCandidate())) { event.preventDefault(); event.returnValue = ""; }
     });
-
-    document.querySelectorAll('[name="AllowLiveSubmission"]').forEach((radio) => radio.addEventListener("change", () => {
-        radio.closest("form")?.querySelector(".preview-live-warning")?.toggleAttribute("hidden", radio.value !== "true" || !radio.checked);
-    }));
 
     async function copyPreviewUrl(clipboard, value, status) {
         try {

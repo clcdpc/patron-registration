@@ -81,14 +81,14 @@
 @if (Model.ActiveDraft is not null)
 {
 <section class="draft-panel" aria-labelledby="draft-panel-title" data-has-draft="true">
-    <div class="draft-status">
+    <header class="draft-summary">
         <h2 id="draft-panel-title">Shared draft #@Model.ActiveDraft.DraftId</h2>
-        <p><strong>@Model.OrganizationName</strong> — <strong>@formDisplayName</strong></p>
-        <p>@draftChangeCount @(draftChangeCount == 1 ? "change" : "changes") stored; @activePreviewCount active preview @(activePreviewCount == 1 ? "link" : "links").</p>
+        <p class="draft-scope"><strong>@Model.OrganizationName</strong> — <strong>@formDisplayName</strong></p>
+        <p class="draft-counts">@draftChangeCount @(draftChangeCount == 1 ? "change" : "changes") stored; @activePreviewCount active preview @(activePreviewCount == 1 ? "link" : "links").</p>
         @if (draftChangeCount == 0) { <p class="draft-empty"><strong>This shared draft has no changes.</strong></p> }
         @if (hasRestrictedDraftChanges && !canManageRestrictedDraft) { <p class="validation-summary" role="status"><strong>Restricted draft:</strong> A global administrator must publish, discard, preview, or remove restricted changes.</p> }
-    </div>
-    <div class="draft-lifecycle" aria-label="Draft lifecycle actions">
+    </header>
+    <div class="draft-actions" role="group" aria-label="Draft lifecycle actions">
     @if (draftChangeCount > 0) {
         <button type="button" data-review-draft>Review @draftChangeCount shared draft @(draftChangeCount == 1 ? "change" : "changes")</button>
     }
@@ -98,24 +98,61 @@
     }
     </div>
     @if (Model.ActiveDraft is not null && canManageDraftLifecycle) {
-    <section class="preview-tools" aria-labelledby="preview-tools-title"><h3 id="preview-tools-title">Preview tools</h3>
+    <section class="preview-tools" aria-labelledby="preview-tools-title">
+      <h3 id="preview-tools-title">Preview tools</h3>
       <form asp-action="CreatePreviewLink" asp-route-draftId="@Model.ActiveDraft.DraftId" method="post" data-preview-form data-guard-action>
         @Html.AntiForgeryToken()<input type="hidden" name="OrganizationId" value="@Model.OrganizationId" /><input type="hidden" name="FormCode" value="@Model.FormCode" />
-        <label for="preview-operational-branch">Preview as branch</label>
-        <select id="preview-operational-branch" name="OperationalBranchId" required>
-            @if (Model.PreviewBranches.Count != 1)
-            {
-                <option value="">Select a branch</option>
-            }
-            @foreach (var branch in Model.PreviewBranches)
-            {
-                <option value="@branch.OrganizationId" selected="@(Model.PreviewBranches.Count == 1)">@branch.DisplayName</option>
-            }
-        </select>
-        <fieldset><legend>Preview mode</legend><label><input type="radio" name="AllowLiveSubmission" value="false" checked /> <strong>Safe preview</strong><small>Submissions are blocked and cannot create patron records.</small></label><label><input type="radio" name="AllowLiveSubmission" value="true" /> <strong>Live-submission preview</strong><small>Submitting this preview can create real patron records.</small></label></fieldset>
-        <p class="preview-live-warning validation-summary" hidden><strong>Warning:</strong> The generated bearer URL can create real patron records.</p><button type="submit">Create preview link</button>
+        <div class="preview-create-row">
+          <div class="preview-branch-field">
+            <label for="preview-operational-branch">Preview as branch</label>
+            <select id="preview-operational-branch" name="OperationalBranchId" required>
+                @if (Model.PreviewBranches.Count != 1)
+                {
+                    <option value="">Select a branch</option>
+                }
+                @foreach (var branch in Model.PreviewBranches)
+                {
+                    <option value="@branch.OrganizationId" selected="@(Model.PreviewBranches.Count == 1)">@branch.DisplayName</option>
+                }
+            </select>
+          </div>
+          <div class="preview-create-actions" role="group" aria-label="Create preview link">
+            <button type="submit" name="AllowLiveSubmission" value="false" class="preview-create-option preview-create-safe">
+              <strong>Create safe preview</strong>
+              <span>Cannot create patron records.</span>
+            </button>
+            <button type="submit" name="AllowLiveSubmission" value="true" class="preview-create-option preview-create-live">
+              <strong>Create live-submission preview</strong>
+              <span>Can create real patron records.</span>
+            </button>
+          </div>
+        </div>
       </form>
-      @if(Model.PreviewLinks.Count > 0){<div class="preview-links" aria-label="Preview link history">@foreach(var link in Model.PreviewLinks.OrderBy(l=>l.RevokedAtUtc.HasValue)){var branch=Model.PreviewBranches.FirstOrDefault(b=>b.OrganizationId==link.OperationalBranchId);var revoked=link.RevokedAtUtc.HasValue;<article class="preview-link-item"><h4>Preview link #@link.PreviewLinkId</h4><p>Operational branch: @(branch?.DisplayName ?? $"branch {link.OperationalBranchId}")</p><p><span class="status-badge">@(revoked ? "Revoked" : link.AllowLiveSubmission ? "Live" : "Safe")</span> — @(revoked ? "Revoked and unusable" : "Active")</p>@if(!revoked){<div class="button-row"><form asp-action="ReplacePreviewLinkMode" asp-route-previewLinkId="@link.PreviewLinkId" method="post" data-requires-live-confirm="@(!link.AllowLiveSubmission)" data-guard-action>@Html.AntiForgeryToken()<input type="hidden" name="allowLiveSubmission" value="@(!link.AllowLiveSubmission)"/><button type="submit">Replace with @(link.AllowLiveSubmission ? "safe" : "live") link</button></form><form asp-action="RevokePreviewLink" asp-route-previewLinkId="@link.PreviewLinkId" method="post" data-guard-action>@Html.AntiForgeryToken()<button type="submit">Revoke preview link</button></form></div>}</article>}</div>}
+      @if (Model.PreviewLinks.Count > 0)
+      {
+        <section class="preview-links" aria-labelledby="preview-links-title">
+          <h4 id="preview-links-title">Existing preview links</h4>
+          <div class="preview-link-list">
+          @foreach (var link in Model.PreviewLinks.OrderBy(l => l.RevokedAtUtc.HasValue))
+          {
+            var branch = Model.PreviewBranches.FirstOrDefault(b => b.OrganizationId == link.OperationalBranchId);
+            var revoked = link.RevokedAtUtc.HasValue;
+            <article class="preview-link-item" aria-labelledby="preview-link-@link.PreviewLinkId-title">
+              <h5 id="preview-link-@link.PreviewLinkId-title" class="preview-link-name">Preview link #@link.PreviewLinkId</h5>
+              <p class="preview-link-branch">Operational branch: @(branch?.DisplayName ?? $"branch {link.OperationalBranchId}")</p>
+              <p class="preview-link-status"><span class="status-badge">@(revoked ? "Revoked" : link.AllowLiveSubmission ? "Live" : "Safe")</span><span>— @(revoked ? "Revoked and unusable" : "Active")</span></p>
+              @if (!revoked)
+              {
+                <div class="preview-link-actions" role="group" aria-label="Actions for preview link @link.PreviewLinkId">
+                  <form asp-action="ReplacePreviewLinkMode" asp-route-previewLinkId="@link.PreviewLinkId" method="post" data-requires-live-confirm="@(!link.AllowLiveSubmission)" data-guard-action>@Html.AntiForgeryToken()<input type="hidden" name="allowLiveSubmission" value="@(!link.AllowLiveSubmission)"/><button type="submit">Replace with @(link.AllowLiveSubmission ? "safe" : "live") link</button></form>
+                  <form asp-action="RevokePreviewLink" asp-route-previewLinkId="@link.PreviewLinkId" method="post" data-guard-action>@Html.AntiForgeryToken()<button type="submit">Revoke preview link</button></form>
+                </div>
+              }
+            </article>
+          }
+          </div>
+        </section>
+      }
     </section>}
 </section>
 }

@@ -340,16 +340,30 @@ test("guarded row action is marked separately and dirty mutations are never post
     assert.match(script, /\.setting-row\[data-dirty=\\?"true\\?"\]/);
 });
 
-test("preview mode pipeline distinguishes safe, safe-to-live, and live-to-safe actions", () => {
+test("preview mode pipeline uses the clicked creation action and preserves replacement confirmation", () => {
     const { needsLiveConfirmation } = context.SettingsWorkflow;
-    const preview = (selected) => ({
-        dataset: {}, matches: (value) => value === "[data-preview-form]",
-        querySelector: () => ({ value: selected })
-    });
-    assert.equal(needsLiveConfirmation(preview("false")), false);
-    assert.equal(needsLiveConfirmation(preview("true")), true);
-    assert.equal(needsLiveConfirmation({ dataset: { requiresLiveConfirm: "true" }, matches: () => false }), true);
-    assert.equal(needsLiveConfirmation({ dataset: { requiresLiveConfirm: "false" }, matches: () => false }), false);
+    const previewForm = { dataset: {}, matches: (value) => value === "[data-preview-form]" };
+    const safeSubmitter = { name: "AllowLiveSubmission", value: "false" };
+    const liveSubmitter = { name: "AllowLiveSubmission", value: "true" };
+    assert.equal(needsLiveConfirmation(previewForm, safeSubmitter), false);
+    assert.equal(needsLiveConfirmation(previewForm, liveSubmitter), true);
+    assert.equal(needsLiveConfirmation(previewForm), false);
+    assert.equal(needsLiveConfirmation(previewForm, { name: "Unrelated", value: "true" }), false);
+    assert.equal(needsLiveConfirmation({ dataset: { requiresLiveConfirm: "true" }, matches: () => false }, safeSubmitter), true);
+    assert.equal(needsLiveConfirmation({ dataset: { requiresLiveConfirm: "false" }, matches: () => false }, liveSubmitter), false);
+
+    const script = readFileSync(new URL("../../Clc.PatronRegistration.Web/wwwroot/js/settings.js", import.meta.url), "utf8");
+    assert.match(script, /needsLiveConfirmation\(action\.form, action\.submitter\)/);
+    assert.match(script, /action\.form\.requestSubmit\(action\.submitter\)/);
+});
+
+test("safe preview creation action precedes the live-submission action", () => {
+    const markup = readFileSync(new URL("../../Clc.PatronRegistration.Web/Views/Settings/Index.cshtml", import.meta.url), "utf8");
+    const safe = markup.indexOf('name="AllowLiveSubmission" value="false"');
+    const live = markup.indexOf('name="AllowLiveSubmission" value="true"');
+    assert.ok(safe >= 0);
+    assert.ok(live > safe);
+    assert.doesNotMatch(markup, /type="radio" name="AllowLiveSubmission"/);
 });
 
 test("search result wording distinguishes settings from saved draft changes", () => {

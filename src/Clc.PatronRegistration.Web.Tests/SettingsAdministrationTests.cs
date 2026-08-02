@@ -406,6 +406,48 @@ public class SettingsAdministrationTests
     }
 
     [TestMethod]
+    public void SettingsSharedDraftMarkup_GroupsSummaryPreviewCreationAndPreviewHistory()
+    {
+        var root = FindRepositoryRoot();
+        var index = File.ReadAllText(Path.Combine(root, "src/Clc.PatronRegistration.Web/Views/Settings/Index.cshtml"));
+
+        StringAssert.Contains(index, "<header class=\"draft-summary\">");
+        StringAssert.Contains(index, "id=\"draft-panel-title\">Shared draft #");
+        StringAssert.Contains(index, "class=\"draft-scope\"");
+        StringAssert.Contains(index, "class=\"draft-counts\"");
+        StringAssert.Contains(index, "change\" : \"changes\") stored;");
+        StringAssert.Contains(index, "active preview @(activePreviewCount == 1 ? \"link\" : \"links\")");
+        StringAssert.Contains(index, "<div class=\"draft-actions\" role=\"group\" aria-label=\"Draft lifecycle actions\">");
+        foreach (var action in new[] { "data-review-draft", ">Publish draft</button>", ">Discard shared draft</button>" })
+            StringAssert.Contains(index, action);
+
+        StringAssert.Contains(index, "<section class=\"preview-tools\" aria-labelledby=\"preview-tools-title\">");
+        var createRow = index.IndexOf("<div class=\"preview-create-row\">", StringComparison.Ordinal);
+        Assert.IsTrue(createRow >= 0);
+        var branchField = index.IndexOf("<div class=\"preview-branch-field\">", createRow, StringComparison.Ordinal);
+        Assert.IsTrue(branchField > createRow);
+        var createActions = index.IndexOf("<div class=\"preview-create-actions\" role=\"group\" aria-label=\"Create preview link\">", branchField, StringComparison.Ordinal);
+        Assert.IsTrue(createActions > branchField);
+        Assert.IsFalse(index.Contains("id=\"preview-create-title\"", StringComparison.Ordinal));
+        var safeAction = index.IndexOf("type=\"submit\" name=\"AllowLiveSubmission\" value=\"false\" class=\"preview-create-option preview-create-safe\"", StringComparison.Ordinal);
+        var liveAction = index.IndexOf("type=\"submit\" name=\"AllowLiveSubmission\" value=\"true\" class=\"preview-create-option preview-create-live\"", StringComparison.Ordinal);
+        Assert.IsTrue(safeAction >= 0);
+        Assert.IsTrue(liveAction > safeAction);
+        StringAssert.Contains(index, "<span>Cannot create patron records.</span>");
+        StringAssert.Contains(index, "<span>Can create real patron records.</span>");
+        Assert.IsFalse(index.Contains("type=\"radio\" name=\"AllowLiveSubmission\"", StringComparison.Ordinal));
+        Assert.IsFalse(index.Contains(">Create preview link</button>", StringComparison.Ordinal));
+        StringAssert.Contains(index, "<section class=\"preview-links\" aria-labelledby=\"preview-links-title\">");
+        StringAssert.Contains(index, ">Existing preview links</h4>");
+        StringAssert.Contains(index, "<article class=\"preview-link-item\" aria-labelledby=\"preview-link-@link.PreviewLinkId-title\">");
+        StringAssert.Contains(index, "<h5 id=\"preview-link-@link.PreviewLinkId-title\" class=\"preview-link-name\">");
+        Assert.IsFalse(index.Contains("<h4>Preview link #@link.PreviewLinkId</h4>", StringComparison.Ordinal));
+        StringAssert.Contains(index, "<p class=\"preview-link-branch\">");
+        StringAssert.Contains(index, "<p class=\"preview-link-status\">");
+        StringAssert.Contains(index, "<div class=\"preview-link-actions\" role=\"group\" aria-label=\"Actions for preview link");
+    }
+
+    [TestMethod]
     public void SettingsHelp_UsesCurrentBrowserAndSharedDraftControlNames()
     {
         var root = FindRepositoryRoot();
