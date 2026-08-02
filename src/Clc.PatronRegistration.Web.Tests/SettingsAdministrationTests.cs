@@ -406,7 +406,7 @@ public class SettingsAdministrationTests
     }
 
     [TestMethod]
-    public void SettingsSharedDraftMarkup_GroupsSummaryActionsPreviewModesAndPreviewHistory()
+    public void SettingsSharedDraftMarkup_GroupsSummaryPreviewCreationAndPreviewHistory()
     {
         var root = FindRepositoryRoot();
         var index = File.ReadAllText(Path.Combine(root, "src/Clc.PatronRegistration.Web/Views/Settings/Index.cshtml"));
@@ -417,17 +417,19 @@ public class SettingsAdministrationTests
         StringAssert.Contains(index, "class=\"draft-counts\"");
         StringAssert.Contains(index, "change\" : \"changes\") stored;");
         StringAssert.Contains(index, "active preview @(activePreviewCount == 1 ? \"link\" : \"links\")");
-        StringAssert.Contains(index, "<div class=\"draft-actions\" aria-label=\"Draft lifecycle actions\">");
+        StringAssert.Contains(index, "<div class=\"draft-actions\" role=\"group\" aria-label=\"Draft lifecycle actions\">");
         foreach (var action in new[] { "data-review-draft", ">Publish draft</button>", ">Discard shared draft</button>" })
             StringAssert.Contains(index, action);
 
         StringAssert.Contains(index, "<section class=\"preview-tools\" aria-labelledby=\"preview-tools-title\">");
-        Assert.AreEqual(2, index.Split("<label class=\"preview-mode-option\">").Length - 1);
-        Assert.AreEqual(2, index.Split("<span class=\"preview-mode-copy\"><strong>").Length - 1);
-        Assert.AreEqual(2, index.Split("</strong><small>").Length - 1);
+        StringAssert.Contains(index, "<div class=\"preview-create-actions\" role=\"group\" aria-labelledby=\"preview-create-title\">");
+        StringAssert.Contains(index, "type=\"submit\" name=\"AllowLiveSubmission\" value=\"false\" class=\"preview-create-option preview-create-safe\"");
+        StringAssert.Contains(index, "type=\"submit\" name=\"AllowLiveSubmission\" value=\"true\" class=\"preview-create-option preview-create-live\"");
+        Assert.IsFalse(index.Contains("type=\"radio\" name=\"AllowLiveSubmission\"", StringComparison.Ordinal));
+        Assert.IsFalse(index.Contains(">Create preview link</button>", StringComparison.Ordinal));
         StringAssert.Contains(index, "<section class=\"preview-links\" aria-labelledby=\"preview-links-title\">");
-        StringAssert.Contains(index, ">Existing preview links</h3>");
-        StringAssert.Contains(index, "<div class=\"preview-link-actions\" aria-label=\"Actions for preview link");
+        StringAssert.Contains(index, ">Existing preview links</h4>");
+        StringAssert.Contains(index, "<div class=\"preview-link-actions\" role=\"group\" aria-label=\"Actions for preview link");
     }
 
     [TestMethod]

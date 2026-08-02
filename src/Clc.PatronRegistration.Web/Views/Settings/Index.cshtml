@@ -88,7 +88,7 @@
         @if (draftChangeCount == 0) { <p class="draft-empty"><strong>This shared draft has no changes.</strong></p> }
         @if (hasRestrictedDraftChanges && !canManageRestrictedDraft) { <p class="validation-summary" role="status"><strong>Restricted draft:</strong> A global administrator must publish, discard, preview, or remove restricted changes.</p> }
     </header>
-    <div class="draft-actions" aria-label="Draft lifecycle actions">
+    <div class="draft-actions" role="group" aria-label="Draft lifecycle actions">
     @if (draftChangeCount > 0) {
         <button type="button" data-review-draft>Review @draftChangeCount shared draft @(draftChangeCount == 1 ? "change" : "changes")</button>
     }
@@ -115,24 +115,22 @@
               }
           </select>
         </div>
-        <fieldset class="preview-mode-group">
-          <legend>Preview mode</legend>
-          <label class="preview-mode-option">
-            <input type="radio" name="AllowLiveSubmission" value="false" checked />
-            <span class="preview-mode-copy"><strong>Safe preview</strong><small>Submissions are blocked and cannot create patron records.</small></span>
-          </label>
-          <label class="preview-mode-option">
-            <input type="radio" name="AllowLiveSubmission" value="true" />
-            <span class="preview-mode-copy"><strong>Live-submission preview</strong><small>Submitting this preview can create real patron records.</small></span>
-          </label>
-        </fieldset>
-        <p class="preview-live-warning validation-summary" hidden><strong>Warning:</strong> The generated bearer URL can create real patron records.</p>
-        <button class="create-preview-link" type="submit">Create preview link</button>
+        <h4 id="preview-create-title">Create preview link</h4>
+        <div class="preview-create-actions" role="group" aria-labelledby="preview-create-title">
+          <button type="submit" name="AllowLiveSubmission" value="false" class="preview-create-option preview-create-safe">
+            <strong>Create safe preview</strong>
+            <span>Submissions are blocked and cannot create patron records.</span>
+          </button>
+          <button type="submit" name="AllowLiveSubmission" value="true" class="preview-create-option preview-create-live">
+            <strong>Create live-submission preview</strong>
+            <span>Submitting this preview can create real patron records.</span>
+          </button>
+        </div>
       </form>
       @if (Model.PreviewLinks.Count > 0)
       {
         <section class="preview-links" aria-labelledby="preview-links-title">
-          <h3 id="preview-links-title">Existing preview links</h3>
+          <h4 id="preview-links-title">Existing preview links</h4>
           <div class="preview-link-list">
           @foreach (var link in Model.PreviewLinks.OrderBy(l => l.RevokedAtUtc.HasValue))
           {
@@ -144,7 +142,7 @@
               <p class="preview-link-status"><span class="status-badge">@(revoked ? "Revoked" : link.AllowLiveSubmission ? "Live" : "Safe")</span><span>— @(revoked ? "Revoked and unusable" : "Active")</span></p>
               @if (!revoked)
               {
-                <div class="preview-link-actions" aria-label="Actions for preview link @link.PreviewLinkId">
+                <div class="preview-link-actions" role="group" aria-label="Actions for preview link @link.PreviewLinkId">
                   <form asp-action="ReplacePreviewLinkMode" asp-route-previewLinkId="@link.PreviewLinkId" method="post" data-requires-live-confirm="@(!link.AllowLiveSubmission)" data-guard-action>@Html.AntiForgeryToken()<input type="hidden" name="allowLiveSubmission" value="@(!link.AllowLiveSubmission)"/><button type="submit">Replace with @(link.AllowLiveSubmission ? "safe" : "live") link</button></form>
                   <form asp-action="RevokePreviewLink" asp-route-previewLinkId="@link.PreviewLinkId" method="post" data-guard-action>@Html.AntiForgeryToken()<button type="submit">Revoke preview link</button></form>
                 </div>
