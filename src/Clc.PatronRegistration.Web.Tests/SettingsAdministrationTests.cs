@@ -376,6 +376,46 @@ public class SettingsAdministrationTests
         StringAssert.Contains(row, "data-presentation-state");
     }
 
+    [TestMethod]
+    public void SettingsSharedDraftMarkup_HasOneLiveResultRegionAndAccessibleReviewContracts()
+    {
+        var root = FindRepositoryRoot();
+        var index = File.ReadAllText(Path.Combine(root, "src/Clc.PatronRegistration.Web/Views/Settings/Index.cshtml"));
+        var row = File.ReadAllText(Path.Combine(root, "src/Clc.PatronRegistration.Web/Views/Settings/_SettingRow.cshtml"));
+        var css = File.ReadAllText(Path.Combine(root, "src/Clc.PatronRegistration.Web/wwwroot/css/settings.css"));
+
+        Assert.AreEqual(1, index.Split("id=\"search-status\"").Length - 1);
+        StringAssert.Contains(index, "id=\"search-status\" aria-live=\"polite\"");
+        Assert.IsFalse(index.Contains("id=\"settings-filter-empty\"", StringComparison.Ordinal));
+        StringAssert.Contains(index, "Show shared draft changes only");
+        StringAssert.Contains(index, "if (draftChangeCount > 0)");
+        StringAssert.Contains(index, "Review @draftChangeCount shared draft @(draftChangeCount == 1 ? \"change\" : \"changes\")");
+        StringAssert.Contains(css, ".settings-search input[type=\"search\"]");
+        Assert.IsFalse(css.Contains(".settings-search input {", StringComparison.Ordinal));
+        StringAssert.Contains(row, "$\"Draft: {presentation.Value}\"");
+        StringAssert.Contains(row, "definition.IsSensitive ? string.Empty");
+        Assert.IsFalse(row.Contains("<details class=\"setting-row\" open=", StringComparison.Ordinal));
+        Assert.IsFalse(row.Contains("tabindex=\"-1\"", StringComparison.Ordinal));
+        StringAssert.Contains(index, "bool categoryOpen = rows.Any(row => row.DraftOperation is not null);");
+    }
+
+    [TestMethod]
+    public void SettingsHelp_UsesCurrentBrowserAndSharedDraftControlNames()
+    {
+        var root = FindRepositoryRoot();
+        var help = File.ReadAllText(Path.Combine(root, "src/Clc.PatronRegistration.Web/Views/Settings/Help.cshtml"));
+
+        foreach (var current in new[] { "Save N changes live", "Add N changes to shared draft", "Save N changes live instead",
+            "Discard browser changes", "Show shared draft changes only", "Review N shared draft changes",
+            "Discard shared draft", "Safe preview", "Live-submission preview" })
+            StringAssert.Contains(help, current);
+        foreach (var obsolete in new[] { "Review and save now", "Save changes to draft", ">Discard draft<",
+            "Allow this preview to create real patron records" })
+            Assert.IsFalse(help.Contains(obsolete, StringComparison.Ordinal), obsolete);
+        StringAssert.Contains(help, "Browser changes exist only in your current browser");
+        StringAssert.Contains(help, "Shared draft changes are visible to other authorized staff");
+    }
+
     [DataTestMethod]
     [DataRow("<img src=x onerror=alert(1)>")]
     [DataRow("<script>alert(1)</script>")]

@@ -90,6 +90,9 @@
         @if (hasRestrictedDraftChanges && !canManageRestrictedDraft) { <p class="validation-summary" role="status"><strong>Restricted draft:</strong> A global administrator must publish, discard, preview, or remove restricted changes.</p> }
     </div>
     <div class="draft-lifecycle" aria-label="Draft lifecycle actions">
+    @if (draftChangeCount > 0) {
+        <button type="button" data-review-draft>Review @draftChangeCount shared draft @(draftChangeCount == 1 ? "change" : "changes")</button>
+    }
     @if (Model.ActiveDraft is null) {
         <form asp-action="CreateDraft" method="post" data-guard-action>@Html.AntiForgeryToken()<input type="hidden" name="organizationId" value="@Model.OrganizationId" /><input type="hidden" name="formCode" value="@Model.FormCode" /><button type="submit">Create shared draft</button></form>
     } else if (canManageDraftLifecycle) {
@@ -121,7 +124,7 @@
 <section class="settings-search" aria-labelledby="search-label">
     <label id="search-label" for="setting-search">Search settings</label>
     <input id="setting-search" type="search" autocomplete="off" placeholder="Search by setting name or description" />
-    @if (draftChangeCount > 0) { <label class="inline-check"><input id="draft-only-filter" type="checkbox" /> Show draft changes only</label> }
+    @if (draftChangeCount > 0) { <label class="inline-check"><input id="draft-only-filter" type="checkbox" /> <span>Show shared draft changes only</span></label> }
     <p id="search-status" aria-live="polite"></p>
 </section>
 
@@ -179,7 +182,7 @@
                 <button type="submit" data-label-template="Save {count} {noun} live instead">Save changes live instead</button>
                 <small>Saving live does not publish or modify the existing shared draft.</small>
             } else { <button type="submit" data-label-template="Save {count} {noun} live">Save changes live</button> }
-            <button type="button" data-discard-pending>Discard pending changes</button>
+            <button type="button" data-discard-pending>Discard browser changes</button>
         </div>
     </div>
 </form>
@@ -197,7 +200,7 @@
 <dialog id="unsaved-changes-dialog" aria-labelledby="unsaved-title">
     <h2 id="unsaved-title">Unsaved changes</h2>
     <p data-unsaved-message></p>
-    <p>
+    <p data-unsaved-explanation>
         Continuing will revert changes made in this browser.
         Changes already saved to the shared draft or live settings
         will not be affected.

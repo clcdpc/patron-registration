@@ -15,11 +15,17 @@ class Control {
         this.type = "text";
         this.textContent = "";
         this.open = false;
+        this.classList = {
+            values: new Set(),
+            toggle: (name, force) => force ? this.classList.values.add(name) : this.classList.values.delete(name),
+            contains: (name) => this.classList.values.has(name)
+        };
     }
     addEventListener(name, callback) { this.listeners[name] = callback; }
     dispatchEvent(event) { this.listeners[event.type]?.(event); return !event.defaultPrevented; }
     click() { this.listeners.click?.({ target: this, currentTarget: this }); }
     focus() { focused = this; this.focused = true; }
+    scrollIntoView(options) { this.scrolledWith = options; }
     reportValidity() { return true; }
     setAttribute(name, value) { this.attributes[name] = String(value); }
     getAttribute(name) { return this.attributes[name] ?? null; }
@@ -153,19 +159,19 @@ test("pending actions follow applied dirty rows rather than edit sessions or ser
     first.controls.change.click();
     first.controls.apply.click();
     assert.equal(fixture.actions.hidden, false);
-    assert.equal(fixture.status.textContent, "1 pending change");
+    assert.equal(fixture.status.textContent, "1 unsaved browser change");
 
     first.controls.change.click();
     first.controls.apply.click();
-    assert.equal(fixture.status.textContent, "1 pending change", "reapplying a dirty row does not increment the count");
+    assert.equal(fixture.status.textContent, "1 unsaved browser change", "reapplying a dirty row does not increment the count");
     first.controls.change.click();
     first.controls.cancel.click();
     assert.equal(fixture.actions.hidden, false, "cancelling a dirty row edit preserves its applied change");
-    assert.equal(fixture.status.textContent, "1 pending change");
+    assert.equal(fixture.status.textContent, "1 unsaved browser change");
 
     second.controls.change.click();
     second.controls.apply.click();
-    assert.equal(fixture.status.textContent, "2 pending changes");
+    assert.equal(fixture.status.textContent, "2 unsaved browser changes");
 });
 
 test("failed validation and server-loaded draft operations do not create browser-pending changes", () => {
@@ -185,7 +191,7 @@ test("save actions share the hidden pending region while Remove draft change sta
     const actions = indexMarkup.match(/<div class="settings-actions" hidden>[\s\S]*?<\/div>\s*<\/div>/)?.[0] ?? "";
     assert.match(actions, /Save \{count\} \{noun\} live/);
     assert.match(actions, /Add \{count\} \{noun\} to shared draft/);
-    assert.match(actions, /Discard pending changes/);
+    assert.match(actions, /Discard browser changes/);
     assert.match(actions, /role="status" aria-live="polite"/);
     assert.doesNotMatch(actions, /Remove draft change/);
     assert.match(rowMarkup, /Remove draft change/);
@@ -403,7 +409,7 @@ test("discardPendingChanges restores dirty rows to their server-rendered control
 
 test("discard-and-continue pipeline cleans rows before subsequent lifecycle confirmation", () => {
     const script = readFileSync(new URL("../../Clc.PatronRegistration.Web/wwwroot/js/settings.js", import.meta.url), "utf8");
-    const handler = script.match(/\[data-guard-discard\][\s\S]*?\n    \}\);/)?.[0] ?? "";
+    const handler = [...script.matchAll(/document\.querySelector\("\[data-guard-discard\]"\)[\s\S]*?\n    \}\);/g)].at(-1)?.[0] ?? "";
     assert.match(handler, /discardPendingChanges\(\)/);
     assert.match(handler, /continuePipeline\(action, true\)/);
     assert.doesNotMatch(handler, /disableDirtyMutations/);
@@ -472,4 +478,162 @@ test("discarding a revealed sensitive edit restores password and accessible reve
     assert.equal(row.controls.reveal.textContent, "Reveal secret");
     assert.equal(row.controls.reveal.getAttribute("aria-expanded"), "false");
     assert.equal(row.controls.reveal.getAttribute("aria-label"), "Reveal Example");
+});
+
+test("shared draft filter markup and CSS keep the checkbox intrinsic", () => {
+    const markup = readFileSync(new URL("../../Clc.PatronRegistration.Web/Views/Settings/Index.cshtml", import.meta.url), "utf8");
+    const css = readFileSync(new URL("../../Clc.PatronRegistration.Web/wwwroot/css/settings.css", import.meta.url), "utf8");
+    assert.match(markup, /id="draft-only-filter"[\s\S]*Show shared draft changes only/);
+    assert.match(css, /\.settings-search input\[type="search"\]/);
+    assert.doesNotMatch(css, /\.settings-search input\s*\{/);
+    assert.match(css, /\.inline-check input\[type="checkbox"\][\s\S]*width:\s*auto/);
+});
+
+test("draft summaries identify proposed values without automatically opening rows", () => {
+    const row = readFileSync(new URL("../../Clc.PatronRegistration.Web/Views/Settings/_SettingRow.cshtml", import.meta.url), "utf8");
+    assert.match(row, /hasDraftOperation \? \$"Draft: \{presentation\.Value\}"/);
+    assert.match(row, /definition\.IsSensitive/);
+    assert.doesNotMatch(row, /<details class="setting-row"[^>]*open=/);
+});
+
+test("review action is conditional, client-side, and preserves the search query", () => {
+    const markup = readFileSync(new URL("../../Clc.PatronRegistration.Web/Views/Settings/Index.cshtml", import.meta.url), "utf8");
+    const script = readFileSync(new URL("../../Clc.PatronRegistration.Web/wwwroot/js/settings.js", import.meta.url), "utf8");
+    assert.match(markup, /if \(draftChangeCount > 0\)[\s\S]*data-review-draft>Review @draftChangeCount shared draft/);
+    assert.match(script, /function reviewDraftChanges\(\)[\s\S]*draftOnly\.checked = true;[\s\S]*applyFilters\(\)/);
+    assert.doesNotMatch(script.match(/function reviewDraftChanges\(\)[\s\S]*?\n    \}/)?.[0] ?? "", /search\.value\s*=/);
+    assert.match(script, /scrollIntoView/);
+});
+
+test("filter sessions capture and restore disclosure state and report empty results", () => {
+    const script = readFileSync(new URL("../../Clc.PatronRegistration.Web/wwwroot/js/settings.js", import.meta.url), "utf8");
+    assert.match(script, /filtering && preFilterDisclosure === null/);
+    assert.match(script, /new Map\(categories\.map/);
+    assert.match(script, /preFilterDisclosure\.forEach/);
+    assert.match(script, /preFilterDisclosure = null/);
+    assert.match(script, /No settings match your search\./);
+    assert.match(script, /No shared draft changes match your search\./);
+});
+
+test("explicit browser discard uses restoration rather than reload or submission", () => {
+    const script = readFileSync(new URL("../../Clc.PatronRegistration.Web/wwwroot/js/settings.js", import.meta.url), "utf8");
+    const handler = script.match(/document\.querySelector\("\[data-discard-pending\]"\)[\s\S]*?\n    \}\);/)?.[0] ?? "";
+    assert.match(handler, /explicitDiscard/);
+    assert.match(handler, /showModal/);
+    assert.doesNotMatch(handler, /reload|requestSubmit|location\./);
+    assert.match(script, /action\?\.explicitDiscard[\s\S]*discardPendingChanges|discardPendingChanges\(\)[\s\S]*action\?\.explicitDiscard/);
+});
+
+function filteringWorkflowFixture() {
+    const search = new Control();
+    const status = new Control();
+    const draftOnly = new Control();
+    draftOnly.checked = false;
+    const searchRegion = new Control();
+    const review = new Control();
+    const makeRow = (searchText, draftChange) => {
+        const summary = new Control();
+        return {
+            dataset: { search: searchText, draftChange: draftChange.toString() },
+            hidden: false,
+            focused: false,
+            querySelector(selector) { return selector === "summary" ? summary : null; },
+            focus() { this.focused = true; focused = this; },
+            summary
+        };
+    };
+    const alpha = makeRow("alpha setting", true);
+    const beta = makeRow("beta setting", false);
+    const categories = [
+        { open: false, hidden: false, rows: [alpha], querySelector() { return this.rows.find((row) => !row.hidden) || null; } },
+        { open: true, hidden: false, rows: [beta], querySelector() { return this.rows.find((row) => !row.hidden) || null; } }
+    ];
+    let initialized = false;
+    const doc = {
+        querySelector(selector) {
+            if (selector === "#setting-search") return search;
+            if (selector === "#search-status") return status;
+            if (selector === "#draft-only-filter") return draftOnly;
+            if (selector === ".settings-search") return searchRegion;
+            if (selector === "[data-review-draft]") return review;
+            if (selector === '.setting-row[data-draft-change="true"]:not([hidden])') return [alpha, beta].find((row) => row.dataset.draftChange === "true" && !row.hidden) || null;
+            return null;
+        },
+        querySelectorAll(selector) {
+            if (selector === ".setting-category, .dynamic-settings") return categories;
+            if (selector === ".setting-row") return initialized ? [alpha, beta] : [];
+            return [];
+        },
+        createElement() { return new Control(); }
+    };
+    const sandbox = { document: doc, window: { addEventListener() {} }, globalThis: {}, Event, Map, Set };
+    sandbox.globalThis = sandbox;
+    vm.runInNewContext(readFileSync(new URL("../../Clc.PatronRegistration.Web/wwwroot/js/settings.js", import.meta.url), "utf8"), sandbox);
+    initialized = true;
+    return { ...sandbox.SettingsWorkflow, search, status, draftOnly, searchRegion, review, alpha, beta, categories };
+}
+
+test("applyFilters behavior renders one live message and restores pre-filter disclosures", () => {
+    const fixture = filteringWorkflowFixture();
+    fixture.search.value = "missing";
+    assert.equal(fixture.applyFilters(), 0);
+    assert.equal(fixture.status.textContent, "No settings match your search.");
+    assert.equal(fixture.status.classList.contains("settings-filter-empty"), true);
+    assert.equal(fixture.categories.every((category) => category.hidden), true);
+
+    fixture.search.value = "alpha";
+    assert.equal(fixture.applyFilters(), 1);
+    assert.equal(fixture.categories[0].open, true);
+    assert.equal(fixture.categories[0].hidden, false);
+    assert.equal(fixture.categories[1].hidden, true);
+
+    // Filtering started with [closed, open]; later keystrokes must not overwrite that snapshot.
+    fixture.search.value = "";
+    fixture.applyFilters();
+    assert.deepEqual(fixture.categories.map((category) => category.open), [false, true]);
+    assert.equal(fixture.status.textContent, "");
+    assert.equal(fixture.status.classList.contains("settings-filter-empty"), false);
+});
+
+test("draft and text filters compose and review focuses the matching summary", () => {
+    const fixture = filteringWorkflowFixture();
+    fixture.search.value = "alpha";
+    fixture.reviewDraftChanges();
+    assert.equal(fixture.draftOnly.checked, true);
+    assert.equal(fixture.search.value, "alpha");
+    assert.equal(fixture.alpha.hidden, false);
+    assert.equal(fixture.beta.hidden, true);
+    assert.equal(focused, fixture.alpha.summary);
+    assert.equal(fixture.alpha.focused, false, "the details container must not receive focus");
+    assert.equal(fixture.searchRegion.scrolledWith.behavior, "smooth");
+    assert.equal(fixture.searchRegion.scrolledWith.block, "start");
+
+    fixture.search.value = "beta";
+    fixture.reviewDraftChanges();
+    assert.equal(fixture.status.textContent, "No shared draft changes match your search.");
+    assert.equal(focused, fixture.draftOnly);
+});
+
+test("clearEditSessionStatus removes a resolved active-edit warning", () => {
+    const warning = new Control();
+    warning.hidden = false;
+    warning.textContent = "Apply or Cancel the active setting edit before saving.";
+    const doc = {
+        querySelector(selector) { return selector === "#edit-session-status" ? warning : null; },
+        querySelectorAll() { return []; },
+        createElement() { return new Control(); }
+    };
+    const sandbox = { document: doc, window: { addEventListener() {} }, globalThis: {}, Event, Map, Set };
+    sandbox.globalThis = sandbox;
+    vm.runInNewContext(readFileSync(new URL("../../Clc.PatronRegistration.Web/wwwroot/js/settings.js", import.meta.url), "utf8"), sandbox);
+    const row = { dataset: { dirty: "true", candidateOperation: "Upsert" }, _discardPendingChange() { this.dataset.dirty = "false"; delete this.dataset.candidateOperation; } };
+    const form = {
+        querySelector(selector) { return selector.includes("candidate-operation") && row.dataset.candidateOperation ? row : null; },
+        querySelectorAll(selector) { return selector.includes("data-dirty") || selector.includes("candidate-operation") ? [row] : []; }
+    };
+    sandbox.SettingsWorkflow.discardPendingChanges(form);
+    assert.equal(row.dataset.dirty, "false");
+    assert.equal(row.dataset.candidateOperation, undefined);
+    assert.equal(warning.hidden, true);
+    assert.equal(warning.textContent, "");
 });

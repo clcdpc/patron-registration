@@ -170,16 +170,40 @@ body.settings-administration-page #regFormContainer {
     margin: .4rem 0
 }
 
-.scope-form select, .settings-search input, .setting-editor input, .setting-editor select, .setting-editor textarea {
+.scope-form select, .settings-search input[type="search"], .setting-editor input, .setting-editor select, .setting-editor textarea {
     box-sizing: border-box;
     max-width: 100%;
     min-height: 2.25rem;
     width: 100%
 }
 
-.settings-search input {
+.settings-search input[type="search"] {
     margin-top: .25rem
 }
+
+.settings-search .inline-check {
+    align-items: center;
+    display: inline-flex;
+    gap: .4rem;
+    margin-top: .5rem;
+    max-width: 100%;
+    vertical-align: middle
+}
+
+.settings-search .inline-check input[type="checkbox"] {
+    flex: 0 0 auto;
+    height: auto;
+    margin: 0;
+    min-height: 0;
+    width: auto
+}
+
+.settings-search .inline-check input[type="checkbox"]:focus-visible {
+    outline: 3px solid #1b65a7;
+    outline-offset: 2px
+}
+
+.settings-search .settings-filter-empty { font-weight: 700 }
 
 .settings-search p {
     margin: .25rem 0 0;
@@ -547,6 +571,12 @@ body.settings-administration-page #regFormContainer {
 .setting-row[data-presentation-state="draftchange"] .setting-status {
     background: #d9e8f5;
     font-weight: 700
+}
+
+.setting-row[data-draft-change="true"] .summary-value {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap
 }
 
 @media(max-width:52rem) {
