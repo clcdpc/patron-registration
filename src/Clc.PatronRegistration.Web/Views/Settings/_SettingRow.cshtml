@@ -27,6 +27,7 @@
          data-old-value="@(definition.IsSensitive ? "••••••••" : resolution.EffectiveValue)"
          data-sensitive="@definition.IsSensitive.ToString().ToLowerInvariant()"
          data-server-operation="@(Model.DraftOperation?.ToString() ?? string.Empty)"
+         data-draft-change="@hasDraftOperation.ToString().ToLowerInvariant()"
          data-applied-operation="@(isRemoveOverride ? "RemoveOverride" : "Upsert")"
          data-presentation-state="@presentation.State.ToString().ToLowerInvariant()">
     <input class="change-index" type="hidden" name="Changes.Index" value="@token" disabled />
@@ -129,7 +130,7 @@
                     formaction="@Url.Action("RemoveDraftChange", new { draftId = Model.DraftId })"
                     name="settingKey"
                     value="@definition.Key"
-                    data-submit-kind="draft"
+                    data-submit-kind="guarded"
                     formnovalidate>
                 Remove draft change
             </button>

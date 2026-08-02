@@ -253,6 +253,7 @@ public sealed class SettingsController(
         try
         {
             var draftId = repository.CreateDraft(organizationId, formCode, CreateAudit(organizationId, formCode));
+            TempData["SettingsStatus"] = $"Shared draft #{draftId} was created.";
             return RedirectToAction(nameof(Index), new { organizationId, formCode, draftId });
         }
         catch (DBConcurrencyException exception)
@@ -285,10 +286,11 @@ public sealed class SettingsController(
         try
         {
             repository.SaveDraftChanges(draftId, mutations, CatalogByKey, CreateAudit(request.OrganizationId, request.FormCode));
+            TempData["SettingsStatus"] = $"{mutations.Count} {(mutations.Count == 1 ? "change was" : "changes were")} added to shared draft #{draftId}.";
         }
-        catch (DBConcurrencyException exception)
+        catch (DBConcurrencyException)
         {
-            return Conflict(exception.Message);
+            return DraftConflictResult(request.OrganizationId, request.FormCode);
         }
         catch (InvalidOperationException exception)
         {
@@ -317,15 +319,16 @@ public sealed class SettingsController(
         try
         {
             repository.RemoveDraftChange(draftId, settingKey, CatalogByKey, authorization.Describe(User).IsGlobal, CreateAudit(organizationId, formCode));
+            TempData["SettingsStatus"] = $"A change was removed from shared draft #{draftId}.";
         }
         catch (UnauthorizedAccessException)
         {
             AuditRestrictedDraftRejection(organizationId, formCode, "Draft mutation removal was rejected.");
             return Forbid();
         }
-        catch (DBConcurrencyException exception)
+        catch (DBConcurrencyException)
         {
-            return Conflict(exception.Message);
+            return DraftConflictResult(organizationId, formCode);
         }
         return RedirectToAction(nameof(Index), new { organizationId, formCode });
     }
@@ -349,19 +352,20 @@ public sealed class SettingsController(
         {
             repository.CommitDraft(draftId, CatalogByKey, authorization.Describe(User).IsGlobal, CreateAudit(organizationId, formCode));
             cacheInvalidator.LiveSettingsChanged();
+            TempData["SettingsStatus"] = $"Shared draft #{draftId} was published.";
         }
         catch (UnauthorizedAccessException)
         {
             AuditRestrictedDraftRejection(organizationId, formCode, "Draft commit was rejected.");
             return Forbid();
         }
-        catch (DBConcurrencyException exception)
+        catch (DBConcurrencyException)
         {
-            return Conflict(exception.Message);
+            return DraftConflictResult(organizationId, formCode);
         }
         catch (SqlException exception) when (exception.Number == 1205)
         {
-            return Conflict("Draft commit conflicted with another settings change. Reload and review the draft.");
+            return DraftConflictResult(organizationId, formCode);
         }
         catch (InvalidOperationException exception)
         {
@@ -389,15 +393,16 @@ public sealed class SettingsController(
         try
         {
             repository.DiscardDraft(draftId, CatalogByKey, authorization.Describe(User).IsGlobal, CreateAudit(organizationId, formCode));
+            TempData["SettingsStatus"] = $"Shared draft #{draftId} was discarded.";
         }
         catch (UnauthorizedAccessException)
         {
             AuditRestrictedDraftRejection(organizationId, formCode, "Draft discard was rejected.");
             return Forbid();
         }
-        catch (DBConcurrencyException exception)
+        catch (DBConcurrencyException)
         {
-            return Conflict(exception.Message);
+            return DraftConflictResult(organizationId, formCode);
         }
         return RedirectToAction(nameof(Index), new { organizationId, formCode });
     }
@@ -417,7 +422,6 @@ public sealed class SettingsController(
             AuditRestrictedDraftRejection(request.OrganizationId, request.FormCode, "Preview-link creation was rejected.");
             return Forbid();
         }
-        var token = previewTokens.Create();
         var operationalBranchId = ResolveOperationalBranch(request.OrganizationId, request.OperationalBranchId);
         if (!operationalBranchId.HasValue)
         {
@@ -425,6 +429,10 @@ public sealed class SettingsController(
             TempData["SettingsError"] = "Select an operational branch authorized for this preview scope.";
             return RedirectToAction(nameof(Index), new { organizationId = request.OrganizationId, formCode = request.FormCode });
         }
+        var organizationName = OrganizationDisplayName(request.OrganizationId);
+        var formName = GetFormDisplayName(request.OrganizationId, request.FormCode);
+        var branchName = OrganizationDisplayName(operationalBranchId.Value);
+        var token = previewTokens.Create();
         try
         {
             repository.CreatePreviewLink(draftId, token.Hash, request.AllowLiveSubmission, operationalBranchId.Value, CatalogByKey,
@@ -435,13 +443,15 @@ public sealed class SettingsController(
             AuditRestrictedDraftRejection(request.OrganizationId, request.FormCode, "Preview-link creation was rejected.");
             return Forbid();
         }
-        catch (DBConcurrencyException exception)
+        catch (DBConcurrencyException)
         {
-            return Conflict(exception.Message);
+            return DraftConflictResult(request.OrganizationId, request.FormCode);
         }
         var previewUrl = Url.Action("Index", "Preview", new { token = token.Plaintext }, Request.Scheme)!;
         SetPreviewTokenResponseHeaders();
-        return View("PreviewLinkCreated", model: previewUrl);
+        return View("PreviewLinkCreated", new PreviewLinkCreatedViewModel(
+            previewUrl, draftId, request.OrganizationId, organizationName, request.FormCode, formName,
+            operationalBranchId.Value, branchName, request.AllowLiveSubmission));
     }
 
     [HttpPost("preview-links/{previewLinkId:long}/revoke")]
@@ -461,15 +471,16 @@ public sealed class SettingsController(
         try
         {
             repository.RevokePreviewLink(previewLinkId, CatalogByKey, authorization.Describe(User).IsGlobal, CreateAudit(link.OrganizationId, link.FormCode));
+            TempData["SettingsStatus"] = $"Preview link #{previewLinkId} was revoked.";
         }
         catch (UnauthorizedAccessException)
         {
             AuditRestrictedDraftRejection(link.OrganizationId, link.FormCode, "Preview-link revocation was rejected.");
             return Forbid();
         }
-        catch (DBConcurrencyException exception)
+        catch (DBConcurrencyException)
         {
-            return Conflict(exception.Message);
+            return DraftConflictResult(link.OrganizationId, link.FormCode);
         }
         return RedirectToAction(nameof(Index), new { organizationId = link.OrganizationId, formCode = link.FormCode });
     }
@@ -492,6 +503,9 @@ public sealed class SettingsController(
         {
             return RedirectToAction(nameof(Index), new { organizationId = link.OrganizationId, formCode = link.FormCode });
         }
+        var organizationName = OrganizationDisplayName(link.OrganizationId);
+        var formName = GetFormDisplayName(link.OrganizationId, link.FormCode);
+        var branchName = OrganizationDisplayName(link.OperationalBranchId);
         var replacementToken = previewTokens.Create();
         try
         {
@@ -508,13 +522,15 @@ public sealed class SettingsController(
             AuditRestrictedDraftRejection(link.OrganizationId, link.FormCode, "Preview live-submission change was rejected.");
             return Forbid();
         }
-        catch (DBConcurrencyException exception)
+        catch (DBConcurrencyException)
         {
-            return Conflict(exception.Message);
+            return DraftConflictResult(link.OrganizationId, link.FormCode);
         }
         var previewUrl = Url.Action("Index", "Preview", new { token = replacementToken.Plaintext }, Request.Scheme)!;
         SetPreviewTokenResponseHeaders();
-        return View("PreviewLinkCreated", model: previewUrl);
+        return View("PreviewLinkCreated", new PreviewLinkCreatedViewModel(
+            previewUrl, link.DraftId, link.OrganizationId, organizationName, link.FormCode, formName,
+            link.OperationalBranchId, branchName, allowLiveSubmission));
     }
 
     [HttpGet("audit")]
@@ -732,6 +748,37 @@ public sealed class SettingsController(
     private bool ValidateScope(int organizationId, string formCode) =>
         RequireManager() is not null && authorization.CanManage(User, organizationId) && formCodeAvailability.IsAvailable(organizationId, formCode);
 
+    private IActionResult DraftConflictResult(int organizationId, string formCode)
+    {
+        TempData["SettingsError"] = "The shared draft changed while you were working. Reloaded values are shown below. Review them before trying again.";
+        return RedirectToAction(nameof(Index), new { organizationId, formCode });
+    }
+
+    private string GetFormDisplayName(int organizationId, string formCode)
+    {
+        if (formCode.Length == 0)
+        {
+            return "Default form";
+        }
+        var libraryId = organizationId == settingsOptions.SystemOrganizationId
+            ? settingsOptions.SystemOrganizationId
+            : GetLibraryId(organizationId);
+        try
+        {
+            var metadata = repository.GetFormCodes(libraryId, settingsOptions.SystemOrganizationId) ?? [];
+            return metadata.LastOrDefault(form =>
+                form.FormCode.Equals(formCode, StringComparison.OrdinalIgnoreCase))?.DisplayName ?? formCode;
+        }
+        catch (SqlException)
+        {
+            return formCode;
+        }
+        catch (InvalidOperationException)
+        {
+            return formCode;
+        }
+    }
+
     private SettingDraft? AuthorizedActiveDraft(long draftId, int organizationId, string formCode)
     {
         if (!ValidateScope(organizationId, formCode))
@@ -903,8 +950,10 @@ public sealed class SettingsController(
 
     private int GetLibraryId(int organizationId) => cache.OrganizationCache.GetLibrary(organizationId).OrganizationID;
 
-    private string OrganizationDisplayName(int organizationId) =>
-        cache.OrganizationCache.FirstOrDefault(organization => organization.OrganizationID == organizationId)?.Name ?? $"Organization {organizationId}";
+    private string OrganizationDisplayName(int organizationId) => organizationId == settingsOptions.SystemOrganizationId
+        ? "System defaults"
+        : cache.OrganizationCache.FirstOrDefault(organization => organization.OrganizationID == organizationId)?.Name
+            ?? $"Organization {organizationId}";
 
     private string GetOrganizationName(int organizationId) => organizationId == settingsOptions.SystemOrganizationId
         ? "System defaults"

@@ -11,12 +11,20 @@ class Control {
         this.dataset = {};
         this.listeners = {};
         this.focused = false;
+        this.attributes = {};
+        this.type = "text";
+        this.textContent = "";
+        this.open = false;
     }
     addEventListener(name, callback) { this.listeners[name] = callback; }
-    click() { this.listeners.click?.({ target: this }); }
+    dispatchEvent(event) { this.listeners[event.type]?.(event); return !event.defaultPrevented; }
+    click() { this.listeners.click?.({ target: this, currentTarget: this }); }
     focus() { focused = this; this.focused = true; }
     reportValidity() { return true; }
-    setAttribute() {}
+    setAttribute(name, value) { this.attributes[name] = String(value); }
+    getAttribute(name) { return this.attributes[name] ?? null; }
+    removeAttribute(name) { delete this.attributes[name]; }
+    close() { this.open = false; this.closeCount = (this.closeCount || 0) + 1; }
 }
 
 let focused;
@@ -75,24 +83,31 @@ test("scoped CSS makes every hidden settings element non-rendering", () => {
     assert.match(css, /\.settings-administration-page\s+\[hidden\]\s*\{\s*display:\s*none\s*!important/);
 });
 
-function rowFixture({ operation = "Upsert", dirty = false, ownsOverride = true } = {}) {
+function rowFixture({ operation = "Upsert", dirty = false, ownsOverride = true, sensitive = false } = {}) {
     const controls = {
         change: new Control(), inherit: ownsOverride ? new Control() : null,
         apply: new Control(), cancel: new Control(), actions: new Control(),
         editor: new Control(), message: new Control(), operation: new Control(operation),
-        value: new Control("server value"), index: new Control(), key: new Control()
+        value: new Control(sensitive ? "" : "server value"), index: new Control(), key: new Control(),
+        reveal: sensitive ? new Control() : null
     };
+    if (sensitive) {
+        controls.value.type = "password";
+        controls.reveal.textContent = "Reveal secret";
+        controls.reveal.setAttribute("aria-expanded", "false");
+        controls.reveal.setAttribute("aria-label", "Reveal Example");
+    }
     const selectors = {
         ".edit-setting": controls.change, ".inherit-setting": controls.inherit,
         ".apply-setting": controls.apply, ".cancel-setting": controls.cancel,
         ".edit-actions": controls.actions, ".value-editor": controls.editor,
         ".inheritance-message": controls.message, ".operation": controls.operation,
         ".setting-value": controls.value, ".change-index": controls.index,
-        ".change-key": controls.key
+        ".change-key": controls.key, ".reveal-secret": controls.reveal
     };
     const category = { setAttribute(name) { this[name] = true; } };
     const row = {
-        dataset: { appliedOperation: operation, dirty: dirty.toString(), displayName: "Example", oldValue: "old", sensitive: "false" },
+        dataset: { appliedOperation: operation, dirty: dirty.toString(), displayName: "Example", oldValue: "old", sensitive: sensitive.toString() },
         querySelector(selector) { return selectors[selector]; },
         querySelectorAll() { return [controls.index, controls.key, controls.operation]; },
         closest() { return category; },
@@ -168,8 +183,9 @@ test("save actions share the hidden pending region while Remove draft change sta
     const indexMarkup = readFileSync(new URL("../../Clc.PatronRegistration.Web/Views/Settings/Index.cshtml", import.meta.url), "utf8");
     const rowMarkup = readFileSync(new URL("../../Clc.PatronRegistration.Web/Views/Settings/_SettingRow.cshtml", import.meta.url), "utf8");
     const actions = indexMarkup.match(/<div class="settings-actions" hidden>[\s\S]*?<\/div>\s*<\/div>/)?.[0] ?? "";
-    assert.match(actions, /Review and save now/);
-    assert.match(actions, /Save changes to draft/);
+    assert.match(actions, /Save \{count\} \{noun\} live/);
+    assert.match(actions, /Add \{count\} \{noun\} to shared draft/);
+    assert.match(actions, /Discard pending changes/);
     assert.match(actions, /role="status" aria-live="polite"/);
     assert.doesNotMatch(actions, /Remove draft change/);
     assert.match(rowMarkup, /Remove draft change/);
@@ -257,4 +273,172 @@ test("review uses only an applied operation and masks sensitive values", () => {
     populateReviewList(form, list);
     assert.doesNotMatch(list.children[0].textContent, /applied value/);
     assert.match(list.children[0].textContent, /••••••••/);
+});
+
+test("context selectors retain committed values and can be restored when navigation is cancelled", () => {
+    const { setNavigationGuard } = context.SettingsEditSessions;
+    for (const selectorName of ["organization", "formCode"]) {
+        const fixture = settingsContextFixture();
+        fixture.organization.value = "branch-1";
+        fixture.formCode.value = "default";
+        initializeSettingsContext(fixture.form);
+        const control = fixture[selectorName];
+        control.value = selectorName === "organization" ? "branch-2" : "kids";
+        setNavigationGuard((_action, trigger) => {
+            trigger.value = trigger.dataset.committedValue;
+        });
+        control.listeners.change();
+        assert.equal(control.value, selectorName === "organization" ? "branch-1" : "default");
+        assert.equal(fixture.submissions.length, 0);
+    }
+    setNavigationGuard(null);
+});
+
+test("guarded row action is marked separately and dirty mutations are never posted with it", () => {
+    const markup = readFileSync(new URL("../../Clc.PatronRegistration.Web/Views/Settings/_SettingRow.cshtml", import.meta.url), "utf8");
+    const script = readFileSync(new URL("../../Clc.PatronRegistration.Web/wwwroot/js/settings.js", import.meta.url), "utf8");
+    assert.match(markup, /Remove draft change[\s\S]*data-submit-kind="guarded"|data-submit-kind="guarded"[\s\S]*Remove draft change/);
+    assert.match(script, /kind === "guarded"/);
+    assert.match(script, /disableDirtyMutations/);
+    assert.match(script, /\.setting-row\[data-dirty=\\?"true\\?"\]/);
+});
+
+test("preview mode pipeline distinguishes safe, safe-to-live, and live-to-safe actions", () => {
+    const { needsLiveConfirmation } = context.SettingsWorkflow;
+    const preview = (selected) => ({
+        dataset: {}, matches: (value) => value === "[data-preview-form]",
+        querySelector: () => ({ value: selected })
+    });
+    assert.equal(needsLiveConfirmation(preview("false")), false);
+    assert.equal(needsLiveConfirmation(preview("true")), true);
+    assert.equal(needsLiveConfirmation({ dataset: { requiresLiveConfirm: "true" }, matches: () => false }), true);
+    assert.equal(needsLiveConfirmation({ dataset: { requiresLiveConfirm: "false" }, matches: () => false }), false);
+});
+
+test("search result wording distinguishes settings from saved draft changes", () => {
+    const script = readFileSync(new URL("../../Clc.PatronRegistration.Web/wwwroot/js/settings.js", import.meta.url), "utf8");
+    assert.match(script, /draft .*change.*found/);
+    assert.match(script, /setting.*found/);
+    assert.doesNotMatch(script, /browser.*dirty.*draft/i);
+});
+
+test("publish and discard cancellation returns focus to their trigger", () => {
+    const script = readFileSync(new URL("../../Clc.PatronRegistration.Web/wwwroot/js/settings.js", import.meta.url), "utf8");
+    assert.match(script, /owner\._trigger\?\.focus\(\)/);
+    assert.match(script, /pending = null;\s*submitting = false/);
+});
+
+test("clipboard copy reports accessible success and failure", async () => {
+    const { copyPreviewUrl } = context.SettingsWorkflow;
+    const status = { textContent: "" };
+    assert.equal(await copyPreviewUrl({ writeText: async () => {} }, "url", status), true);
+    assert.equal(status.textContent, "Preview URL copied.");
+    assert.equal(await copyPreviewUrl({ writeText: async () => { throw new Error("denied"); } }, "url", status), false);
+    assert.match(status.textContent, /Copy failed/);
+});
+
+test("beforeunload remains conditional on submission state after dialog cancellation", () => {
+    const script = readFileSync(new URL("../../Clc.PatronRegistration.Web/wwwroot/js/settings.js", import.meta.url), "utf8");
+    assert.match(script, /beforeunload/);
+    assert.match(script, /if \(!submitting && \(dirtyCount\(\) \|\| hasCandidate\(\)\)\)/);
+    assert.match(script, /pending = null;\s*submitting = false/);
+});
+
+test("discardPendingChanges restores dirty rows to their server-rendered controls and count", () => {
+    const fixture = pendingActionsFixture([{}]);
+    const row = fixture.rows[0];
+    const original = {
+        operation: row.controls.operation.value,
+        value: row.controls.value.value,
+        valueDisabled: row.controls.value.disabled,
+        operationDisabled: row.controls.operation.disabled
+    };
+    row.controls.change.click();
+    row.controls.value.value = "browser-only value";
+    row.controls.apply.click();
+    assert.equal(row.row.dataset.dirty, "true");
+
+    context.SettingsWorkflow.discardPendingChanges(fixture.form);
+
+    assert.equal(row.row.dataset.dirty, "false");
+    assert.equal(row.row.dataset.candidateOperation, undefined);
+    assert.equal(row.controls.operation.value, original.operation);
+    assert.equal(row.controls.value.value, original.value);
+    assert.equal(row.controls.value.disabled, original.valueDisabled);
+    assert.equal(row.controls.operation.disabled, original.operationDisabled);
+    assert.equal(fixture.actions.hidden, true);
+    assert.equal(fixture.status.textContent, "");
+});
+
+test("discard-and-continue pipeline cleans rows before subsequent lifecycle confirmation", () => {
+    const script = readFileSync(new URL("../../Clc.PatronRegistration.Web/wwwroot/js/settings.js", import.meta.url), "utf8");
+    const handler = script.match(/\[data-guard-discard\][\s\S]*?\n    \}\);/)?.[0] ?? "";
+    assert.match(handler, /discardPendingChanges\(\)/);
+    assert.match(handler, /continuePipeline\(action, true\)/);
+    assert.doesNotMatch(handler, /disableDirtyMutations/);
+});
+
+test("native dialog cancel restores context, focus, and workflow state", () => {
+    const { bindDialogCancellation, setWorkflowState, workflowState } = context.SettingsWorkflow;
+    for (const committed of ["branch-1", "default-form"]) {
+        const trigger = new Control("changed-value");
+        trigger.dataset.committedValue = committed;
+        const owner = new Control();
+        owner.open = true;
+        owner._trigger = trigger;
+        bindDialogCancellation(owner);
+        setWorkflowState({ pending: { action: true }, submitting: true, approved: true });
+        const event = new Event("cancel", { cancelable: true });
+
+        owner.dispatchEvent(event);
+
+        assert.equal(event.defaultPrevented, true);
+        assert.equal(owner.open, false);
+        assert.equal(owner.closeCount, 1);
+        assert.equal(trigger.value, committed);
+        assert.equal(focused, trigger);
+        assert.equal(workflowState().pending, null);
+        assert.equal(workflowState().submitting, false);
+    }
+});
+
+test("Escape from live, publish, and discard dialogs never submits and leaves controls usable", () => {
+    const { bindDialogCancellation, setWorkflowState, workflowState } = context.SettingsWorkflow;
+    for (const kind of ["live", "publish", "discard"]) {
+        const trigger = new Control();
+        const owner = new Control();
+        owner.open = true;
+        owner._trigger = trigger;
+        owner.kind = kind;
+        owner.submissions = 0;
+        bindDialogCancellation(owner);
+        setWorkflowState({ pending: { form: owner }, submitting: false, approved: false });
+
+        owner.dispatchEvent(new Event("cancel", { cancelable: true }));
+
+        assert.equal(owner.submissions, 0);
+        assert.equal(workflowState().pending, null);
+        assert.equal(workflowState().submitting, false);
+        assert.equal(focused, trigger);
+    }
+});
+
+test("discarding a revealed sensitive edit restores password and accessible reveal state", () => {
+    const fixture = pendingActionsFixture([{ sensitive: true }]);
+    const row = fixture.rows[0];
+    row.controls.change.click();
+    row.controls.value.value = "replacement secret";
+    row.controls.value.type = "text";
+    row.controls.reveal.textContent = "Hide secret";
+    row.controls.reveal.setAttribute("aria-expanded", "true");
+    row.controls.reveal.setAttribute("aria-label", "Hide Example");
+    row.controls.apply.click();
+
+    context.SettingsWorkflow.discardPendingChanges(fixture.form);
+
+    assert.equal(row.controls.value.type, "password");
+    assert.equal(row.controls.value.value, "");
+    assert.equal(row.controls.reveal.textContent, "Reveal secret");
+    assert.equal(row.controls.reveal.getAttribute("aria-expanded"), "false");
+    assert.equal(row.controls.reveal.getAttribute("aria-label"), "Reveal Example");
 });
