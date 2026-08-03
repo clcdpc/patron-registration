@@ -173,6 +173,8 @@ public interface ISettingsAdministrationRepository
     PreviewLinkRecord? GetPreviewLink(long previewLinkId);
     IReadOnlyList<PreviewLinkRecord> GetPreviewLinks(long draftId);
     void RevokePreviewLink(long previewLinkId, IReadOnlyDictionary<string, SettingDefinition> catalog, bool canManageSensitive, AuditContext audit);
+    void RestorePreviewLink(long previewLinkId, int lifetimeHours, IReadOnlyDictionary<string, SettingDefinition> catalog, bool canManageSensitive, AuditContext audit);
+    void DeletePreviewLink(long previewLinkId, IReadOnlyDictionary<string, SettingDefinition> catalog, bool canManageSensitive, AuditContext audit);
     long? ReplacePreviewLinkMode(long previewLinkId, byte[] replacementTokenHash, bool allowLiveSubmission, IReadOnlyDictionary<string, SettingDefinition> catalog, bool canManageSensitive, AuditContext audit);
     IReadOnlyList<FormCodeMetadata> GetFormCodes(int libraryId, int systemOrganizationId);
     IReadOnlyList<FormCodeMetadata> GetFormCodesForLibraries(IReadOnlyCollection<int> libraryIds, int systemOrganizationId);
@@ -532,6 +534,62 @@ where PreviewLinkId=@previewLinkId and RevokedAtUtc is null
             throw new DBConcurrencyException("The preview link was already revoked or invalidated.");
         }
         InsertAudit(connection, transaction, "PreviewLinkRevoked", true, audit, previewLinkId: previewLinkId);
+        transaction.Commit();
+    }
+
+    public void RestorePreviewLink(long previewLinkId, int lifetimeHours,
+        IReadOnlyDictionary<string, SettingDefinition> catalog, bool canManageSensitive, AuditContext audit)
+    {
+        if (!SettingsAdministrationOptions.IsValidPreviewLinkLifetime(lifetimeHours))
+            throw new ArgumentOutOfRangeException(nameof(lifetimeHours));
+
+        using var connection = Open();
+        var candidateDraftId = FindPreviewLinkDraftCandidate(connection, previewLinkId);
+        using var transaction = connection.BeginTransaction(IsolationLevel.Serializable);
+        var nowUtc = timeProvider.GetUtcNow().UtcDateTime;
+        var link = LockPreviewLink(connection, transaction, previewLinkId, candidateDraftId);
+        EnsureCanManageRestrictedDraft(connection, transaction, candidateDraftId, catalog, canManageSensitive);
+        if (link.RevokedAtUtc.HasValue || !link.ExpiresAtUtc.HasValue || link.ExpiresAtUtc.Value > nowUtc)
+            throw new DBConcurrencyException("The preview link is not eligible for restoration.");
+
+        var expiresAtUtc = nowUtc.AddHours(lifetimeHours);
+        var updated = connection.Execute(@"
+update dbo.RegistrationSettingPreviewLinks
+set ExpiresAtUtc=@expiresAtUtc,ModifiedAtUtc=@nowUtc,ModifiedBy=@actor
+where PreviewLinkId=@previewLinkId and DraftId=@draftId and RevokedAtUtc is null and ExpiresAtUtc<=@nowUtc",
+            new { previewLinkId, draftId = candidateDraftId, expiresAtUtc, nowUtc, actor = audit.ActorName ?? "unknown" }, transaction);
+        if (updated != 1)
+            throw new DBConcurrencyException("The preview link changed while it was being restored.");
+
+        InsertAudit(connection, transaction, "PreviewLinkRestored", true, audit, draftId: candidateDraftId,
+            previewLinkId: previewLinkId,
+            metadataJson: $"{{\"previousExpiresAtUtc\":\"{link.ExpiresAtUtc.Value:O}\",\"newExpiresAtUtc\":\"{expiresAtUtc:O}\"}}");
+        transaction.Commit();
+    }
+
+    public void DeletePreviewLink(long previewLinkId, IReadOnlyDictionary<string, SettingDefinition> catalog,
+        bool canManageSensitive, AuditContext audit)
+    {
+        using var connection = Open();
+        var candidateDraftId = FindPreviewLinkDraftCandidate(connection, previewLinkId);
+        using var transaction = connection.BeginTransaction(IsolationLevel.Serializable);
+        var nowUtc = timeProvider.GetUtcNow().UtcDateTime;
+        var link = LockPreviewLink(connection, transaction, previewLinkId, candidateDraftId);
+        EnsureCanManageRestrictedDraft(connection, transaction, candidateDraftId, catalog, canManageSensitive);
+        var expired = !link.ExpiresAtUtc.HasValue || link.ExpiresAtUtc.Value <= nowUtc;
+        if (!link.RevokedAtUtc.HasValue && !expired)
+            throw new DBConcurrencyException("Active preview links must be revoked before removal.");
+
+        InsertAudit(connection, transaction, "PreviewLinkDeleted", true, audit, draftId: candidateDraftId,
+            previewLinkId: previewLinkId,
+            metadataJson: $"{{\"expired\":{expired.ToString().ToLowerInvariant()},\"revoked\":{link.RevokedAtUtc.HasValue.ToString().ToLowerInvariant()}}}");
+        var deleted = connection.Execute(@"
+delete from dbo.RegistrationSettingPreviewLinks
+where PreviewLinkId=@previewLinkId and DraftId=@draftId
+ and (RevokedAtUtc is not null or ExpiresAtUtc is null or ExpiresAtUtc<=@nowUtc)",
+            new { previewLinkId, draftId = candidateDraftId, nowUtc }, transaction);
+        if (deleted != 1)
+            throw new DBConcurrencyException("The preview link changed while it was being removed.");
         transaction.Commit();
     }
 
@@ -973,6 +1031,18 @@ where p.PreviewLinkId=@previewLinkId and p.DraftId=@candidateDraftId and p.Revok
         return candidateDraftId;
     }
 
+    private static InactivePreviewLinkRow LockPreviewLink(SqlConnection connection, IDbTransaction transaction,
+        long previewLinkId, long candidateDraftId)
+    {
+        EnsureActiveDraft(connection, transaction, candidateDraftId);
+        var link = connection.QuerySingleOrDefault<InactivePreviewLinkRow>(@"
+select p.RevokedAtUtc,p.ExpiresAtUtc
+from dbo.RegistrationSettingPreviewLinks p with(updlock,holdlock)
+where p.PreviewLinkId=@previewLinkId and p.DraftId=@candidateDraftId",
+            new { previewLinkId, candidateDraftId }, transaction);
+        return link ?? throw new DBConcurrencyException("The preview link no longer exists.");
+    }
+
     private static void RevokeDraftPreviewLinks(
         SqlConnection connection,
         IDbTransaction transaction,
@@ -1044,5 +1114,6 @@ values(
     private sealed record DraftRow(long DraftId, int OrganizationId, string FormCode, long BaselineVersion, string Status);
     private sealed record DraftChangeRow(string SettingKey, string Operation, string? Value);
     private sealed record PreviewLinkModeRow(bool AllowLiveSubmission, int OperationalBranchId, DateTime? ExpiresAtUtc);
+    private sealed record InactivePreviewLinkRow(DateTime? RevokedAtUtc, DateTime? ExpiresAtUtc);
     private sealed record ActiveDraftRow(long DraftId, long BaselineVersion);
 }

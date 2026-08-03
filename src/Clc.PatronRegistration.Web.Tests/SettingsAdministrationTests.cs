@@ -11,6 +11,19 @@ namespace Clc.PatronRegistration.Tests;
 [TestClass]
 public class SettingsAdministrationTests
 {
+    [TestMethod]
+    public void PreviewLinkView_OffersRestoreAndRemovalWithAntiforgeryForms()
+    {
+        var root = FindRepositoryRoot();
+        var view = File.ReadAllText(Path.Combine(root, "src/Clc.PatronRegistration.Web/Views/Settings/Index.cshtml"));
+
+        StringAssert.Contains(view, "asp-action=\"RestorePreviewLink\"");
+        StringAssert.Contains(view, ">Restore preview link</button>");
+        StringAssert.Contains(view, "asp-action=\"DeletePreviewLink\"");
+        StringAssert.Contains(view, ">Remove preview link</button>");
+        StringAssert.Contains(view, "@Html.AntiForgeryToken()");
+        StringAssert.Contains(view, "aria-label=\"Actions for preview link @link.PreviewLinkId\"");
+    }
     [DataTestMethod]
     [DataRow(null, true)]
     [DataRow("", true)]

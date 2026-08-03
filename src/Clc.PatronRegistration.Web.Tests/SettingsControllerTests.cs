@@ -295,6 +295,57 @@ public class SettingsControllerTests
     }
 
     [TestMethod]
+    public void RestorePreviewLink_RedirectsWithStatusWithoutCreatingToken()
+    {
+        var repository = new Mock<ISettingsAdministrationRepository>();
+        repository.Setup(service => service.GetFormCodes(It.IsAny<int>(), It.IsAny<int>())).Returns([]);
+        repository.Setup(service => service.GetLegacyFormCodes()).Returns([]);
+        var draft = NonSensitiveDraft();
+        repository.Setup(service => service.GetDraft(draft.DraftId)).Returns(draft);
+        repository.Setup(service => service.GetPreviewLink(12)).Returns(PreviewLink(draft));
+        var controller = CreateController(repository, LibraryAuthorization(),
+            administrationOptions: new SettingsAdministrationOptions { PreviewLinkLifetimeHours = 37 });
+
+        var result = (RedirectToActionResult)controller.RestorePreviewLink(12);
+
+        Assert.AreEqual(nameof(SettingsController.Index), result.ActionName);
+        Assert.AreEqual(3, result.RouteValues!["organizationId"]);
+        Assert.AreEqual(string.Empty, result.RouteValues["formCode"]);
+        Assert.AreEqual("Preview link #12 was restored for another 37 hours.", controller.TempData["SettingsStatus"]);
+        repository.Verify(service => service.RestorePreviewLink(12, 37,
+            It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), false, It.IsAny<AuditContext>()), Times.Once);
+    }
+
+    [TestMethod]
+    public void DeletePreviewLink_RedirectsWithConsistentRemovalStatus()
+    {
+        var repository = new Mock<ISettingsAdministrationRepository>();
+        repository.Setup(service => service.GetFormCodes(It.IsAny<int>(), It.IsAny<int>())).Returns([]);
+        repository.Setup(service => service.GetLegacyFormCodes()).Returns([]);
+        var draft = NonSensitiveDraft();
+        repository.Setup(service => service.GetDraft(draft.DraftId)).Returns(draft);
+        repository.Setup(service => service.GetPreviewLink(12)).Returns(PreviewLink(draft));
+        var controller = CreateController(repository, LibraryAuthorization());
+
+        var result = (RedirectToActionResult)controller.DeletePreviewLink(12);
+
+        Assert.AreEqual(nameof(SettingsController.Index), result.ActionName);
+        Assert.AreEqual("Preview link #12 was removed.", controller.TempData["SettingsStatus"]);
+        repository.Verify(service => service.DeletePreviewLink(12,
+            It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), false, It.IsAny<AuditContext>()), Times.Once);
+    }
+
+    [DataTestMethod]
+    [DataRow(nameof(SettingsController.RestorePreviewLink))]
+    [DataRow(nameof(SettingsController.DeletePreviewLink))]
+    public void InactivePreviewLinkActions_RequirePostAndAntiforgery(string action)
+    {
+        var method = typeof(SettingsController).GetMethod(action)!;
+        Assert.IsTrue(method.GetCustomAttributes(typeof(HttpPostAttribute), true).Any());
+        Assert.IsTrue(method.GetCustomAttributes(typeof(ValidateAntiForgeryTokenAttribute), true).Any());
+    }
+
+    [TestMethod]
     public void SettingsController_UsesNoStoreResponsePolicy()
     {
         var controller = CreateController(new Mock<ISettingsAdministrationRepository>(), LibraryAuthorization());

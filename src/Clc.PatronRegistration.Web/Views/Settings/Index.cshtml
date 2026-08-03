@@ -150,6 +150,16 @@
                   <form asp-action="RevokePreviewLink" asp-route-previewLinkId="@link.PreviewLinkId" method="post" data-guard-action>@Html.AntiForgeryToken()<button type="submit">Revoke preview link</button></form>
                 </div>
               }
+              else
+              {
+                <div class="preview-link-actions" role="group" aria-label="Actions for preview link @link.PreviewLinkId">
+                  @if (!revoked)
+                  {
+                    <form asp-action="RestorePreviewLink" asp-route-previewLinkId="@link.PreviewLinkId" method="post" data-guard-action>@Html.AntiForgeryToken()<button type="submit">Restore preview link</button></form>
+                  }
+                  <form asp-action="DeletePreviewLink" asp-route-previewLinkId="@link.PreviewLinkId" method="post" data-guard-action>@Html.AntiForgeryToken()<button type="submit">Remove preview link</button></form>
+                </div>
+              }
             </article>
           }
           </div>
