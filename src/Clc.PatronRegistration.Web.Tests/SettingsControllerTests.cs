@@ -13,6 +13,7 @@ using System.Reflection;
 using Microsoft.Extensions.Options;
 using Moq;
 using Clc.Polaris.Api.Models;
+using Microsoft.Data.SqlClient;
 
 namespace Clc.PatronRegistration.Tests;
 
@@ -408,6 +409,24 @@ public class SettingsControllerTests
 
         if (unauthorized) Assert.IsInstanceOfType<ForbidResult>(result);
         else AssertDraftConflictRedirect(controller, result, 3, string.Empty);
+    }
+
+    [DataTestMethod]
+    [DataRow(true)]
+    [DataRow(false)]
+    public void InactivePreviewLinkActions_DeadlockUsesContextualDraftConflictRedirect(bool restore)
+    {
+        var repository = PreviewLifecycleRepository(NonSensitiveDraft());
+        if (restore)
+            repository.Setup(service => service.RestorePreviewLink(12, It.IsAny<int>(), It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), false, It.IsAny<AuditContext>()))
+                .Throws(SqlExceptionWithNumber(1205));
+        else
+            repository.Setup(service => service.DeletePreviewLink(12, It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), false, It.IsAny<AuditContext>()))
+                .Throws(SqlExceptionWithNumber(1205));
+        var controller = CreateController(repository, LibraryAuthorization());
+
+        AssertDraftConflictRedirect(controller,
+            restore ? controller.RestorePreviewLink(12) : controller.DeletePreviewLink(12), 3, string.Empty);
     }
 
     [TestMethod]
@@ -1395,6 +1414,31 @@ public class SettingsControllerTests
         repository.Setup(service => service.GetFormCodes(It.IsAny<int>(), It.IsAny<int>())).Returns([]);
         repository.Setup(service => service.GetLegacyFormCodes()).Returns([]);
         return repository;
+    }
+
+    private static SqlException SqlExceptionWithNumber(int number)
+    {
+        var errorConstructor = typeof(SqlError).GetConstructors(BindingFlags.Instance | BindingFlags.NonPublic)
+            .Where(constructor => constructor.GetParameters().Any(parameter => parameter.Name == "infoNumber"))
+            .OrderBy(constructor => constructor.GetParameters().Length).First();
+        var errorArguments = errorConstructor.GetParameters().Select(parameter => parameter.Name == "infoNumber"
+            ? (object)number
+            : parameter.ParameterType == typeof(string) ? string.Empty
+            : parameter.ParameterType == typeof(Exception) ? null
+            : Activator.CreateInstance(parameter.ParameterType)).ToArray();
+        var error = (SqlError)errorConstructor.Invoke(errorArguments);
+        var errors = (SqlErrorCollection)Activator.CreateInstance(typeof(SqlErrorCollection), nonPublic: true)!;
+        typeof(SqlErrorCollection).GetMethod("Add", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(errors, [error]);
+        var factory = typeof(SqlException).GetMethods(BindingFlags.Static | BindingFlags.NonPublic)
+            .Where(method => method.Name == "CreateException" && method.GetParameters() is var parameters &&
+                parameters.Length >= 2 && parameters[0].ParameterType == typeof(SqlErrorCollection) && parameters[1].ParameterType == typeof(string))
+            .OrderBy(method => method.GetParameters().Length).First();
+        var factoryArguments = factory.GetParameters().Select((parameter, index) => index == 0 ? errors
+            : index == 1 ? (object)"test"
+            : parameter.ParameterType == typeof(Guid) ? Guid.NewGuid()
+            : parameter.ParameterType == typeof(Exception) ? null
+            : Activator.CreateInstance(parameter.ParameterType)).ToArray();
+        return (SqlException)factory.Invoke(null, factoryArguments)!;
     }
 
     private static SettingDraft NonSensitiveDraft() => new(24, 3, string.Empty, 0, DraftStatus.Active,

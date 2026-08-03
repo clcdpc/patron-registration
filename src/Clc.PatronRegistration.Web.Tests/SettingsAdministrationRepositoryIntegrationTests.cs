@@ -467,11 +467,12 @@ values(@draftId,@hash,0,101,'legacy','legacy',null)", parameters: command =>
         var revokedId = SeedPreviewLink(draftId, Enumerable.Repeat((byte)14, 32).ToArray(), clock.GetUtcNow().UtcDateTime.AddHours(-1), revoked: true);
         Assert.ThrowsException<DBConcurrencyException>(() => repository.RestorePreviewLink(revokedId, 24, Catalog, true, Audit()));
 
-        foreach (var status in new[] { "Committed", "Discarded" })
+        foreach (var (status, hashByte) in new[] { ("Committed", (byte)22), ("Discarded", (byte)23) })
         {
             var inactiveDraft = SeedDraft(1, status, First, status);
-            var linkId = SeedPreviewLink(inactiveDraft, Enumerable.Repeat((byte)status.Length, 32).ToArray(), clock.GetUtcNow().UtcDateTime.AddHours(-1));
+            var linkId = SeedPreviewLink(inactiveDraft, Enumerable.Repeat(hashByte, 32).ToArray(), clock.GetUtcNow().UtcDateTime.AddHours(-1));
             Assert.ThrowsException<DBConcurrencyException>(() => repository.RestorePreviewLink(linkId, 24, Catalog, true, Audit()));
+            Assert.AreEqual(status, repository.GetPreviewLink(linkId)!.DraftStatus);
         }
         AssertAuditCount("PreviewLinkRestored", 0);
     }

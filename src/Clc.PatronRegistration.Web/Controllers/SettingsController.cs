@@ -514,6 +514,10 @@ public sealed class SettingsController(
         {
             return DraftConflictResult(link.OrganizationId, link.FormCode);
         }
+        catch (SqlException exception) when (exception.Number == 1205)
+        {
+            return DraftConflictResult(link.OrganizationId, link.FormCode);
+        }
         return RedirectToAction(nameof(Index), new { organizationId = link.OrganizationId, formCode = link.FormCode });
     }
 
