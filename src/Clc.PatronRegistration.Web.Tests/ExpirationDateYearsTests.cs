@@ -15,6 +15,41 @@ public sealed class ExpirationDateYearsTests
     [DataRow(null, BoundedIntegerSettingState.Unconfigured, null)]
     [DataRow("", BoundedIntegerSettingState.Unconfigured, null)]
     [DataRow("0", BoundedIntegerSettingState.Valid, 0)]
+    [DataRow("100", BoundedIntegerSettingState.Valid, 100)]
+    [DataRow("-1", BoundedIntegerSettingState.Invalid, null)]
+    [DataRow("101", BoundedIntegerSettingState.Invalid, null)]
+    [DataRow("9999", BoundedIntegerSettingState.Invalid, null)]
+    [DataRow("not-a-number", BoundedIntegerSettingState.Invalid, null)]
+    [DataRow("   ", BoundedIntegerSettingState.Invalid, null)]
+    public void DbSettingProvider_ParsesRawEffectiveExpirationYears(
+        string? raw, BoundedIntegerSettingState expectedState, int? expectedValue)
+    {
+        var cache = new TestCache();
+        if (raw is not null)
+        {
+            cache.SettingsCache =
+            [
+                new RegistrationFormSetting
+                {
+                    OrganizationID = 3,
+                    FormCode = string.Empty,
+                    Setting = "expiration_date_years",
+                    Value = raw
+                }
+            ];
+        }
+        var provider = new DbSettingProvider(3, cache);
+
+        var result = provider.GetExpirationDateYearsState();
+
+        Assert.AreEqual(expectedState, result.State);
+        Assert.AreEqual(expectedValue, result.Value);
+    }
+
+    [DataTestMethod]
+    [DataRow(null, BoundedIntegerSettingState.Unconfigured, null)]
+    [DataRow("", BoundedIntegerSettingState.Unconfigured, null)]
+    [DataRow("0", BoundedIntegerSettingState.Valid, 0)]
     [DataRow("1", BoundedIntegerSettingState.Valid, 1)]
     [DataRow("100", BoundedIntegerSettingState.Valid, 100)]
     [DataRow("-1", BoundedIntegerSettingState.Invalid, null)]

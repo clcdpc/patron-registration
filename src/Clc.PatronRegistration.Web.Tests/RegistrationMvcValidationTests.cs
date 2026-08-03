@@ -13,15 +13,21 @@ public sealed class RegistrationMvcValidationTests
 {
     [DataTestMethod]
     [DataRow(false, null)]
+    [DataRow(false, "")]
     [DataRow(false, "Responsible adult")]
+    [DataRow(true, null)]
+    [DataRow(true, "")]
     [DataRow(true, "Responsible adult")]
     public void User5_UsesOnlyConfiguredRequiredness(bool required, string? value)
     {
         var modelState = Validate(required, value, out _);
 
         if (required && string.IsNullOrWhiteSpace(value))
+        {
+            Assert.AreEqual(1, modelState[nameof(Registration.User5)]!.Errors.Count);
             CollectionAssert.AreEqual(new[] { "Responsible person is required." },
                 modelState[nameof(Registration.User5)]!.Errors.Select(error => error.ErrorMessage).ToArray());
+        }
         else
             Assert.IsFalse(modelState.ContainsKey(nameof(Registration.User5)) &&
                            modelState[nameof(Registration.User5)]!.Errors.Count > 0);

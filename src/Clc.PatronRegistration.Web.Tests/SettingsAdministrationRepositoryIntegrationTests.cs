@@ -378,7 +378,7 @@ values(@draftId,@hash,0,101,'legacy','legacy',null)", parameters: command =>
     {
         SeedVersion(1);
         var draftId = SeedActiveDraft(1, First, "draft");
-        var nowUtc = new DateTime(2030, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var nowUtc = DateTime.UtcNow;
         var originalId = repository.CreatePreviewLink(draftId, Enumerable.Repeat((byte)3, 32).ToArray(),
             originalLive, 101, nowUtc, 24, Catalog, true, Audit());
         var expectedExpiration = repository.GetPreviewLink(originalId)!.ExpiresAtUtc;
@@ -389,6 +389,26 @@ values(@draftId,@hash,0,101,'legacy','legacy',null)", parameters: command =>
         Assert.IsNotNull(replacementId);
         Assert.AreEqual(expectedExpiration, repository.GetPreviewLink(replacementId.Value)!.ExpiresAtUtc);
         Assert.IsNotNull(repository.GetPreviewLink(originalId)!.RevokedAtUtc);
+    }
+
+    [TestMethod]
+    public void ReplacePreviewLinkMode_ExpiredLinkWritesNothing()
+    {
+        SeedVersion(1);
+        var draftId = SeedActiveDraft(1, First, "draft");
+        var originalId = repository.CreatePreviewLink(draftId, Enumerable.Repeat((byte)5, 32).ToArray(),
+            false, 101, DateTime.UtcNow.AddHours(-2), 1, Catalog, true, Audit());
+        var original = repository.GetPreviewLink(originalId)!;
+        var auditCount = Scalar<int>("select count(*) from dbo.RegistrationSettingAuditEvents where EventType='PreviewLinkModeReplaced' and Succeeded=1");
+
+        Assert.ThrowsException<DBConcurrencyException>(() => repository.ReplacePreviewLinkMode(originalId,
+            Enumerable.Repeat((byte)6, 32).ToArray(), true, Catalog, true, Audit()));
+
+        var unchanged = repository.GetPreviewLink(originalId)!;
+        Assert.IsNull(unchanged.RevokedAtUtc);
+        Assert.AreEqual(original.ExpiresAtUtc, unchanged.ExpiresAtUtc);
+        Assert.AreEqual(1, Scalar<int>("select count(*) from dbo.RegistrationSettingPreviewLinks"));
+        Assert.AreEqual(auditCount, Scalar<int>("select count(*) from dbo.RegistrationSettingAuditEvents where EventType='PreviewLinkModeReplaced' and Succeeded=1"));
     }
 
     private void SeedVersion(long version)
