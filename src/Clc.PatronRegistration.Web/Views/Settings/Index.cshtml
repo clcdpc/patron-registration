@@ -1,4 +1,5 @@
 @using Clc.PatronRegistration.Administration
+@using Clc.PatronRegistration.Web.Settings
 @model Clc.PatronRegistration.Web.Models.SettingsIndexViewModel
 @{
     ViewData["Title"] = "Registration settings";
@@ -139,11 +140,12 @@
             var branch = Model.PreviewBranches.FirstOrDefault(b => b.OrganizationId == link.OperationalBranchId);
             var revoked = link.RevokedAtUtc.HasValue;
             var expired = !link.ExpiresAtUtc.HasValue || link.ExpiresAtUtc.Value <= nowUtc;
+            var actions = PreviewLinkActionPolicy.For(link, nowUtc);
             <article class="preview-link-item" aria-labelledby="preview-link-@link.PreviewLinkId-title">
               <h5 id="preview-link-@link.PreviewLinkId-title" class="preview-link-name">Preview link #@link.PreviewLinkId</h5>
               <p class="preview-link-branch">Operational branch: @(branch?.DisplayName ?? $"branch {link.OperationalBranchId}")</p>
               <p class="preview-link-status"><span class="status-badge">@(revoked ? "Revoked" : expired ? "Expired" : link.AllowLiveSubmission ? "Live" : "Safe")</span><span>— @(revoked ? "Revoked and unusable" : expired ? "Expired and unusable" : "Active")</span></p>
-              @if (!revoked && !expired)
+              @if (actions.Replace)
               {
                 <div class="preview-link-actions" role="group" aria-label="Actions for preview link @link.PreviewLinkId">
                   <form asp-action="ReplacePreviewLinkMode" asp-route-previewLinkId="@link.PreviewLinkId" method="post" data-requires-live-confirm="@(!link.AllowLiveSubmission)" data-guard-action>@Html.AntiForgeryToken()<input type="hidden" name="allowLiveSubmission" value="@(!link.AllowLiveSubmission)"/><button type="submit">Replace with @(link.AllowLiveSubmission ? "safe" : "live") link</button></form>
@@ -153,11 +155,11 @@
               else
               {
                 <div class="preview-link-actions" role="group" aria-label="Actions for preview link @link.PreviewLinkId">
-                  @if (!revoked)
+                  @if (actions.Restore)
                   {
-                    <form asp-action="RestorePreviewLink" asp-route-previewLinkId="@link.PreviewLinkId" method="post" data-guard-action>@Html.AntiForgeryToken()<button type="submit">Restore preview link</button></form>
+                    <form asp-action="RestorePreviewLink" asp-route-previewLinkId="@link.PreviewLinkId" method="post" data-guard-action>@Html.AntiForgeryToken()<button type="submit">Restore</button></form>
                   }
-                  <form asp-action="DeletePreviewLink" asp-route-previewLinkId="@link.PreviewLinkId" method="post" data-guard-action>@Html.AntiForgeryToken()<button type="submit">Remove preview link</button></form>
+                  <form asp-action="DeletePreviewLink" asp-route-previewLinkId="@link.PreviewLinkId" method="post" data-guard-action>@Html.AntiForgeryToken()<button type="submit">Remove</button></form>
                 </div>
               }
             </article>

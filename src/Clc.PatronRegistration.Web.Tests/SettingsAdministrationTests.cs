@@ -16,13 +16,38 @@ public class SettingsAdministrationTests
     {
         var root = FindRepositoryRoot();
         var view = File.ReadAllText(Path.Combine(root, "src/Clc.PatronRegistration.Web/Views/Settings/Index.cshtml"));
+        static string Form(string source, string action)
+        {
+            var start = source.IndexOf($"<form asp-action=\"{action}\"", StringComparison.Ordinal);
+            Assert.IsTrue(start >= 0, $"The {action} form was not found.");
+            var end = source.IndexOf("</form>", start, StringComparison.Ordinal);
+            return source[start..(end + "</form>".Length)];
+        }
+        var restore = Form(view, "RestorePreviewLink");
+        var remove = Form(view, "DeletePreviewLink");
 
-        StringAssert.Contains(view, "asp-action=\"RestorePreviewLink\"");
-        StringAssert.Contains(view, ">Restore preview link</button>");
-        StringAssert.Contains(view, "asp-action=\"DeletePreviewLink\"");
-        StringAssert.Contains(view, ">Remove preview link</button>");
-        StringAssert.Contains(view, "@Html.AntiForgeryToken()");
+        StringAssert.Contains(restore, ">Restore</button>");
+        StringAssert.Contains(remove, ">Remove</button>");
+        StringAssert.Contains(restore, "@Html.AntiForgeryToken()");
+        StringAssert.Contains(remove, "@Html.AntiForgeryToken()");
         StringAssert.Contains(view, "aria-label=\"Actions for preview link @link.PreviewLinkId\"");
+    }
+
+    [DataTestMethod]
+    [DataRow(null, null, false, false, true, true)]
+    [DataRow(null, -1, false, false, true, true)]
+    [DataRow(null, 1, true, true, false, false)]
+    [DataRow(0, 1, false, false, false, true)]
+    public void PreviewLinkActionPolicy_ProvidesOnlyActionsForCurrentState(
+        int? revokedOffsetHours, int? expirationOffsetHours, bool replace, bool revoke, bool restore, bool remove)
+    {
+        var now = new DateTime(2030, 1, 2, 3, 4, 5, DateTimeKind.Utc);
+        var link = new PreviewLinkRecord(42, 7, new byte[32], false,
+            revokedOffsetHours.HasValue ? now.AddHours(revokedOffsetHours.Value) : null,
+            expirationOffsetHours.HasValue ? now.AddHours(expirationOffsetHours.Value) : null,
+            3, "form", "Active", 3);
+
+        Assert.AreEqual(new PreviewLinkActions(replace, revoke, restore, remove), PreviewLinkActionPolicy.For(link, now));
     }
     [DataTestMethod]
     [DataRow(null, true)]

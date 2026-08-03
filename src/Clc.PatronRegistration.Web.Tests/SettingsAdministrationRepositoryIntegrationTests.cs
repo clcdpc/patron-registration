@@ -2,6 +2,7 @@ using System.Data;
 using Clc.PatronRegistration.Administration;
 using Clc.PatronRegistration.Web.Settings;
 using Microsoft.Data.SqlClient;
+using System.Text.Json;
 
 #nullable enable
 
@@ -413,6 +414,182 @@ values(@draftId,@hash,0,101,'legacy','legacy',null)", parameters: command =>
         Assert.AreEqual(auditCount, Scalar<int>("select count(*) from dbo.RegistrationSettingAuditEvents where EventType='PreviewLinkModeReplaced' and Succeeded=1"));
     }
 
+    [TestMethod]
+    public void RestorePreviewLink_ExpiredLinkPreservesIdentityAndMakesOriginalTokenResolvable()
+    {
+        SeedVersion(1);
+        var draftId = SeedActiveDraft(1, First, "draft");
+        var hash = Enumerable.Repeat((byte)11, 32).ToArray();
+        var linkId = repository.CreatePreviewLink(draftId, hash, true, 101, 1, Catalog, true, Audit());
+        var previousExpiration = repository.GetPreviewLink(linkId)!.ExpiresAtUtc!.Value;
+        clock.Advance(TimeSpan.FromHours(2));
+
+        repository.RestorePreviewLink(linkId, 24, Catalog, true, Audit());
+
+        var restored = repository.GetPreviewLink(linkId)!;
+        Assert.AreEqual(linkId, restored.PreviewLinkId);
+        Assert.AreEqual(draftId, restored.DraftId);
+        CollectionAssert.AreEqual(hash, restored.TokenHash);
+        Assert.IsTrue(restored.AllowLiveSubmission);
+        Assert.AreEqual(101, restored.OperationalBranchId);
+        Assert.AreEqual(clock.GetUtcNow().UtcDateTime.AddHours(24), restored.ExpiresAtUtc);
+        Assert.AreEqual(linkId, repository.ResolvePreviewContext(hash)!.Link.PreviewLinkId);
+        var audit = ReadAudits().Single(row => row.EventType == "PreviewLinkRestored");
+        using var metadata = JsonDocument.Parse(audit.MetadataJson!);
+        Assert.AreEqual(previousExpiration, metadata.RootElement.GetProperty("previousExpiresAtUtc").GetDateTime());
+        Assert.AreEqual(restored.ExpiresAtUtc, metadata.RootElement.GetProperty("newExpiresAtUtc").GetDateTime());
+    }
+
+    [TestMethod]
+    public void RestorePreviewLink_NullExpirationIsEligibleAndAuditedAsJsonNull()
+    {
+        SeedVersion(1);
+        var draftId = SeedActiveDraft(1, First, "draft");
+        var hash = Enumerable.Repeat((byte)12, 32).ToArray();
+        var linkId = SeedPreviewLink(draftId, hash, expiration: null);
+
+        repository.RestorePreviewLink(linkId, 6, Catalog, true, Audit());
+
+        Assert.AreEqual(clock.GetUtcNow().UtcDateTime.AddHours(6), repository.GetPreviewLink(linkId)!.ExpiresAtUtc);
+        using var metadata = JsonDocument.Parse(ReadAudits().Single(row => row.EventType == "PreviewLinkRestored").MetadataJson!);
+        Assert.AreEqual(JsonValueKind.Null, metadata.RootElement.GetProperty("previousExpiresAtUtc").ValueKind);
+    }
+
+    [TestMethod]
+    public void RestorePreviewLink_ActiveRevokedAndInactiveDraftsAreRejectedWithoutSuccessAudit()
+    {
+        SeedVersion(1);
+        var draftId = SeedActiveDraft(1, First, "draft");
+        var activeId = repository.CreatePreviewLink(draftId, Enumerable.Repeat((byte)13, 32).ToArray(), false, 101, 2, Catalog, true, Audit());
+        Assert.ThrowsException<DBConcurrencyException>(() => repository.RestorePreviewLink(activeId, 24, Catalog, true, Audit()));
+        Assert.AreEqual(clock.GetUtcNow().UtcDateTime.AddHours(2), repository.GetPreviewLink(activeId)!.ExpiresAtUtc);
+
+        var revokedId = SeedPreviewLink(draftId, Enumerable.Repeat((byte)14, 32).ToArray(), clock.GetUtcNow().UtcDateTime.AddHours(-1), revoked: true);
+        Assert.ThrowsException<DBConcurrencyException>(() => repository.RestorePreviewLink(revokedId, 24, Catalog, true, Audit()));
+
+        foreach (var status in new[] { "Committed", "Discarded" })
+        {
+            var inactiveDraft = SeedDraft(1, status, First, status);
+            var linkId = SeedPreviewLink(inactiveDraft, Enumerable.Repeat((byte)status.Length, 32).ToArray(), clock.GetUtcNow().UtcDateTime.AddHours(-1));
+            Assert.ThrowsException<DBConcurrencyException>(() => repository.RestorePreviewLink(linkId, 24, Catalog, true, Audit()));
+        }
+        AssertAuditCount("PreviewLinkRestored", 0);
+    }
+
+    [TestMethod]
+    public void RestrictedDraft_RequiresGlobalAdministratorForRestoreAndDelete()
+    {
+        SeedVersion(1);
+        var draftId = SeedActiveDraft(1, Secret, "secret");
+        var restoreId = SeedPreviewLink(draftId, Enumerable.Repeat((byte)15, 32).ToArray(), clock.GetUtcNow().UtcDateTime.AddHours(-1));
+        var deleteId = SeedPreviewLink(draftId, Enumerable.Repeat((byte)16, 32).ToArray(), clock.GetUtcNow().UtcDateTime.AddHours(-1));
+
+        Assert.ThrowsException<UnauthorizedAccessException>(() => repository.RestorePreviewLink(restoreId, 24, Catalog, false, Audit()));
+        Assert.ThrowsException<UnauthorizedAccessException>(() => repository.DeletePreviewLink(deleteId, Catalog, false, Audit()));
+        repository.RestorePreviewLink(restoreId, 24, Catalog, true, Audit());
+        repository.DeletePreviewLink(deleteId, Catalog, true, Audit());
+
+        Assert.IsNotNull(repository.GetPreviewLink(restoreId));
+        Assert.IsNull(repository.GetPreviewLink(deleteId));
+        AssertAuditCount("PreviewLinkRestored", 1);
+        AssertAuditCount("PreviewLinkDeleted", 1);
+    }
+
+    [TestMethod]
+    public void DeletePreviewLink_ExpiredAndRevokedLinksAreRemovedWithStateMetadata()
+    {
+        SeedVersion(1);
+        var draftId = SeedActiveDraft(1, First, "draft");
+        var expiredId = SeedPreviewLink(draftId, Enumerable.Repeat((byte)17, 32).ToArray(), clock.GetUtcNow().UtcDateTime.AddHours(-1));
+        var revokedId = SeedPreviewLink(draftId, Enumerable.Repeat((byte)18, 32).ToArray(), clock.GetUtcNow().UtcDateTime.AddHours(1), revoked: true);
+
+        repository.DeletePreviewLink(expiredId, Catalog, true, Audit());
+        repository.DeletePreviewLink(revokedId, Catalog, true, Audit());
+
+        Assert.IsNull(repository.GetPreviewLink(expiredId));
+        Assert.IsNull(repository.GetPreviewLink(revokedId));
+        Assert.IsFalse(repository.GetPreviewLinks(draftId).Any(link => link.PreviewLinkId is var id && (id == expiredId || id == revokedId)));
+        var metadata = ReadAudits().Where(row => row.EventType == "PreviewLinkDeleted")
+            .Select(row => JsonDocument.Parse(row.MetadataJson!).RootElement.Clone()).ToList();
+        Assert.IsTrue(metadata.Any(value => value.GetProperty("expired").GetBoolean() && !value.GetProperty("revoked").GetBoolean()));
+        Assert.IsTrue(metadata.Any(value => value.GetProperty("revoked").GetBoolean()));
+    }
+
+    [TestMethod]
+    public void DeletePreviewLink_ActiveLinkIsRejectedWithoutDeletingOrAuditing()
+    {
+        SeedVersion(1);
+        var draftId = SeedActiveDraft(1, First, "draft");
+        var linkId = SeedPreviewLink(draftId, Enumerable.Repeat((byte)19, 32).ToArray(), clock.GetUtcNow().UtcDateTime.AddHours(1));
+
+        Assert.ThrowsException<DBConcurrencyException>(() => repository.DeletePreviewLink(linkId, Catalog, true, Audit()));
+
+        Assert.IsNotNull(repository.GetPreviewLink(linkId));
+        AssertAuditCount("PreviewLinkDeleted", 0);
+    }
+
+    [TestMethod]
+    public async Task ConcurrentRestoreAndDelete_ProducesOneCompleteOutcomeWithoutPartialWrites()
+    {
+        SeedVersion(1);
+        var draftId = SeedActiveDraft(1, First, "draft");
+        var linkId = SeedPreviewLink(draftId, Enumerable.Repeat((byte)20, 32).ToArray(), clock.GetUtcNow().UtcDateTime.AddHours(-1));
+        using var barrier = new Barrier(2);
+        Task<Exception?> Run(Action<SettingsAdministrationRepository> operation) => Task.Run(() =>
+        {
+            barrier.SignalAndWait(TimeSpan.FromSeconds(10));
+            try
+            {
+                operation(new SettingsAdministrationRepository(databaseConnectionString!, clock));
+                return null;
+            }
+            catch (Exception exception) { return exception; }
+        });
+
+        var restore = Run(repo => repo.RestorePreviewLink(linkId, 24, Catalog, true, Audit()));
+        var delete = Run(repo => repo.DeletePreviewLink(linkId, Catalog, true, Audit()));
+        await Task.WhenAll(restore, delete).WaitAsync(TimeSpan.FromSeconds(40));
+
+        var errors = new[] { restore.Result, delete.Result }.Where(error => error is not null).ToList();
+        Assert.IsTrue(errors.All(error => error is DBConcurrencyException or SqlException { Number: 1205 }),
+            $"Unexpected concurrency error: {errors.FirstOrDefault()}");
+        Assert.AreEqual(1, errors.Count);
+        var link = repository.GetPreviewLink(linkId);
+        Assert.AreEqual(link is null ? 1 : 0, ReadAudits().Count(row => row.EventType == "PreviewLinkDeleted"));
+        Assert.AreEqual(link is null ? 0 : 1, ReadAudits().Count(row => row.EventType == "PreviewLinkRestored"));
+    }
+
+    [TestMethod]
+    public async Task ConcurrentRestoreAndDraftDiscard_HasControlledOutcomeAndNoPartialRestore()
+    {
+        SeedVersion(1);
+        var draftId = SeedActiveDraft(1, First, "draft");
+        var linkId = SeedPreviewLink(draftId, Enumerable.Repeat((byte)21, 32).ToArray(), clock.GetUtcNow().UtcDateTime.AddHours(-1));
+        using var barrier = new Barrier(2);
+        Exception? restoreError = null;
+        Exception? discardError = null;
+        var restore = Task.Run(() =>
+        {
+            barrier.SignalAndWait(TimeSpan.FromSeconds(10));
+            try { new SettingsAdministrationRepository(databaseConnectionString!, clock).RestorePreviewLink(linkId, 24, Catalog, true, Audit()); }
+            catch (Exception exception) { restoreError = exception; }
+        });
+        var discard = Task.Run(() =>
+        {
+            barrier.SignalAndWait(TimeSpan.FromSeconds(10));
+            try { new SettingsAdministrationRepository(databaseConnectionString!, clock).DiscardDraft(draftId, Catalog, true, Audit()); }
+            catch (Exception exception) { discardError = exception; }
+        });
+        await Task.WhenAll(restore, discard).WaitAsync(TimeSpan.FromSeconds(40));
+
+        Assert.IsTrue(new[] { restoreError, discardError }.Where(error => error is not null)
+            .All(error => error is DBConcurrencyException or SqlException { Number: 1205 }));
+        var restoredAudits = ReadAudits().Count(row => row.EventType == "PreviewLinkRestored");
+        Assert.IsTrue(restoredAudits is 0 or 1);
+        if (repository.GetDraft(draftId)!.Status != DraftStatus.Active)
+            Assert.IsNull(repository.ResolvePreviewContext(Enumerable.Repeat((byte)21, 32).ToArray()));
+    }
+
     private void SeedVersion(long version)
     {
         using var connection = Open();
@@ -421,11 +598,15 @@ values(@draftId,@hash,0,101,'legacy','legacy',null)", parameters: command =>
             parameters: command => command.Parameters.AddWithValue("@version", version));
     }
     private long SeedActiveDraft(long baselineVersion, SettingDefinition definition, string value)
+        => SeedDraft(baselineVersion, "Active", definition, value);
+
+    private long SeedDraft(long baselineVersion, string status, SettingDefinition definition, string value)
     {
         using var connection = Open();
         using var command = Command(connection, @"insert dbo.RegistrationSettingDrafts(OrganizationId,FormCode,BaselineVersion,Status,CreatedBy,ModifiedBy)
-output inserted.DraftId values(101,'form',@baseline,'Active','other','other')");
+output inserted.DraftId values(101,'form',@baseline,@status,'other','other')");
         command.Parameters.AddWithValue("@baseline", baselineVersion);
+        command.Parameters.AddWithValue("@status", status);
         var draftId = (long)command.ExecuteScalar()!;
         Execute(connection, @"insert dbo.RegistrationSettingDraftChanges(DraftId,SettingKey,Operation,Value,ModifiedBy)
 values(@draftId,@key,'Upsert',@value,'other')", parameters: mutation =>
@@ -435,6 +616,19 @@ values(@draftId,@key,'Upsert',@value,'other')", parameters: mutation =>
             mutation.Parameters.AddWithValue("@value", value);
         });
         return draftId;
+    }
+    private long SeedPreviewLink(long draftId, byte[] hash, DateTime? expiration, bool revoked = false)
+    {
+        using var connection = Open();
+        using var command = Command(connection, @"insert dbo.RegistrationSettingPreviewLinks(
+DraftId,TokenHash,AllowLiveSubmission,OperationalBranchId,CreatedBy,ModifiedBy,ExpiresAtUtc,RevokedAtUtc,RevokedBy)
+output inserted.PreviewLinkId values(@draftId,@hash,0,101,'other','other',@expiration,@revokedAt,@revokedBy)");
+        command.Parameters.AddWithValue("@draftId", draftId);
+        command.Parameters.AddWithValue("@hash", hash);
+        command.Parameters.AddWithValue("@expiration", (object?)expiration ?? DBNull.Value);
+        command.Parameters.AddWithValue("@revokedAt", revoked ? clock.GetUtcNow().UtcDateTime : DBNull.Value);
+        command.Parameters.AddWithValue("@revokedBy", revoked ? "other" : DBNull.Value);
+        return (long)command.ExecuteScalar()!;
     }
     private long ReadScopeVersion() => Scalar<long>("select Version from dbo.RegistrationSettingScopeVersions where OrganizationId=101 and FormCode='form'");
     private int CountActiveDrafts() => Scalar<int>("select count(*) from dbo.RegistrationSettingDrafts where OrganizationId=101 and FormCode='form' and Status='Active'");

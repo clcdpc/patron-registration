@@ -57,6 +57,18 @@ public sealed record PreviewLinkRecord(
 
 public sealed record PreviewContextSnapshot(PreviewLinkRecord Link, SettingDraft Draft);
 
+public sealed record PreviewLinkActions(bool Replace, bool Revoke, bool Restore, bool Remove);
+
+public static class PreviewLinkActionPolicy
+{
+    public static PreviewLinkActions For(PreviewLinkRecord link, DateTime nowUtc)
+    {
+        var revoked = link.RevokedAtUtc.HasValue;
+        var expired = !link.ExpiresAtUtc.HasValue || link.ExpiresAtUtc.Value <= nowUtc;
+        return new PreviewLinkActions(!revoked && !expired, !revoked && !expired, !revoked && expired, revoked || expired);
+    }
+}
+
 public enum PreviewLockStep
 {
     CandidateLookupOutsideTransaction,
@@ -549,21 +561,22 @@ where PreviewLinkId=@previewLinkId and RevokedAtUtc is null
         var nowUtc = timeProvider.GetUtcNow().UtcDateTime;
         var link = LockPreviewLink(connection, transaction, previewLinkId, candidateDraftId);
         EnsureCanManageRestrictedDraft(connection, transaction, candidateDraftId, catalog, canManageSensitive);
-        if (link.RevokedAtUtc.HasValue || !link.ExpiresAtUtc.HasValue || link.ExpiresAtUtc.Value > nowUtc)
+        if (link.RevokedAtUtc.HasValue || link.ExpiresAtUtc.HasValue && link.ExpiresAtUtc.Value > nowUtc)
             throw new DBConcurrencyException("The preview link is not eligible for restoration.");
 
         var expiresAtUtc = nowUtc.AddHours(lifetimeHours);
         var updated = connection.Execute(@"
 update dbo.RegistrationSettingPreviewLinks
 set ExpiresAtUtc=@expiresAtUtc,ModifiedAtUtc=@nowUtc,ModifiedBy=@actor
-where PreviewLinkId=@previewLinkId and DraftId=@draftId and RevokedAtUtc is null and ExpiresAtUtc<=@nowUtc",
+where PreviewLinkId=@previewLinkId and DraftId=@draftId and RevokedAtUtc is null
+ and (ExpiresAtUtc is null or ExpiresAtUtc<=@nowUtc)",
             new { previewLinkId, draftId = candidateDraftId, expiresAtUtc, nowUtc, actor = audit.ActorName ?? "unknown" }, transaction);
         if (updated != 1)
             throw new DBConcurrencyException("The preview link changed while it was being restored.");
 
         InsertAudit(connection, transaction, "PreviewLinkRestored", true, audit, draftId: candidateDraftId,
             previewLinkId: previewLinkId,
-            metadataJson: $"{{\"previousExpiresAtUtc\":\"{link.ExpiresAtUtc.Value:O}\",\"newExpiresAtUtc\":\"{expiresAtUtc:O}\"}}");
+            metadataJson: $"{{\"previousExpiresAtUtc\":{(link.ExpiresAtUtc.HasValue ? $"\"{link.ExpiresAtUtc.Value:O}\"" : "null")},\"newExpiresAtUtc\":\"{expiresAtUtc:O}\"}}");
         transaction.Commit();
     }
 
