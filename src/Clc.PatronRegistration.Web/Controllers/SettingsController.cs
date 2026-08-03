@@ -469,6 +469,58 @@ public sealed class SettingsController(
         return RedirectToAction(nameof(Index), new { organizationId = link.OrganizationId, formCode = link.FormCode });
     }
 
+    [HttpPost("preview-links/{previewLinkId:long}/restore")]
+    [ValidateAntiForgeryToken]
+    public IActionResult RestorePreviewLink(long previewLinkId) =>
+        ChangeInactivePreviewLink(previewLinkId, restore: true);
+
+    [HttpPost("preview-links/{previewLinkId:long}/delete")]
+    [ValidateAntiForgeryToken]
+    public IActionResult DeletePreviewLink(long previewLinkId) =>
+        ChangeInactivePreviewLink(previewLinkId, restore: false);
+
+    private IActionResult ChangeInactivePreviewLink(long previewLinkId, bool restore)
+    {
+        var link = repository.GetPreviewLink(previewLinkId);
+        if (link is null)
+            return Conflict("The preview link no longer exists. Reload the settings page.");
+        var operation = restore ? "restoration" : "removal";
+        if (!ValidateScope(link.OrganizationId, link.FormCode) || !CanManagePreviewLink(link))
+        {
+            AuditRestrictedDraftRejection(link.OrganizationId, link.FormCode, $"Preview-link {operation} was rejected.");
+            return Forbid();
+        }
+        try
+        {
+            if (restore)
+            {
+                repository.RestorePreviewLink(previewLinkId, settingsOptions.PreviewLinkLifetimeHours, CatalogByKey,
+                    authorization.Describe(User).IsGlobal, CreateAudit(link.OrganizationId, link.FormCode));
+                TempData["SettingsStatus"] = $"Preview link #{previewLinkId} was restored for another {settingsOptions.PreviewLinkLifetimeHours} hours.";
+            }
+            else
+            {
+                repository.DeletePreviewLink(previewLinkId, CatalogByKey, authorization.Describe(User).IsGlobal,
+                    CreateAudit(link.OrganizationId, link.FormCode));
+                TempData["SettingsStatus"] = $"Preview link #{previewLinkId} was removed.";
+            }
+        }
+        catch (UnauthorizedAccessException)
+        {
+            AuditRestrictedDraftRejection(link.OrganizationId, link.FormCode, $"Preview-link {operation} was rejected.");
+            return Forbid();
+        }
+        catch (DBConcurrencyException)
+        {
+            return DraftConflictResult(link.OrganizationId, link.FormCode);
+        }
+        catch (SqlException exception) when (exception.Number == 1205)
+        {
+            return DraftConflictResult(link.OrganizationId, link.FormCode);
+        }
+        return RedirectToAction(nameof(Index), new { organizationId = link.OrganizationId, formCode = link.FormCode });
+    }
+
     [HttpPost("preview-links/{previewLinkId:long}/live-submission")]
     [ValidateAntiForgeryToken]
     public IActionResult ReplacePreviewLinkMode(long previewLinkId, bool allowLiveSubmission)

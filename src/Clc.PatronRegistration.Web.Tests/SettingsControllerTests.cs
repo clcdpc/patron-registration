@@ -13,6 +13,7 @@ using System.Reflection;
 using Microsoft.Extensions.Options;
 using Moq;
 using Clc.Polaris.Api.Models;
+using Microsoft.Data.SqlClient;
 
 namespace Clc.PatronRegistration.Tests;
 
@@ -292,6 +293,140 @@ public class SettingsControllerTests
         repository.Verify(service => service.ReplacePreviewLinkMode(12,
             It.Is<byte[]>(hash => hash.Length == 32), true,
             It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), false, It.IsAny<AuditContext>()), Times.Once);
+    }
+
+    [TestMethod]
+    public void RestorePreviewLink_RedirectsWithStatusWithoutCreatingToken()
+    {
+        var repository = new Mock<ISettingsAdministrationRepository>();
+        repository.Setup(service => service.GetFormCodes(It.IsAny<int>(), It.IsAny<int>())).Returns([]);
+        repository.Setup(service => service.GetLegacyFormCodes()).Returns([]);
+        var draft = NonSensitiveDraft();
+        repository.Setup(service => service.GetDraft(draft.DraftId)).Returns(draft);
+        repository.Setup(service => service.GetPreviewLink(12)).Returns(PreviewLink(draft));
+        var tokens = new Mock<IPreviewTokenService>();
+        var controller = CreateController(repository, LibraryAuthorization(),
+            previewTokenService: tokens.Object,
+            administrationOptions: new SettingsAdministrationOptions { PreviewLinkLifetimeHours = 37 });
+
+        var result = (RedirectToActionResult)controller.RestorePreviewLink(12);
+
+        Assert.AreEqual(nameof(SettingsController.Index), result.ActionName);
+        Assert.AreEqual(3, result.RouteValues!["organizationId"]);
+        Assert.AreEqual(string.Empty, result.RouteValues["formCode"]);
+        Assert.AreEqual("Preview link #12 was restored for another 37 hours.", controller.TempData["SettingsStatus"]);
+        repository.Verify(service => service.RestorePreviewLink(12, 37,
+            It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), false, It.IsAny<AuditContext>()), Times.Once);
+        tokens.Verify(service => service.Create(), Times.Never);
+        Assert.IsNotInstanceOfType<ViewResult>(result);
+    }
+
+    [TestMethod]
+    public void DeletePreviewLink_RedirectsWithConsistentRemovalStatus()
+    {
+        var repository = new Mock<ISettingsAdministrationRepository>();
+        repository.Setup(service => service.GetFormCodes(It.IsAny<int>(), It.IsAny<int>())).Returns([]);
+        repository.Setup(service => service.GetLegacyFormCodes()).Returns([]);
+        var draft = NonSensitiveDraft();
+        repository.Setup(service => service.GetDraft(draft.DraftId)).Returns(draft);
+        repository.Setup(service => service.GetPreviewLink(12)).Returns(PreviewLink(draft));
+        var controller = CreateController(repository, LibraryAuthorization());
+
+        var result = (RedirectToActionResult)controller.DeletePreviewLink(12);
+
+        Assert.AreEqual(nameof(SettingsController.Index), result.ActionName);
+        Assert.AreEqual("Preview link #12 was removed.", controller.TempData["SettingsStatus"]);
+        repository.Verify(service => service.DeletePreviewLink(12,
+            It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), false, It.IsAny<AuditContext>()), Times.Once);
+    }
+
+    [DataTestMethod]
+    [DataRow(nameof(SettingsController.RestorePreviewLink))]
+    [DataRow(nameof(SettingsController.DeletePreviewLink))]
+    public void InactivePreviewLinkActions_RequirePostAndAntiforgery(string action)
+    {
+        var method = typeof(SettingsController).GetMethod(action)!;
+        Assert.IsTrue(method.GetCustomAttributes(typeof(HttpPostAttribute), true).Any());
+        Assert.IsTrue(method.GetCustomAttributes(typeof(ValidateAntiForgeryTokenAttribute), true).Any());
+    }
+
+    [DataTestMethod]
+    [DataRow(true)]
+    [DataRow(false)]
+    public void InactivePreviewLinkActions_MissingLinkReturnsConflict(bool restore)
+    {
+        var controller = CreateController(new Mock<ISettingsAdministrationRepository>(), LibraryAuthorization());
+        Assert.IsInstanceOfType<ConflictObjectResult>(restore ? controller.RestorePreviewLink(12) : controller.DeletePreviewLink(12));
+    }
+
+    [DataTestMethod]
+    [DataRow(true)]
+    [DataRow(false)]
+    public void InactivePreviewLinkActions_UnauthorizedScopeIsForbidden(bool restore)
+    {
+        var repository = PreviewLifecycleRepository(NonSensitiveDraft());
+        var authorization = LibraryAuthorization();
+        authorization.Setup(service => service.CanManage(It.IsAny<ClaimsPrincipal>(), 3, It.IsAny<bool>())).Returns(false);
+
+        Assert.IsInstanceOfType<ForbidResult>(restore
+            ? CreateController(repository, authorization).RestorePreviewLink(12)
+            : CreateController(repository, authorization).DeletePreviewLink(12));
+    }
+
+    [DataTestMethod]
+    [DataRow(true)]
+    [DataRow(false)]
+    public void InactivePreviewLinkActions_RestrictedDraftRequiresGlobalAdministrator(bool restore)
+    {
+        var restricted = PreviewLifecycleRepository(SensitiveDraft());
+        Assert.IsInstanceOfType<ForbidResult>(restore
+            ? CreateController(restricted, LibraryAuthorization()).RestorePreviewLink(12)
+            : CreateController(restricted, LibraryAuthorization()).DeletePreviewLink(12));
+
+        var global = PreviewLifecycleRepository(SensitiveDraft());
+        Assert.IsInstanceOfType<RedirectToActionResult>(restore
+            ? CreateController(global, GlobalAuthorization()).RestorePreviewLink(12)
+            : CreateController(global, GlobalAuthorization()).DeletePreviewLink(12));
+    }
+
+    [DataTestMethod]
+    [DataRow(true, false)]
+    [DataRow(false, false)]
+    [DataRow(true, true)]
+    [DataRow(false, true)]
+    public void InactivePreviewLinkActions_RepositoryFailuresUseExistingResponses(bool restore, bool unauthorized)
+    {
+        var repository = PreviewLifecycleRepository(NonSensitiveDraft());
+        if (restore)
+            repository.Setup(service => service.RestorePreviewLink(12, It.IsAny<int>(), It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), false, It.IsAny<AuditContext>()))
+                .Throws(unauthorized ? new UnauthorizedAccessException() : new System.Data.DBConcurrencyException());
+        else
+            repository.Setup(service => service.DeletePreviewLink(12, It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), false, It.IsAny<AuditContext>()))
+                .Throws(unauthorized ? new UnauthorizedAccessException() : new System.Data.DBConcurrencyException());
+        var controller = CreateController(repository, LibraryAuthorization());
+
+        var result = restore ? controller.RestorePreviewLink(12) : controller.DeletePreviewLink(12);
+
+        if (unauthorized) Assert.IsInstanceOfType<ForbidResult>(result);
+        else AssertDraftConflictRedirect(controller, result, 3, string.Empty);
+    }
+
+    [DataTestMethod]
+    [DataRow(true)]
+    [DataRow(false)]
+    public void InactivePreviewLinkActions_DeadlockUsesContextualDraftConflictRedirect(bool restore)
+    {
+        var repository = PreviewLifecycleRepository(NonSensitiveDraft());
+        if (restore)
+            repository.Setup(service => service.RestorePreviewLink(12, It.IsAny<int>(), It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), false, It.IsAny<AuditContext>()))
+                .Throws(SqlExceptionWithNumber(1205));
+        else
+            repository.Setup(service => service.DeletePreviewLink(12, It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), false, It.IsAny<AuditContext>()))
+                .Throws(SqlExceptionWithNumber(1205));
+        var controller = CreateController(repository, LibraryAuthorization());
+
+        AssertDraftConflictRedirect(controller,
+            restore ? controller.RestorePreviewLink(12) : controller.DeletePreviewLink(12), 3, string.Empty);
     }
 
     [TestMethod]
@@ -1271,6 +1406,41 @@ public class SettingsControllerTests
         return repository;
     }
 
+    private static Mock<ISettingsAdministrationRepository> PreviewLifecycleRepository(SettingDraft draft)
+    {
+        var repository = new Mock<ISettingsAdministrationRepository>();
+        repository.Setup(service => service.GetDraft(draft.DraftId)).Returns(draft);
+        repository.Setup(service => service.GetPreviewLink(12)).Returns(PreviewLink(draft));
+        repository.Setup(service => service.GetFormCodes(It.IsAny<int>(), It.IsAny<int>())).Returns([]);
+        repository.Setup(service => service.GetLegacyFormCodes()).Returns([]);
+        return repository;
+    }
+
+    private static SqlException SqlExceptionWithNumber(int number)
+    {
+        var errorConstructor = typeof(SqlError).GetConstructors(BindingFlags.Instance | BindingFlags.NonPublic)
+            .Where(constructor => constructor.GetParameters().Any(parameter => parameter.Name == "infoNumber"))
+            .OrderBy(constructor => constructor.GetParameters().Length).First();
+        var errorArguments = errorConstructor.GetParameters().Select(parameter => parameter.Name == "infoNumber"
+            ? (object)number
+            : parameter.ParameterType == typeof(string) ? string.Empty
+            : parameter.ParameterType == typeof(Exception) ? null
+            : Activator.CreateInstance(parameter.ParameterType)).ToArray();
+        var error = (SqlError)errorConstructor.Invoke(errorArguments);
+        var errors = (SqlErrorCollection)Activator.CreateInstance(typeof(SqlErrorCollection), nonPublic: true)!;
+        typeof(SqlErrorCollection).GetMethod("Add", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(errors, [error]);
+        var factory = typeof(SqlException).GetMethods(BindingFlags.Static | BindingFlags.NonPublic)
+            .Where(method => method.Name == "CreateException" && method.GetParameters() is var parameters &&
+                parameters.Length >= 2 && parameters[0].ParameterType == typeof(SqlErrorCollection) && parameters[1].ParameterType == typeof(string))
+            .OrderBy(method => method.GetParameters().Length).First();
+        var factoryArguments = factory.GetParameters().Select((parameter, index) => index == 0 ? errors
+            : index == 1 ? (object)"test"
+            : parameter.ParameterType == typeof(Guid) ? Guid.NewGuid()
+            : parameter.ParameterType == typeof(Exception) ? null
+            : Activator.CreateInstance(parameter.ParameterType)).ToArray();
+        return (SqlException)factory.Invoke(null, factoryArguments)!;
+    }
+
     private static SettingDraft NonSensitiveDraft() => new(24, 3, string.Empty, 0, DraftStatus.Active,
         [new SettingMutation("registration_text", DraftOperation.Upsert, "draft")]);
 
@@ -1304,7 +1474,8 @@ public class SettingsControllerTests
         Mock<ISettingsAuthorizationService> authorization,
         ICache? suppliedCache = null,
         ISettingsPageBrandingContextAccessor? brandingAccessor = null,
-        SettingsAdministrationOptions? administrationOptions = null)
+        SettingsAdministrationOptions? administrationOptions = null,
+        IPreviewTokenService? previewTokenService = null)
     {
         repository.Setup(service => service.GetCacheGeneration()).Returns(1);
         var invalidator = new Mock<ISettingsCacheInvalidator>();
@@ -1320,7 +1491,7 @@ public class SettingsControllerTests
             repository.Object,
             new SettingCatalog(),
             cache,
-            new PreviewTokenService(),
+            previewTokenService ?? new PreviewTokenService(),
             branchEligibility.Object,
             formCodeAvailability,
             invalidator.Object,
