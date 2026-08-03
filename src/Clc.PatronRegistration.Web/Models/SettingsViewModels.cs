@@ -155,6 +155,7 @@ public sealed class SaveToSharedDraftRequest
     private string formCode = string.Empty;
     public int OrganizationId { get; set; }
     public string FormCode { get => formCode; set => formCode = FormCodeNormalizer.Normalize(value); }
+    public long ExpectedVersion { get; set; }
     public long? ExpectedDraftId { get; set; }
     public List<SettingMutationInput> Changes { get; set; } = [];
 }

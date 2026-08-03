@@ -8,7 +8,7 @@ using System.Globalization;
 
 namespace Clc.PatronRegistration.Configuration
 {
-    public class DbSettingProvider : ISettingProvider, IIdentifierSettingStateProvider
+    public class DbSettingProvider : ISettingProvider, IIdentifierSettingStateProvider, IExpirationDateYearsSettingStateProvider
     {
         public int LibraryId { get; protected set; }
         public int OrganizationId { get; }
@@ -36,6 +36,8 @@ namespace Clc.PatronRegistration.Configuration
         }
 
         public virtual IdentifierSettingResult GetIdentifierState(string key) => IdentifierSettingParser.Parse(GetSetting<string>(key));
+        public virtual ExpirationDateYearsSettingResult GetExpirationDateYearsState() =>
+            ExpirationDateYearsSettingParser.Parse(GetSetting<string>("expiration_date_years"));
 
         private int GetLegacySafeInteger(string name) => GetIdentifierState(name).Value.GetValueOrDefault();
 

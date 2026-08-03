@@ -31,6 +31,7 @@ public sealed class SettingsAdministrationRepositoryIntegrationTests
     private static bool schemaReady;
     private static TestContext? classContext;
     private SettingsAdministrationRepository repository = null!;
+    private MutableTimeProvider clock = null!;
 
     private static readonly SettingDefinition First = new("test.first", "First", "Test value", SettingValueType.ShortString);
     private static readonly SettingDefinition Second = new("test.second", "Second", "Test value", SettingValueType.ShortString);
@@ -111,7 +112,8 @@ public sealed class SettingsAdministrationRepositoryIntegrationTests
         if (unavailableReason is not null) Assert.Inconclusive(unavailableReason);
         Assert.IsTrue(databaseCreated && schemaReady && databaseConnectionString is not null,
             "The SQL integration fixture attempted setup but did not finish deploying the schema.");
-        repository = new SettingsAdministrationRepository(databaseConnectionString!);
+        clock = new MutableTimeProvider(new DateTimeOffset(2030, 4, 5, 6, 7, 8, TimeSpan.Zero));
+        repository = new SettingsAdministrationRepository(databaseConnectionString!, clock);
         using var connection = Open();
         Execute(connection, @"delete dbo.RegistrationSettingAuditEvents;
 delete dbo.RegistrationSettingPreviewLinks;
@@ -142,7 +144,7 @@ delete dbo.RegistrationSettingScopeVersions;");
     public void SaveToSharedDraft_NoActiveDraft_CreatesDraftAndPersistsAllChangesAtomically()
     {
         SeedVersion(17);
-        var result = repository.SaveToSharedDraft(101, "form", null,
+        var result = repository.SaveToSharedDraft(101, "form", 17, null,
             [Upsert(First, "one"), Upsert(Second, "two")], Catalog, Audit());
 
         Assert.IsTrue(result.DraftCreated);
@@ -162,12 +164,12 @@ delete dbo.RegistrationSettingScopeVersions;");
     {
         SeedVersion(9);
         var missing = new SettingMutation("missing.key", DraftOperation.Upsert, "bad");
-        Assert.ThrowsException<InvalidOperationException>(() => repository.SaveToSharedDraft(101, "form", null,
+        Assert.ThrowsException<InvalidOperationException>(() => repository.SaveToSharedDraft(101, "form", 9, null,
             [Upsert(First, "written-before-failure"), missing], Catalog, Audit()));
 
         AssertNoDraftChangesOrSuccessAudits();
         Assert.AreEqual(9L, ReadScopeVersion());
-        var retry = repository.SaveToSharedDraft(101, "form", null, [Upsert(First, "retry")], Catalog, Audit());
+        var retry = repository.SaveToSharedDraft(101, "form", 9, null, [Upsert(First, "retry")], Catalog, Audit());
         Assert.IsTrue(retry.DraftCreated);
         Assert.AreEqual(1, CountActiveDrafts());
     }
@@ -176,10 +178,10 @@ delete dbo.RegistrationSettingScopeVersions;");
     public void SaveToSharedDraft_NullExpectedDraftId_ReusesExistingActiveDraft()
     {
         SeedVersion(3);
-        var first = repository.SaveToSharedDraft(101, "form", null, [Upsert(First, "existing")], Catalog, Audit());
+        var first = repository.SaveToSharedDraft(101, "form", 3, null, [Upsert(First, "existing")], Catalog, Audit());
         var beforeEdited = ReadAudits().Count(row => row.EventType == "DraftEdited");
 
-        var result = repository.SaveToSharedDraft(101, "form", null, [Upsert(Second, "new")], Catalog, Audit());
+        var result = repository.SaveToSharedDraft(101, "form", 3, null, [Upsert(Second, "new")], Catalog, Audit());
 
         Assert.AreEqual(first.DraftId, result.DraftId);
         Assert.IsFalse(result.DraftCreated);
@@ -190,13 +192,38 @@ delete dbo.RegistrationSettingScopeVersions;");
     }
 
     [TestMethod]
+    public void SaveToSharedDraft_StaleVersion_RollsBackEverything()
+    {
+        SeedVersion(6);
+        Assert.ThrowsException<DBConcurrencyException>(() => repository.SaveToSharedDraft(101, "form", 5, null,
+            [Upsert(First, "stale")], Catalog, Audit()));
+        AssertNoDraftChangesOrSuccessAudits();
+        Assert.AreEqual(6L, ReadScopeVersion());
+    }
+
+    [TestMethod]
+    public void SaveToSharedDraft_ActiveDraftWithDifferentBaseline_IsUnchanged()
+    {
+        SeedVersion(6);
+        var draftId = SeedActiveDraft(6, First, "existing");
+        var auditCount = ReadAudits().Count;
+
+        Assert.ThrowsException<DBConcurrencyException>(() => repository.SaveToSharedDraft(101, "form", 5, null,
+            [Upsert(Second, "stale")], Catalog, Audit()));
+
+        Assert.AreEqual(1, CountActiveDrafts());
+        CollectionAssert.AreEqual(new[] { "test.first|Upsert|existing" }, ReadChanges(draftId).ToArray());
+        Assert.AreEqual(auditCount, ReadAudits().Count);
+    }
+
+    [TestMethod]
     public void SaveToSharedDraft_ExistingDraft_UpdatesSubmittedKeyAndPreservesOtherChanges()
     {
         SeedVersion(1);
-        var first = repository.SaveToSharedDraft(101, "form", null,
+        var first = repository.SaveToSharedDraft(101, "form", 1, null,
             [Upsert(First, "old"), Upsert(Second, "untouched")], Catalog, Audit());
 
-        var result = repository.SaveToSharedDraft(101, "form", first.DraftId,
+        var result = repository.SaveToSharedDraft(101, "form", 1, first.DraftId,
             [new SettingMutation(First.Key, DraftOperation.RemoveOverride, null)], Catalog, Audit());
 
         Assert.AreEqual(first.DraftId, result.DraftId);
@@ -209,10 +236,10 @@ delete dbo.RegistrationSettingScopeVersions;");
     public void SaveToSharedDraft_WrongExpectedDraftId_ThrowsAndWritesNothing()
     {
         SeedVersion(1);
-        var existing = repository.SaveToSharedDraft(101, "form", null, [Upsert(First, "existing")], Catalog, Audit());
+        var existing = repository.SaveToSharedDraft(101, "form", 1, null, [Upsert(First, "existing")], Catalog, Audit());
         var auditCount = ReadAudits().Count;
 
-        Assert.ThrowsException<DBConcurrencyException>(() => repository.SaveToSharedDraft(101, "form", existing.DraftId + 100,
+        Assert.ThrowsException<DBConcurrencyException>(() => repository.SaveToSharedDraft(101, "form", 1, existing.DraftId + 100,
             [Upsert(Second, "must-not-write")], Catalog, Audit()));
 
         Assert.AreEqual(1, CountActiveDrafts());
@@ -224,7 +251,7 @@ delete dbo.RegistrationSettingScopeVersions;");
     public void SaveToSharedDraft_ExpectedDraftIdButNoActiveDraft_ThrowsAndDoesNotCreateReplacement()
     {
         SeedVersion(1);
-        Assert.ThrowsException<DBConcurrencyException>(() => repository.SaveToSharedDraft(101, "form", 42,
+        Assert.ThrowsException<DBConcurrencyException>(() => repository.SaveToSharedDraft(101, "form", 1, 42,
             [Upsert(First, "must-not-write")], Catalog, Audit()));
         AssertNoDraftChangesOrSuccessAudits();
     }
@@ -240,7 +267,7 @@ delete dbo.RegistrationSettingScopeVersions;");
             try
             {
                 return ((SaveToDraftResult?)new SettingsAdministrationRepository(databaseConnectionString!)
-                    .SaveToSharedDraft(101, "form", null, [mutation], Catalog, Audit()), (Exception?)null);
+                    .SaveToSharedDraft(101, "form", 1, null, [mutation], Catalog, Audit()), (Exception?)null);
             }
             catch (Exception exception) { return ((SaveToDraftResult?)null, (Exception?)exception); }
         });
@@ -269,7 +296,7 @@ delete dbo.RegistrationSettingScopeVersions;");
     {
         SeedVersion(1);
         const string secret = "super-secret-value";
-        var result = repository.SaveToSharedDraft(101, "form", null, [Upsert(Secret, secret)], Catalog, Audit());
+        var result = repository.SaveToSharedDraft(101, "form", 1, null, [Upsert(Secret, secret)], Catalog, Audit());
 
         StringAssert.Contains(ReadChanges(result.DraftId).Single(), secret);
         var audits = ReadAudits();
@@ -281,12 +308,133 @@ delete dbo.RegistrationSettingScopeVersions;");
         Assert.IsTrue(audits.All(row => !row.IsSensitive));
     }
 
+    [DataTestMethod]
+    [DataRow(1)]
+    [DataRow(24)]
+    [DataRow(168)]
+    public void CreatePreviewLink_BoundedLifetimePersistsExactExpiration(int lifetimeHours)
+    {
+        SeedVersion(1);
+        var draftId = SeedActiveDraft(1, First, "draft");
+        var linkId = repository.CreatePreviewLink(draftId, new byte[32], false, 101, lifetimeHours, Catalog, true, Audit());
+
+        Assert.AreEqual(clock.GetUtcNow().UtcDateTime.AddHours(lifetimeHours), ReadPreviewExpiration(linkId));
+        AssertAuditCount("PreviewLinkCreated", 1);
+    }
+
+    [DataTestMethod]
+    [DataRow(0)]
+    [DataRow(-1)]
+    [DataRow(169)]
+    public void CreatePreviewLink_InvalidLifetimeWritesNothing(int lifetimeHours)
+    {
+        SeedVersion(1);
+        var draftId = SeedActiveDraft(1, First, "draft");
+        Assert.ThrowsException<ArgumentOutOfRangeException>(() => repository.CreatePreviewLink(draftId,
+            new byte[32], false, 101, lifetimeHours, Catalog, true, Audit()));
+        Assert.AreEqual(0, Scalar<int>("select count(*) from dbo.RegistrationSettingPreviewLinks"));
+        AssertAuditCount("PreviewLinkCreated", 0);
+    }
+
+    [TestMethod]
+    public void ResolvePreviewContext_UsesTrustedClockAtExpirationBoundary()
+    {
+        SeedVersion(1);
+        var draftId = SeedActiveDraft(1, First, "draft");
+        var hash = Enumerable.Repeat((byte)7, 32).ToArray();
+        repository.CreatePreviewLink(draftId, hash, false, 101, 1, Catalog, true, Audit());
+
+        clock.Advance(TimeSpan.FromHours(1) - TimeSpan.FromSeconds(1));
+        Assert.IsNotNull(repository.ResolvePreviewContext(hash));
+        clock.Advance(TimeSpan.FromSeconds(1));
+        Assert.IsNull(repository.ResolvePreviewContext(hash));
+        clock.Advance(TimeSpan.FromSeconds(1));
+        Assert.IsNull(repository.ResolvePreviewContext(hash));
+    }
+
+    [TestMethod]
+    public void ResolveAndReplacePreviewContext_RejectLegacyNullExpiration()
+    {
+        SeedVersion(1);
+        var draftId = SeedActiveDraft(1, First, "draft");
+        var hash = Enumerable.Repeat((byte)8, 32).ToArray();
+        using (var connection = Open())
+            Execute(connection, @"insert dbo.RegistrationSettingPreviewLinks(DraftId,TokenHash,AllowLiveSubmission,OperationalBranchId,CreatedBy,ModifiedBy,ExpiresAtUtc)
+values(@draftId,@hash,0,101,'legacy','legacy',null)", parameters: command =>
+            {
+                command.Parameters.AddWithValue("@draftId", draftId);
+                command.Parameters.AddWithValue("@hash", hash);
+            });
+        var linkId = Scalar<long>("select PreviewLinkId from dbo.RegistrationSettingPreviewLinks");
+
+        Assert.IsNull(repository.ResolvePreviewContext(hash));
+        Assert.ThrowsException<DBConcurrencyException>(() => repository.ReplacePreviewLinkMode(linkId, new byte[32], true, Catalog, true, Audit()));
+        Assert.AreEqual(1, Scalar<int>("select count(*) from dbo.RegistrationSettingPreviewLinks"));
+    }
+
+    [DataTestMethod]
+    [DataRow(false, true)]
+    [DataRow(true, false)]
+    public void ReplacePreviewLinkMode_PreservesExactExpiration(bool originalLive, bool replacementLive)
+    {
+        SeedVersion(1);
+        var draftId = SeedActiveDraft(1, First, "draft");
+        clock.SetUtcNow(DateTimeOffset.UtcNow);
+        var originalId = repository.CreatePreviewLink(draftId, Enumerable.Repeat((byte)3, 32).ToArray(),
+            originalLive, 101, 24, Catalog, true, Audit());
+        var expectedExpiration = repository.GetPreviewLink(originalId)!.ExpiresAtUtc;
+
+        var replacementId = repository.ReplacePreviewLinkMode(originalId, Enumerable.Repeat((byte)4, 32).ToArray(),
+            replacementLive, Catalog, true, Audit());
+
+        Assert.IsNotNull(replacementId);
+        Assert.AreEqual(expectedExpiration, repository.GetPreviewLink(replacementId.Value)!.ExpiresAtUtc);
+        Assert.IsNotNull(repository.GetPreviewLink(originalId)!.RevokedAtUtc);
+    }
+
+    [TestMethod]
+    public void ReplacePreviewLinkMode_ExpiredLinkWritesNothing()
+    {
+        SeedVersion(1);
+        var draftId = SeedActiveDraft(1, First, "draft");
+        var originalId = repository.CreatePreviewLink(draftId, Enumerable.Repeat((byte)5, 32).ToArray(),
+            false, 101, 1, Catalog, true, Audit());
+        var original = repository.GetPreviewLink(originalId)!;
+        var auditCount = Scalar<int>("select count(*) from dbo.RegistrationSettingAuditEvents where EventType='PreviewLinkModeReplaced' and Succeeded=1");
+        clock.Advance(TimeSpan.FromHours(2));
+
+        Assert.ThrowsException<DBConcurrencyException>(() => repository.ReplacePreviewLinkMode(originalId,
+            Enumerable.Repeat((byte)6, 32).ToArray(), true, Catalog, true, Audit()));
+
+        var unchanged = repository.GetPreviewLink(originalId)!;
+        Assert.IsNull(unchanged.RevokedAtUtc);
+        Assert.AreEqual(original.ExpiresAtUtc, unchanged.ExpiresAtUtc);
+        Assert.AreEqual(1, Scalar<int>("select count(*) from dbo.RegistrationSettingPreviewLinks"));
+        Assert.AreEqual(auditCount, Scalar<int>("select count(*) from dbo.RegistrationSettingAuditEvents where EventType='PreviewLinkModeReplaced' and Succeeded=1"));
+    }
+
     private void SeedVersion(long version)
     {
         using var connection = Open();
         Execute(connection,
             "insert dbo.RegistrationSettingScopeVersions(OrganizationId,FormCode,Version) values(101,'form',@version)",
             parameters: command => command.Parameters.AddWithValue("@version", version));
+    }
+    private long SeedActiveDraft(long baselineVersion, SettingDefinition definition, string value)
+    {
+        using var connection = Open();
+        using var command = Command(connection, @"insert dbo.RegistrationSettingDrafts(OrganizationId,FormCode,BaselineVersion,Status,CreatedBy,ModifiedBy)
+output inserted.DraftId values(101,'form',@baseline,'Active','other','other')");
+        command.Parameters.AddWithValue("@baseline", baselineVersion);
+        var draftId = (long)command.ExecuteScalar()!;
+        Execute(connection, @"insert dbo.RegistrationSettingDraftChanges(DraftId,SettingKey,Operation,Value,ModifiedBy)
+values(@draftId,@key,'Upsert',@value,'other')", parameters: mutation =>
+        {
+            mutation.Parameters.AddWithValue("@draftId", draftId);
+            mutation.Parameters.AddWithValue("@key", definition.Key);
+            mutation.Parameters.AddWithValue("@value", value);
+        });
+        return draftId;
     }
     private long ReadScopeVersion() => Scalar<long>("select Version from dbo.RegistrationSettingScopeVersions where OrganizationId=101 and FormCode='form'");
     private int CountActiveDrafts() => Scalar<int>("select count(*) from dbo.RegistrationSettingDrafts where OrganizationId=101 and FormCode='form' and Status='Active'");
@@ -296,6 +444,8 @@ delete dbo.RegistrationSettingScopeVersions;");
         command => command.Parameters.AddWithValue("@id", draftId), reader => $"{reader.GetString(0)}|{reader.GetString(1)}|{(reader.IsDBNull(2) ? "" : reader.GetString(2))}");
     private List<AuditState> ReadAudits() => Query("select EventType,MetadataJson,FailureReason,PreviousValue,NewValue,IsSensitive from dbo.RegistrationSettingAuditEvents order by AuditEventId", null,
         reader => new AuditState(reader.GetString(0), Text(reader, 1), Text(reader, 2), Text(reader, 3), Text(reader, 4), reader.GetBoolean(5)));
+    private DateTime ReadPreviewExpiration(long previewLinkId) => QuerySingle("select ExpiresAtUtc from dbo.RegistrationSettingPreviewLinks where PreviewLinkId=@id",
+        command => command.Parameters.AddWithValue("@id", previewLinkId), reader => reader.GetDateTime(0));
     private void AssertAuditCount(string eventType, int expected) => Assert.AreEqual(expected, ReadAudits().Count(row => row.EventType == eventType));
     private void AssertNoDraftChangesOrSuccessAudits()
     {

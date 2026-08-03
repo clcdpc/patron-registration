@@ -260,7 +260,7 @@ public sealed class SettingsController(
         }
         try
         {
-            var result = repository.SaveToSharedDraft(request.OrganizationId, request.FormCode, request.ExpectedDraftId,
+            var result = repository.SaveToSharedDraft(request.OrganizationId, request.FormCode, request.ExpectedVersion, request.ExpectedDraftId,
                 mutations, CatalogByKey, CreateAudit(request.OrganizationId, request.FormCode));
             TempData["SettingsStatus"] = result.DraftCreated
                 ? $"Shared draft #{result.DraftId} was created with {mutations.Count} {(mutations.Count == 1 ? "change" : "changes")}."
@@ -418,7 +418,8 @@ public sealed class SettingsController(
         var token = previewTokens.Create();
         try
         {
-            repository.CreatePreviewLink(draftId, token.Hash, request.AllowLiveSubmission, operationalBranchId.Value, CatalogByKey,
+            repository.CreatePreviewLink(draftId, token.Hash, request.AllowLiveSubmission, operationalBranchId.Value,
+                settingsOptions.PreviewLinkLifetimeHours, CatalogByKey,
                 authorization.Describe(User).IsGlobal, CreateAudit(request.OrganizationId, request.FormCode));
         }
         catch (UnauthorizedAccessException)

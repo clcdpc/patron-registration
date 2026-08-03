@@ -52,7 +52,7 @@ namespace Clc.PatronRegistration
         public string User1 { get; set; } = string.Empty;
         public string User2 { get; set; } = string.Empty;
         public string User4 { get; set; } = string.Empty;
-        public string User5 { get; set; } = string.Empty;
+        public string? User5 { get; set; } = string.Empty;
         public string PostalCode { get; set; } = string.Empty;
         public string Password { get; set; } = string.Empty;
         public string Password2 { get; set; } = string.Empty;
@@ -205,7 +205,15 @@ namespace Clc.PatronRegistration
 
             logger.Trace("Submitting validated patron registration for branch {0}.", PatronBranchID);
             var registrationParams = ConvertToPatronRegistrationParams();
-            HandleExpirationDate(registrationParams);
+            if (!HandleExpirationDate(registrationParams))
+            {
+                return new RegistrationAttempt
+                {
+                    Status = RegistrationStatus.Error,
+                    Message = "Registration is temporarily unavailable because expiration configuration is invalid.",
+                    Errors = ModelErrors
+                };
+            }
 
             var papiResponse = papi.PatronRegistrationCreate(registrationParams);
             logger.Trace(papiResponse.Data.ToJson());
@@ -403,17 +411,40 @@ namespace Clc.PatronRegistration
             return result.IsPositive ? result.Value : null;
         }
 
-        public void HandleExpirationDate(PatronRegistrationParams registrationParams)
+        public bool HandleExpirationDate(PatronRegistrationParams registrationParams)
         {
             if (Settings.ExpirationDate.HasValue)
             {
                 registrationParams.ExpirationDate = Settings.ExpirationDate.Value;
             }
 
-            if (Settings.ExpirationDateYears.HasValue)
+            var expirationYears = Settings is IExpirationDateYearsSettingStateProvider stateProvider
+                ? stateProvider.GetExpirationDateYearsState()
+                : Settings.ExpirationDateYears.HasValue
+                    ? ExpirationDateYearsSettingParser.Parse(Settings.ExpirationDateYears.Value.ToString(CultureInfo.InvariantCulture))
+                    : new ExpirationDateYearsSettingResult(BoundedIntegerSettingState.Unconfigured, null);
+
+            if (expirationYears.State == BoundedIntegerSettingState.Invalid)
             {
-                registrationParams.ExpirationDate = DateTime.Now.AddYears(Settings.ExpirationDateYears.Value);
+                logger.Error("Registration expiration_date_years is outside the supported range.");
+                ModelErrors.Add(new("", "Registration expiration configuration is invalid."));
+                return false;
             }
+
+            if (expirationYears.State == BoundedIntegerSettingState.Valid)
+            {
+                var years = expirationYears.Value!.Value;
+                var now = DateTime.Now;
+                if (years < 0 || years > SettingDefinition.MaximumExpirationDateYears ||
+                    now.Year > DateTime.MaxValue.Year - years)
+                {
+                    logger.Error("Registration expiration_date_years is outside the supported range.");
+                    ModelErrors.Add(new("", "Registration expiration configuration is invalid."));
+                    return false;
+                }
+                registrationParams.ExpirationDate = now.AddYears(years);
+            }
+            return true;
         }
         public void NormalizeToUppercase()
         {
