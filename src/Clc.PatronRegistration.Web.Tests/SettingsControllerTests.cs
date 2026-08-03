@@ -449,7 +449,7 @@ public class SettingsControllerTests
             It.IsAny<int>(), It.IsAny<string>(), It.IsAny<long>(), It.IsAny<IReadOnlyList<SettingMutation>>(),
             It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), It.IsAny<AuditContext>()), Times.Never);
         repository.Verify(service => service.SaveToSharedDraft(
-            It.IsAny<int>(), It.IsAny<string>(), It.IsAny<long?>(), It.IsAny<IReadOnlyList<SettingMutation>>(),
+            It.IsAny<int>(), It.IsAny<string>(), It.IsAny<long>(), It.IsAny<long?>(), It.IsAny<IReadOnlyList<SettingMutation>>(),
             It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), It.IsAny<AuditContext>()), Times.Never);
     }
 
@@ -645,7 +645,7 @@ public class SettingsControllerTests
 
         Assert.IsInstanceOfType<RedirectToActionResult>(result);
         repository.Verify(service => service.CreatePreviewLink(
-            It.IsAny<long>(), It.IsAny<byte[]>(), It.IsAny<bool>(), It.IsAny<int>(), It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), It.IsAny<bool>(), It.IsAny<AuditContext>()), Times.Never);
+            It.IsAny<long>(), It.IsAny<byte[]>(), It.IsAny<bool>(), It.IsAny<int>(), It.IsAny<DateTime>(), It.IsAny<int>(), It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), It.IsAny<bool>(), It.IsAny<AuditContext>()), Times.Never);
     }
 
     [TestMethod]
@@ -700,7 +700,7 @@ public class SettingsControllerTests
         var controller = CreateController(repository, LibraryAuthorization());
         SaveToSharedDraftRequest Request(long? expected) => new()
         {
-            OrganizationId = 3, ExpectedDraftId = expected,
+            OrganizationId = 3, ExpectedVersion = 37, ExpectedDraftId = expected,
             Changes = [new SettingMutationInput { Key = "registration_text", Value = "value" }]
         };
 
@@ -708,10 +708,43 @@ public class SettingsControllerTests
         controller.ModelState.Clear();
         controller.SaveToSharedDraft(Request(null));
 
-        repository.Verify(service => service.SaveToSharedDraft(3, string.Empty, It.IsAny<long>(), 24,
+        repository.Verify(service => service.SaveToSharedDraft(3, string.Empty, 37, 24,
             It.IsAny<IReadOnlyList<SettingMutation>>(), It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), It.IsAny<AuditContext>()), Times.Once);
-        repository.Verify(service => service.SaveToSharedDraft(3, string.Empty, It.IsAny<long>(), null,
+        repository.Verify(service => service.SaveToSharedDraft(3, string.Empty, 37, null,
             It.IsAny<IReadOnlyList<SettingMutation>>(), It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), It.IsAny<AuditContext>()), Times.Once);
+    }
+
+    [TestMethod]
+    public void SettingsForm_PostsRenderedExpectedVersion()
+    {
+        var view = File.ReadAllText(Path.GetFullPath(Path.Combine(AppContext.BaseDirectory,
+            "../../../../../src/Clc.PatronRegistration.Web/Views/Settings/Index.cshtml")));
+        StringAssert.Contains(view, "name=\"ExpectedVersion\" value=\"@Model.ScopeVersion\"");
+    }
+
+    [DataTestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public void PreviewCreation_ForwardsUtcNowAndConfiguredLifetime(bool allowLiveSubmission)
+    {
+        var repository = new Mock<ISettingsAdministrationRepository>();
+        repository.Setup(service => service.GetDraft(10)).Returns(new SettingDraft(10, 3, string.Empty, 0, DraftStatus.Active, []));
+        DateTime suppliedNow = default;
+        int suppliedLifetime = 0;
+        repository.Setup(service => service.CreatePreviewLink(10, It.IsAny<byte[]>(), allowLiveSubmission, 3,
+                It.IsAny<DateTime>(), It.IsAny<int>(), It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), true, It.IsAny<AuditContext>()))
+            .Callback((long _, byte[] _, bool _, int _, DateTime now, int lifetime,
+                IReadOnlyDictionary<string, SettingDefinition> _, bool _, AuditContext _) =>
+            { suppliedNow = now; suppliedLifetime = lifetime; });
+        var controller = CreateController(repository, GlobalAuthorization(), administrationOptions: new SettingsAdministrationOptions { PreviewLinkLifetimeHours = 37 });
+        var url = new Mock<IUrlHelper>();
+        url.Setup(helper => helper.Action(It.IsAny<UrlActionContext>())).Returns("https://example.test/preview/token");
+        controller.Url = url.Object;
+
+        Assert.IsInstanceOfType<ViewResult>(controller.CreatePreviewLink(10,
+            new PreviewLinkRequest { OrganizationId = 3, OperationalBranchId = 3, AllowLiveSubmission = allowLiveSubmission }));
+        Assert.AreEqual(DateTimeKind.Utc, suppliedNow.Kind);
+        Assert.AreEqual(37, suppliedLifetime);
     }
 
     [TestMethod]
@@ -727,7 +760,7 @@ public class SettingsControllerTests
         Assert.AreEqual(nameof(SettingsController.Index), redirect.ActionName);
         Assert.AreEqual(3, redirect.RouteValues!["organizationId"]);
         StringAssert.Contains((string)controller.TempData["SettingsError"]!, "Submit at least one setting change.");
-        repository.Verify(service => service.SaveToSharedDraft(It.IsAny<int>(), It.IsAny<string>(), It.IsAny<long?>(),
+        repository.Verify(service => service.SaveToSharedDraft(It.IsAny<int>(), It.IsAny<string>(), It.IsAny<long>(), It.IsAny<long?>(),
             It.IsAny<IReadOnlyList<SettingMutation>>(), It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), It.IsAny<AuditContext>()), Times.Never);
     }
 
@@ -747,7 +780,7 @@ public class SettingsControllerTests
         StringAssert.Contains((string)controller.TempData["SettingsError"]!, "unrecognized or inaccessible");
         repository.Verify(service => service.WriteAudit("ValidationFailed", false, It.IsAny<AuditContext>(),
             "Draft changes were invalid.", null, null, null), Times.Once);
-        repository.Verify(service => service.SaveToSharedDraft(It.IsAny<int>(), It.IsAny<string>(), It.IsAny<long?>(),
+        repository.Verify(service => service.SaveToSharedDraft(It.IsAny<int>(), It.IsAny<string>(), It.IsAny<long>(), It.IsAny<long?>(),
             It.IsAny<IReadOnlyList<SettingMutation>>(), It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), It.IsAny<AuditContext>()), Times.Never);
     }
 
@@ -768,7 +801,7 @@ public class SettingsControllerTests
         });
         repository.Setup(service => service.GetLegacyFormCodes()).Returns([]);
         repository.Setup(service => service.CreatePreviewLink(10, It.IsAny<byte[]>(), false, 3,
-                It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), true, It.IsAny<AuditContext>()))
+                It.IsAny<DateTime>(), It.IsAny<int>(), It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), true, It.IsAny<AuditContext>()))
             .Callback(() => Assert.IsTrue(metadataResolved, "Display metadata must be resolved before preview persistence."));
         var controller = CreateController(repository, GlobalAuthorization());
         var url = new Mock<IUrlHelper>();
@@ -1139,7 +1172,7 @@ public class SettingsControllerTests
     {
         var repository = RaceRepository();
         repository.Setup(service => service.GetPreviewLink(12)).Returns(PreviewLink(NonSensitiveDraft()));
-        repository.Setup(service => service.CreatePreviewLink(24, It.IsAny<byte[]>(), false, 3, It.IsAny<DateTime>(),
+        repository.Setup(service => service.CreatePreviewLink(24, It.IsAny<byte[]>(), false, 3, It.IsAny<DateTime>(), It.IsAny<int>(),
                 It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), false, It.IsAny<AuditContext>()))
             .Throws(new UnauthorizedAccessException());
         repository.Setup(service => service.ReplacePreviewLinkMode(12, It.IsAny<byte[]>(), true,
@@ -1197,7 +1230,7 @@ public class SettingsControllerTests
         var repository = RaceRepository();
         repository.Setup(service => service.DiscardDraft(24, It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), false, It.IsAny<AuditContext>()))
             .Throws(new System.Data.DBConcurrencyException("The shared draft is no longer active."));
-        repository.Setup(service => service.CreatePreviewLink(24, It.IsAny<byte[]>(), false, 3, It.IsAny<DateTime>(),
+        repository.Setup(service => service.CreatePreviewLink(24, It.IsAny<byte[]>(), false, 3, It.IsAny<DateTime>(), It.IsAny<int>(),
                 It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), false, It.IsAny<AuditContext>()))
             .Throws(new System.Data.DBConcurrencyException("The shared draft is no longer active."));
         var controller = CreateController(repository, LibraryAuthorization());
@@ -1272,7 +1305,8 @@ public class SettingsControllerTests
         Mock<ISettingsAdministrationRepository> repository,
         Mock<ISettingsAuthorizationService> authorization,
         ICache? suppliedCache = null,
-        ISettingsPageBrandingContextAccessor? brandingAccessor = null)
+        ISettingsPageBrandingContextAccessor? brandingAccessor = null,
+        SettingsAdministrationOptions? administrationOptions = null)
     {
         repository.Setup(service => service.GetCacheGeneration()).Returns(1);
         var invalidator = new Mock<ISettingsCacheInvalidator>();
@@ -1280,7 +1314,7 @@ public class SettingsControllerTests
         branchEligibility.Setup(service => service.GetEligibleBranches(It.IsAny<int>(), It.IsAny<int>())).Returns([]);
         branchEligibility.Setup(service => service.IsEligible(It.IsAny<int>(), It.IsAny<int>(), It.IsAny<int>()))
             .Returns((int scopeId, int branchId, int systemId) => branchId == 3);
-        var options = Options.Create(new SettingsAdministrationOptions());
+        var options = Options.Create(administrationOptions ?? new SettingsAdministrationOptions());
         var cache = suppliedCache ?? new TestCache();
         var formCodeAvailability = new FormCodeAvailabilityService(repository.Object, cache, options);
         var controller = new SettingsController(

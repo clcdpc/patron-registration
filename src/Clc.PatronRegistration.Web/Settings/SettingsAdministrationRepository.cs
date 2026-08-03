@@ -163,14 +163,12 @@ public interface ISettingsAdministrationRepository
     SettingDraft? GetActiveDraft(int organizationId, string formCode);
     SaveToDraftResult SaveToSharedDraft(int organizationId, string formCode, long expectedVersion, long? expectedDraftId,
         IReadOnlyList<SettingMutation> changes, IReadOnlyDictionary<string, SettingDefinition> catalog, AuditContext audit);
-    SaveToDraftResult SaveToSharedDraft(int organizationId, string formCode, long? expectedDraftId,
-        IReadOnlyList<SettingMutation> changes, IReadOnlyDictionary<string, SettingDefinition> catalog, AuditContext audit);
     void RemoveDraftChange(long draftId, string settingKey, IReadOnlyDictionary<string, SettingDefinition> catalog, bool canManageSensitive, AuditContext audit);
     void CommitDraft(long draftId, IReadOnlyDictionary<string, SettingDefinition> catalog, bool canManageSensitive, AuditContext audit);
     void DiscardDraft(long draftId, IReadOnlyDictionary<string, SettingDefinition> catalog, bool canManageSensitive, AuditContext audit);
     void DirectSave(int organizationId, string formCode, long expectedVersion, IReadOnlyList<SettingMutation> changes, IReadOnlyDictionary<string, SettingDefinition> catalog, AuditContext audit);
-    long CreatePreviewLink(long draftId, byte[] tokenHash, bool allowLiveSubmission, int operationalBranchId, DateTime expiresAtUtc, IReadOnlyDictionary<string, SettingDefinition> catalog, bool canManageSensitive, AuditContext audit);
-    long CreatePreviewLink(long draftId, byte[] tokenHash, bool allowLiveSubmission, int operationalBranchId, IReadOnlyDictionary<string, SettingDefinition> catalog, bool canManageSensitive, AuditContext audit);
+    long CreatePreviewLink(long draftId, byte[] tokenHash, bool allowLiveSubmission, int operationalBranchId,
+        DateTime nowUtc, int lifetimeHours, IReadOnlyDictionary<string, SettingDefinition> catalog, bool canManageSensitive, AuditContext audit);
     PreviewContextSnapshot? ResolvePreviewContext(byte[] tokenHash, DateTime nowUtc);
     PreviewLinkRecord? GetPreviewLink(long previewLinkId);
     IReadOnlyList<PreviewLinkRecord> GetPreviewLinks(long draftId);
@@ -332,10 +330,6 @@ if @@ROWCOUNT=0
         return new SaveToDraftResult(draftId, created);
     }
 
-    public SaveToDraftResult SaveToSharedDraft(int organizationId, string formCode, long? expectedDraftId,
-        IReadOnlyList<SettingMutation> changes, IReadOnlyDictionary<string, SettingDefinition> catalog, AuditContext audit) =>
-        SaveToSharedDraft(organizationId, formCode, GetVersion(organizationId, formCode), expectedDraftId, changes, catalog, audit);
-
     public void RemoveDraftChange(long draftId, string settingKey, IReadOnlyDictionary<string, SettingDefinition> catalog, bool canManageSensitive, AuditContext audit)
     {
         using var connection = Open();
@@ -424,13 +418,16 @@ update dbo.RegistrationSettingPreviewLinks set RevokedAtUtc=coalesce(RevokedAtUt
         transaction.Commit();
     }
 
-    public long CreatePreviewLink(long draftId, byte[] tokenHash, bool allowLiveSubmission, int operationalBranchId, DateTime expiresAtUtc, IReadOnlyDictionary<string, SettingDefinition> catalog, bool canManageSensitive, AuditContext audit)
+    public long CreatePreviewLink(long draftId, byte[] tokenHash, bool allowLiveSubmission, int operationalBranchId,
+        DateTime nowUtc, int lifetimeHours, IReadOnlyDictionary<string, SettingDefinition> catalog, bool canManageSensitive, AuditContext audit)
     {
+        if (nowUtc.Kind != DateTimeKind.Utc) throw new ArgumentException("Preview-link creation time must be UTC.", nameof(nowUtc));
+        if (lifetimeHours is < 1 or > SettingsAdministrationOptions.MaximumPreviewLinkLifetimeHours)
+            throw new ArgumentOutOfRangeException(nameof(lifetimeHours));
+        var expiresAtUtc = nowUtc.AddHours(lifetimeHours);
         using var connection = Open();
         using var transaction = connection.BeginTransaction(IsolationLevel.Serializable);
         EnsureActiveDraft(connection, transaction, draftId);
-        if (expiresAtUtc.Kind != DateTimeKind.Utc || expiresAtUtc <= DateTime.UtcNow)
-            throw new ArgumentOutOfRangeException(nameof(expiresAtUtc));
         EnsureCanManageRestrictedDraft(connection, transaction, draftId, catalog, canManageSensitive);
         var previewLinkId = connection.QuerySingle<long>(@"
 insert dbo.RegistrationSettingPreviewLinks(DraftId,TokenHash,AllowLiveSubmission,OperationalBranchId,CreatedBy,ModifiedBy,ExpiresAtUtc)
@@ -440,11 +437,6 @@ output inserted.PreviewLinkId values(@draftId,@tokenHash,@allowLiveSubmission,@o
         transaction.Commit();
         return previewLinkId;
     }
-
-    public long CreatePreviewLink(long draftId, byte[] tokenHash, bool allowLiveSubmission, int operationalBranchId,
-        IReadOnlyDictionary<string, SettingDefinition> catalog, bool canManageSensitive, AuditContext audit) =>
-        CreatePreviewLink(draftId, tokenHash, allowLiveSubmission, operationalBranchId,
-            DateTime.UtcNow.AddHours(24), catalog, canManageSensitive, audit);
 
     public PreviewContextSnapshot? ResolvePreviewContext(byte[] tokenHash, DateTime nowUtc)
     {

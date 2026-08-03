@@ -58,7 +58,7 @@ namespace Clc.PatronRegistration.Web
             builder.Services.AddSingleton<ICache, MemoryCache>();
             builder.Services.AddOptions<SettingsAdministrationOptions>()
                 .Bind(builder.Configuration.GetSection(SettingsAdministrationOptions.SectionName))
-                .Validate(options => options.PreviewLinkLifetimeHours is > 0 and <= SettingsAdministrationOptions.MaximumPreviewLinkLifetimeHours,
+                .Validate(options => SettingsAdministrationOptions.IsValidPreviewLinkLifetime(options.PreviewLinkLifetimeHours),
                     $"PreviewLinkLifetimeHours must be from 1 through {SettingsAdministrationOptions.MaximumPreviewLinkLifetimeHours}.")
                 .ValidateOnStart();
             builder.Services.AddSingleton<ISettingCatalog, SettingCatalog>();
