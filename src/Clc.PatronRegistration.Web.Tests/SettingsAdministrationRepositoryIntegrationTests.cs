@@ -31,6 +31,7 @@ public sealed class SettingsAdministrationRepositoryIntegrationTests
     private static bool schemaReady;
     private static TestContext? classContext;
     private SettingsAdministrationRepository repository = null!;
+    private MutableTimeProvider clock = null!;
 
     private static readonly SettingDefinition First = new("test.first", "First", "Test value", SettingValueType.ShortString);
     private static readonly SettingDefinition Second = new("test.second", "Second", "Test value", SettingValueType.ShortString);
@@ -111,7 +112,8 @@ public sealed class SettingsAdministrationRepositoryIntegrationTests
         if (unavailableReason is not null) Assert.Inconclusive(unavailableReason);
         Assert.IsTrue(databaseCreated && schemaReady && databaseConnectionString is not null,
             "The SQL integration fixture attempted setup but did not finish deploying the schema.");
-        repository = new SettingsAdministrationRepository(databaseConnectionString!);
+        clock = new MutableTimeProvider(new DateTimeOffset(2030, 4, 5, 6, 7, 8, TimeSpan.Zero));
+        repository = new SettingsAdministrationRepository(databaseConnectionString!, clock);
         using var connection = Open();
         Execute(connection, @"delete dbo.RegistrationSettingAuditEvents;
 delete dbo.RegistrationSettingPreviewLinks;
@@ -314,11 +316,9 @@ delete dbo.RegistrationSettingScopeVersions;");
     {
         SeedVersion(1);
         var draftId = SeedActiveDraft(1, First, "draft");
-        var nowUtc = new DateTime(2030, 4, 5, 6, 7, 8, DateTimeKind.Utc);
+        var linkId = repository.CreatePreviewLink(draftId, new byte[32], false, 101, lifetimeHours, Catalog, true, Audit());
 
-        var linkId = repository.CreatePreviewLink(draftId, new byte[32], false, 101, nowUtc, lifetimeHours, Catalog, true, Audit());
-
-        Assert.AreEqual(nowUtc.AddHours(lifetimeHours), ReadPreviewExpiration(linkId));
+        Assert.AreEqual(clock.GetUtcNow().UtcDateTime.AddHours(lifetimeHours), ReadPreviewExpiration(linkId));
         AssertAuditCount("PreviewLinkCreated", 1);
     }
 
@@ -331,24 +331,25 @@ delete dbo.RegistrationSettingScopeVersions;");
         SeedVersion(1);
         var draftId = SeedActiveDraft(1, First, "draft");
         Assert.ThrowsException<ArgumentOutOfRangeException>(() => repository.CreatePreviewLink(draftId,
-            new byte[32], false, 101, new DateTime(2030, 1, 1, 0, 0, 0, DateTimeKind.Utc), lifetimeHours, Catalog, true, Audit()));
+            new byte[32], false, 101, lifetimeHours, Catalog, true, Audit()));
         Assert.AreEqual(0, Scalar<int>("select count(*) from dbo.RegistrationSettingPreviewLinks"));
         AssertAuditCount("PreviewLinkCreated", 0);
     }
 
-    [DataTestMethod]
-    [DataRow(-1, true)]
-    [DataRow(0, false)]
-    [DataRow(1, false)]
-    public void ResolvePreviewContext_RequiresFutureNonNullExpiration(int secondsFromExpiration, bool resolves)
+    [TestMethod]
+    public void ResolvePreviewContext_UsesTrustedClockAtExpirationBoundary()
     {
         SeedVersion(1);
         var draftId = SeedActiveDraft(1, First, "draft");
-        var nowUtc = new DateTime(2030, 1, 1, 0, 0, 0, DateTimeKind.Utc);
         var hash = Enumerable.Repeat((byte)7, 32).ToArray();
-        repository.CreatePreviewLink(draftId, hash, false, 101, nowUtc, 1, Catalog, true, Audit());
+        repository.CreatePreviewLink(draftId, hash, false, 101, 1, Catalog, true, Audit());
 
-        Assert.AreEqual(resolves, repository.ResolvePreviewContext(hash, nowUtc.AddHours(1).AddSeconds(secondsFromExpiration)) is not null);
+        clock.Advance(TimeSpan.FromHours(1) - TimeSpan.FromSeconds(1));
+        Assert.IsNotNull(repository.ResolvePreviewContext(hash));
+        clock.Advance(TimeSpan.FromSeconds(1));
+        Assert.IsNull(repository.ResolvePreviewContext(hash));
+        clock.Advance(TimeSpan.FromSeconds(1));
+        Assert.IsNull(repository.ResolvePreviewContext(hash));
     }
 
     [TestMethod]
@@ -366,7 +367,7 @@ values(@draftId,@hash,0,101,'legacy','legacy',null)", parameters: command =>
             });
         var linkId = Scalar<long>("select PreviewLinkId from dbo.RegistrationSettingPreviewLinks");
 
-        Assert.IsNull(repository.ResolvePreviewContext(hash, new DateTime(2030, 1, 1, 0, 0, 0, DateTimeKind.Utc)));
+        Assert.IsNull(repository.ResolvePreviewContext(hash));
         Assert.ThrowsException<DBConcurrencyException>(() => repository.ReplacePreviewLinkMode(linkId, new byte[32], true, Catalog, true, Audit()));
         Assert.AreEqual(1, Scalar<int>("select count(*) from dbo.RegistrationSettingPreviewLinks"));
     }
@@ -378,9 +379,9 @@ values(@draftId,@hash,0,101,'legacy','legacy',null)", parameters: command =>
     {
         SeedVersion(1);
         var draftId = SeedActiveDraft(1, First, "draft");
-        var nowUtc = DateTime.UtcNow;
+        clock.SetUtcNow(DateTimeOffset.UtcNow);
         var originalId = repository.CreatePreviewLink(draftId, Enumerable.Repeat((byte)3, 32).ToArray(),
-            originalLive, 101, nowUtc, 24, Catalog, true, Audit());
+            originalLive, 101, 24, Catalog, true, Audit());
         var expectedExpiration = repository.GetPreviewLink(originalId)!.ExpiresAtUtc;
 
         var replacementId = repository.ReplacePreviewLinkMode(originalId, Enumerable.Repeat((byte)4, 32).ToArray(),
@@ -397,9 +398,10 @@ values(@draftId,@hash,0,101,'legacy','legacy',null)", parameters: command =>
         SeedVersion(1);
         var draftId = SeedActiveDraft(1, First, "draft");
         var originalId = repository.CreatePreviewLink(draftId, Enumerable.Repeat((byte)5, 32).ToArray(),
-            false, 101, DateTime.UtcNow.AddHours(-2), 1, Catalog, true, Audit());
+            false, 101, 1, Catalog, true, Audit());
         var original = repository.GetPreviewLink(originalId)!;
         var auditCount = Scalar<int>("select count(*) from dbo.RegistrationSettingAuditEvents where EventType='PreviewLinkModeReplaced' and Succeeded=1");
+        clock.Advance(TimeSpan.FromHours(2));
 
         Assert.ThrowsException<DBConcurrencyException>(() => repository.ReplacePreviewLinkMode(originalId,
             Enumerable.Repeat((byte)6, 32).ToArray(), true, Catalog, true, Audit()));

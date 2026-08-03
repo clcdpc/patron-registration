@@ -168,8 +168,8 @@ public interface ISettingsAdministrationRepository
     void DiscardDraft(long draftId, IReadOnlyDictionary<string, SettingDefinition> catalog, bool canManageSensitive, AuditContext audit);
     void DirectSave(int organizationId, string formCode, long expectedVersion, IReadOnlyList<SettingMutation> changes, IReadOnlyDictionary<string, SettingDefinition> catalog, AuditContext audit);
     long CreatePreviewLink(long draftId, byte[] tokenHash, bool allowLiveSubmission, int operationalBranchId,
-        DateTime nowUtc, int lifetimeHours, IReadOnlyDictionary<string, SettingDefinition> catalog, bool canManageSensitive, AuditContext audit);
-    PreviewContextSnapshot? ResolvePreviewContext(byte[] tokenHash, DateTime nowUtc);
+        int lifetimeHours, IReadOnlyDictionary<string, SettingDefinition> catalog, bool canManageSensitive, AuditContext audit);
+    PreviewContextSnapshot? ResolvePreviewContext(byte[] tokenHash);
     PreviewLinkRecord? GetPreviewLink(long previewLinkId);
     IReadOnlyList<PreviewLinkRecord> GetPreviewLinks(long draftId);
     void RevokePreviewLink(long previewLinkId, IReadOnlyDictionary<string, SettingDefinition> catalog, bool canManageSensitive, AuditContext audit);
@@ -188,13 +188,18 @@ public interface ISettingsAdministrationRepository
 public sealed class SettingsAdministrationRepository : ISettingsAdministrationRepository
 {
     private readonly string connectionString;
+    private readonly TimeProvider timeProvider;
 
     public SettingsAdministrationRepository(IDbHelperSettings settings)
-        : this($"Server={settings.db_hostname};Database={settings.db_name};Trusted_Connection=True;Encrypt=False;")
+        : this($"Server={settings.db_hostname};Database={settings.db_name};Trusted_Connection=True;Encrypt=False;", TimeProvider.System)
     {
     }
 
-    internal SettingsAdministrationRepository(string connectionString) => this.connectionString = connectionString;
+    internal SettingsAdministrationRepository(string connectionString, TimeProvider? timeProvider = null)
+    {
+        this.connectionString = connectionString;
+        this.timeProvider = timeProvider ?? TimeProvider.System;
+    }
 
     private SqlConnection Open()
     {
@@ -419,11 +424,11 @@ update dbo.RegistrationSettingPreviewLinks set RevokedAtUtc=coalesce(RevokedAtUt
     }
 
     public long CreatePreviewLink(long draftId, byte[] tokenHash, bool allowLiveSubmission, int operationalBranchId,
-        DateTime nowUtc, int lifetimeHours, IReadOnlyDictionary<string, SettingDefinition> catalog, bool canManageSensitive, AuditContext audit)
+        int lifetimeHours, IReadOnlyDictionary<string, SettingDefinition> catalog, bool canManageSensitive, AuditContext audit)
     {
-        if (nowUtc.Kind != DateTimeKind.Utc) throw new ArgumentException("Preview-link creation time must be UTC.", nameof(nowUtc));
         if (lifetimeHours is < 1 or > SettingsAdministrationOptions.MaximumPreviewLinkLifetimeHours)
             throw new ArgumentOutOfRangeException(nameof(lifetimeHours));
+        var nowUtc = timeProvider.GetUtcNow().UtcDateTime;
         var expiresAtUtc = nowUtc.AddHours(lifetimeHours);
         using var connection = Open();
         using var transaction = connection.BeginTransaction(IsolationLevel.Serializable);
@@ -438,8 +443,9 @@ output inserted.PreviewLinkId values(@draftId,@tokenHash,@allowLiveSubmission,@o
         return previewLinkId;
     }
 
-    public PreviewContextSnapshot? ResolvePreviewContext(byte[] tokenHash, DateTime nowUtc)
+    public PreviewContextSnapshot? ResolvePreviewContext(byte[] tokenHash)
     {
+        var nowUtc = timeProvider.GetUtcNow().UtcDateTime;
         using var connection = Open();
         // This lookup is deliberately outside the serializable transaction. It is only a
         // candidate; the locked re-read below is authoritative.
@@ -511,7 +517,8 @@ where p.DraftId=@draftId order by p.PreviewLinkId desc", new { draftId }).ToList
         using var connection = Open();
         var candidateDraftId = FindPreviewLinkDraftCandidate(connection, previewLinkId);
         using var transaction = connection.BeginTransaction(IsolationLevel.Serializable);
-        var draftId = LockPreviewLinkDraft(connection, transaction, previewLinkId, candidateDraftId, DateTime.UtcNow);
+        var nowUtc = timeProvider.GetUtcNow().UtcDateTime;
+        var draftId = LockPreviewLinkDraft(connection, transaction, previewLinkId, candidateDraftId, nowUtc);
         EnsureCanManageRestrictedDraft(connection, transaction, draftId, catalog, canManageSensitive);
         var updated = connection.Execute(@"
 update dbo.RegistrationSettingPreviewLinks
@@ -534,7 +541,8 @@ where PreviewLinkId=@previewLinkId and RevokedAtUtc is null
         using var connection = Open();
         var candidateDraftId = FindPreviewLinkDraftCandidate(connection, previewLinkId);
         using var transaction = connection.BeginTransaction(IsolationLevel.Serializable);
-        var draftId = LockPreviewLinkDraft(connection, transaction, previewLinkId, candidateDraftId, DateTime.UtcNow);
+        var nowUtc = timeProvider.GetUtcNow().UtcDateTime;
+        var draftId = LockPreviewLinkDraft(connection, transaction, previewLinkId, candidateDraftId, nowUtc);
         EnsureCanManageRestrictedDraft(connection, transaction, draftId, catalog, canManageSensitive);
         var current = connection.QuerySingle<PreviewLinkModeRow>(@"
 select AllowLiveSubmission,OperationalBranchId,ExpiresAtUtc

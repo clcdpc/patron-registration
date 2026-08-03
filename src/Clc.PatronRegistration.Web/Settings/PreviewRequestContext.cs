@@ -39,7 +39,7 @@ public sealed class PreviewContextResolver(
         {
             return null;
         }
-        var snapshot = repository.ResolvePreviewContext(tokenService.Hash(token), DateTime.UtcNow);
+        var snapshot = repository.ResolvePreviewContext(tokenService.Hash(token));
         if (snapshot is null)
         {
             return null;

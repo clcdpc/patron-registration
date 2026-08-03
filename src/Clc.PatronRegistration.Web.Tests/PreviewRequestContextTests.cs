@@ -134,7 +134,7 @@ public class PreviewRequestContextTests
     public void InvalidToken_CannotResolvePreviewSettings()
     {
         var repository = new Mock<ISettingsAdministrationRepository>();
-        repository.Setup(service => service.ResolvePreviewContext(It.IsAny<byte[]>(), It.IsAny<DateTime>()))
+        repository.Setup(service => service.ResolvePreviewContext(It.IsAny<byte[]>()))
             .Returns((PreviewContextSnapshot?)null);
         var resolver = new PreviewContextResolver(
             repository.Object,
@@ -150,7 +150,7 @@ public class PreviewRequestContextTests
     public void RestrictedTransitionCommittedDuringLookup_DoesNotExposeRevokedLinkDraft()
     {
         var repository = new Mock<ISettingsAdministrationRepository>();
-        repository.Setup(service => service.ResolvePreviewContext(It.IsAny<byte[]>(), It.IsAny<DateTime>()))
+        repository.Setup(service => service.ResolvePreviewContext(It.IsAny<byte[]>()))
             .Returns((PreviewContextSnapshot?)null);
         var resolver = new PreviewContextResolver(
             repository.Object,
@@ -356,7 +356,7 @@ public class PreviewRequestContextTests
         var repository = new Mock<ISettingsAdministrationRepository>();
         var validSnapshot = link.RevokedAtUtc is null &&
             (link.ExpiresAtUtc is not { } expiration || expiration > DateTime.UtcNow);
-        repository.Setup(service => service.ResolvePreviewContext(It.IsAny<byte[]>(), It.IsAny<DateTime>()))
+        repository.Setup(service => service.ResolvePreviewContext(It.IsAny<byte[]>()))
             .Returns(validSnapshot && link.DraftStatus == DraftStatus.Active.ToString() && draft.Status == DraftStatus.Active
                 ? new PreviewContextSnapshot(link, draft)
                 : null);

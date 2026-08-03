@@ -418,9 +418,8 @@ public sealed class SettingsController(
         var token = previewTokens.Create();
         try
         {
-            var nowUtc = DateTime.UtcNow;
             repository.CreatePreviewLink(draftId, token.Hash, request.AllowLiveSubmission, operationalBranchId.Value,
-                nowUtc, settingsOptions.PreviewLinkLifetimeHours, CatalogByKey,
+                settingsOptions.PreviewLinkLifetimeHours, CatalogByKey,
                 authorization.Describe(User).IsGlobal, CreateAudit(request.OrganizationId, request.FormCode));
         }
         catch (UnauthorizedAccessException)
