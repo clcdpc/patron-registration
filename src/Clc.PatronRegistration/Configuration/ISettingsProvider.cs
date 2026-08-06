@@ -34,6 +34,8 @@ namespace Clc.PatronRegistration.Configuration
         [JsonIgnore]
         string AgeWarningText { get; }
         [JsonIgnore]
+        string AgeBlockText { get; }
+        [JsonIgnore]
         string DriversLicenseButtonText { get; }
         [JsonIgnore]
         string DriversLicensePromptText { get; }
@@ -107,6 +109,7 @@ namespace Clc.PatronRegistration.Configuration
         bool EnableLegalNameCheckbox { get; }
         bool UseLegalNameOnNotices { get; }
         bool EnableAgeWarning { get; }
+        bool EnableAgeBlock { get; }
         bool DisplayECardCheckbox { get; }
         bool DisplayMailingListCheckbox { get; }
         bool DisplayPreferredPickupLocation { get; }
