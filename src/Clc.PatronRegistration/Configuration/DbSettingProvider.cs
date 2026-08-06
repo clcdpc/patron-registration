@@ -102,6 +102,8 @@ namespace Clc.PatronRegistration.Configuration
         public bool HideGender => GetSetting<bool>("hide_gender");
         public bool EnableAgeWarning => GetSetting<bool>("enable_age_warning");
         public string AgeWarningText => GetSetting<string>("age_warning_text");
+        public bool EnableAgeBlock => GetSetting<bool>("enable_age_block");
+        public string AgeBlockText => GetSetting<string>("age_block_text");
         public bool HideEreceipt => GetSetting<bool>("hide_ereceipt");
         public string NaGenderText => GetSetting<string>("na_gender_text");
         public bool NormalizeToUppercase => GetSetting<bool>("normalize_to_uppercase");

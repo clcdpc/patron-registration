@@ -23,7 +23,7 @@
     </dialog>
 
     <script type="text/javascript">
-        document.addEventListener("DOMContentLoaded", function () {
+        document.addEventListener("DOMContentLoaded", function() {
             q('#agreementModal').focus();
         });
     </script>
@@ -217,7 +217,7 @@
                 <label asp-for="PostalCode"></label>
                 <input asp-for="PostalCode" />
             </span>
-        </fieldset>      
+        </fieldset>
 
         <fieldset>
             <legend class="required">Notifications</legend>
@@ -373,7 +373,7 @@
     if (@Settings.EnableAgeWarning.ToJavascriptBool()) {
         AddEventHandler(birthdate, "blur", (e) => { ageCheck(); })
     }
-    AddEventHandler(birthdate, "blur", (e) => { dupecheck(); })
+    AddEventHandler(birthdate, "blur", (e) => { dupecheck(); ageBlockCheck(); })
     AddEventHandler(nameFirst, "blur", (e) => { dupecheck(); })
     AddEventHandler(nameLast, "blur", (e) => { dupecheck(); })
 
@@ -382,6 +382,18 @@
     function AddEventHandler(element, event, action) {
         if (element) {
             element.addEventListener(event, action);
+        }
+    }
+
+    function ageBlockCheck(){
+        if (!@Settings.EnableAgeBlock.ToJavascriptBool()) {
+            return;
+        }
+
+        let age = calculateAge(birthdate.value);
+        if (age !== null && age < 18) {
+            const ageBlockHtml = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Settings.AgeBlockText));
+            wrapperDiv.innerHTML = ageBlockHtml;
         }
     }
 
@@ -631,7 +643,7 @@
                 hide(wrapperDiv);
                 showInfoMessage(data.message);
                 if (@Model.ShouldAutoReset(ViewContext.HttpContext!.GetTrueClientIp()).ToJavascriptBool()) {
-                    setTimeout(function () { location = '@this.BuildAction("Create")'; }, @(Settings.ResetSeconds * 1000));
+                    setTimeout(function() { location = '@this.BuildAction("Create")'; }, @(Settings.ResetSeconds * 1000));
                 }
             } else {
                 showWarningMessage(data.message);
@@ -724,8 +736,8 @@
             postData("@this.BuildAction("DupeCheck")", formData).then((data) => {
                 if (data.isDupe === true) {
                     theform.innerHTML = data.message;
-                    window.scrollTo(0,0);
-                } 
+                    window.scrollTo(0, 0);
+                }
                 //else { console.log('not dupe'); }
             });
         }
@@ -756,47 +768,34 @@
         return age;
     }
 
-    //function dupecheck() {
-    //    $.post("/registration/dupecheck",
-    //        {
-    //            NameFirst: $('#NameFirst').val(),
-    //            NameLast: $('#NameLast').val(),
-    //            LibraryId: @Model.LibraryId,
-    //            PatronBranchID: $('#PatronBranchID').val(),
-    //            Month: $('#Month').val(),
-    //            Day: $('#Day').val(),
-    //            Year: $('#Year').val()
-    //        }, function (data) {
-    //            console.log(data);
-    //            if (data === "True") {
-    //                $('#alert').show();
-    //                $.ajax("/registration/DuplicateMessage/" + $('#PatronBranchID').val())
-    //                    .done(function (data) {
-    //                        $("#body").html(data);
-    //                    });
-    //                window.scrollTo(0, 0);
-    //            }
-    //        });
-    //}
-    //var ageCheckShown = false;
+    function calculateAge(birthDate, asOf = new Date()) {
+        if (typeof birthDate !== "string") {
+            return null;
+        }
 
-    //function agecheck() {
-    //    if (!ageCheckShown) {
-    //        $.get("/registration/agecheck",
-    //            {
-    //                LibraryId: @Model.LibraryId,
-    //                PatronBranchID: $('#PatronBranchID').val(),
-    //                Month: $('#Month').val(),
-    //                Day: $('#Day').val(),
-    //                Year: $('#Year').val()
-    //            }, function (data) {
-    //                if (data) {
-    //                    alert(data);
-    //                    ageCheckShown = true;
-    //                }
-    //            });
-    //    }
-    //}
+        const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(birthDate);
+
+        if (!match) {
+            return null;
+        }
+
+        const [, yearText, monthText, dayText] = match;
+        const year = Number(yearText);
+        const month = Number(monthText);
+        const day = Number(dayText);
+        const parsedBirthDate = new Date(year, month - 1, day);
+
+        if (parsedBirthDate.getFullYear() !== year || parsedBirthDate.getMonth() !== month - 1 || parsedBirthDate.getDate() !== day || parsedBirthDate > asOf) {
+            return null;
+        }
+
+        let age = asOf.getFullYear() - year;
+        if (asOf.getMonth() < month - 1 || (asOf.getMonth() === month - 1 && asOf.getDate() < day)) {
+            age--;
+        }
+
+        return age;
+    }
 
     async function postData(url = "", data = {}) {
         // Default options are marked with *
@@ -813,13 +812,13 @@
             referrerPolicy: "no-referrer", // no-referrer, *no-referrer-when-downgrade, origin, origin-when-cross-origin, same-origin, strict-origin, strict-origin-when-cross-origin, unsafe-url
             body: data,// JSON.stringify(data), // body data type must match "Content-Type" header
         }).then((response) => {
-            if (response.ok){                
+            if (response.ok) {
                 return response;
             }
             var errorMsg = '@(string.Equals(Settings.FormCode, "kiosk", StringComparison.OrdinalIgnoreCase)
-                ? "An error has occurred. Please see library staff for assistance."
-                : "An error has occurred. Please contact the library for assistance."
-            )';
+                        ? "An error has occurred. Please see library staff for assistance."
+                                : "An error has occurred. Please contact the library for assistance."
+                            )';
             showErrorMessage(errorMsg);
         });
         return response.json(); // parses JSON response into native JavaScript objects
