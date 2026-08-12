@@ -36,13 +36,6 @@ public sealed class AdminSettingAttribute : Attribute
     /// <summary>Overrides the snake_case database key inferred from the property name.</summary>
     public string? Key { get; set; }
 
-    /// <summary>Alias for <see cref="Key"/> for callers that prefer the more explicit name.</summary>
-    public string? DatabaseKey
-    {
-        get => Key;
-        set => Key = value;
-    }
-
     /// <summary>Overrides the value type inferred from the property CLR type.</summary>
     public SettingValueType ValueType
     {
@@ -55,20 +48,6 @@ public sealed class AdminSettingAttribute : Attribute
     }
 
     internal bool HasValueTypeOverride { get; private set; }
-
-    /// <summary>Alternative name for the value-type override used in administration declarations.</summary>
-    public SettingValueType SettingValueType
-    {
-        get => ValueType;
-        set => ValueType = value;
-    }
-
-    /// <summary>Alias for <see cref="ValueType"/>.</summary>
-    public SettingValueType SettingValueTypeOverride
-    {
-        get => ValueType;
-        set => ValueType = value;
-    }
 
     public bool IsSensitive { get; set; }
 
@@ -126,7 +105,8 @@ internal static class SettingPropertyMetadataCache
                 continue;
             }
 
-            var administration = property.GetCustomAttribute<AdminSettingAttribute>(inherit: false);
+            var administration = property.GetCustomAttribute<AdminSettingAttribute>(inherit: false)
+                ?? FindHiddenBaseAdministrationAttribute(property);
             var databaseKey = administration?.Key is { } explicitKey
                 ? ValidateExplicitKey(providerType, property, explicitKey)
                 : InferDatabaseKey(property.Name);
@@ -134,6 +114,25 @@ internal static class SettingPropertyMetadataCache
         }
 
         return properties;
+    }
+
+    private static AdminSettingAttribute? FindHiddenBaseAdministrationAttribute(PropertyInfo property)
+    {
+        for (var baseType = property.DeclaringType?.BaseType;
+             baseType is not null;
+             baseType = baseType.BaseType)
+        {
+            var baseProperty = baseType.GetProperty(
+                property.Name,
+                BindingFlags.Instance | BindingFlags.Public | BindingFlags.DeclaredOnly);
+            var administration = baseProperty?.GetCustomAttribute<AdminSettingAttribute>(inherit: false);
+            if (administration is not null)
+            {
+                return administration;
+            }
+        }
+
+        return null;
     }
 
     private static string ValidateExplicitKey(Type providerType, PropertyInfo property, string explicitKey)

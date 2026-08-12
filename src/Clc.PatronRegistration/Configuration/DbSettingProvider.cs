@@ -46,7 +46,8 @@ namespace Clc.PatronRegistration.Configuration
 
         public virtual IdentifierSettingResult GetIdentifierState(string key) => IdentifierSettingParser.Parse(GetSetting<string>(key));
         public virtual ExpirationDateYearsSettingResult GetExpirationDateYearsState() =>
-            ExpirationDateYearsSettingParser.Parse(GetSetting<string>("expiration_date_years"));
+            ExpirationDateYearsSettingParser.Parse(GetSetting<string>(
+                SettingPropertyMetadataCache.Get(GetType(), nameof(ExpirationDateYears)).DatabaseKey));
 
         private int GetLegacySafeInteger([CallerMemberName] string propertyName = "")
         {
