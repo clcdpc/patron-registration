@@ -327,6 +327,7 @@ public class PreviewRequestContextTests
     {
         var context = CreateResolver(draft: ActiveDraft(
             new("label.NameFirst", DraftOperation.Upsert, "Preview first name"),
+            new("label.PhoneVoice1", DraftOperation.Upsert, "Preview first name"),
             new("require.PhoneVoice1", DraftOperation.Upsert, "true"),
             new("alert.NameFirst", DraftOperation.Upsert, "Preview alert"))).Resolve("token")!;
         var services = new ServiceCollection().AddSingleton<ISettingProvider>(context.Settings).BuildServiceProvider();
@@ -360,8 +361,11 @@ public class PreviewRequestContextTests
             .Returns(validSnapshot && link.DraftStatus == DraftStatus.Active.ToString() && draft.Status == DraftStatus.Active
                 ? new PreviewContextSnapshot(link, draft)
                 : null);
-        eligibility ??= new Mock<IPreviewBranchEligibilityService>();
-        eligibility.Setup(service => service.IsEligible(draft.OrganizationId, link.OperationalBranchId, 1)).Returns(true);
+        if (eligibility is null)
+        {
+            eligibility = new Mock<IPreviewBranchEligibilityService>();
+            eligibility.Setup(service => service.IsEligible(draft.OrganizationId, link.OperationalBranchId, 1)).Returns(true);
+        }
         return new PreviewContextResolver(repository.Object, new PreviewTokenService(), eligibility.Object, new TestCache(), Options.Create(new SettingsAdministrationOptions()));
     }
 

@@ -4,6 +4,8 @@ using Clc.PatronRegistration.Web.Settings;
 using Clc.PatronRegistration.Web.Models;
 using Clc.PatronRegistration.Validators;
 using System.ComponentModel.DataAnnotations;
+using System.Reflection;
+using System.Text.Json;
 using Moq;
 
 namespace Clc.PatronRegistration.Tests;
@@ -65,97 +67,35 @@ public class SettingsAdministrationTests
         Assert.AreEqual(valid, definition.Validate(value ?? string.Empty) is null);
     }
 
-    private static readonly string[] SupportedOrdinaryKeys =
-    [
-        "header_image_url", "css_file", "warning_text", "custom_form_footer_html", "registration_text", "registration_form_header",
-        "show_dl", "hide_gender", "enable_age_warning", "age_warning_text", "hide_ereceipt", "na_gender_text",
-        "normalize_to_uppercase", "dl_format", "enable_legal_name_checkbox", "drivers_license_button_text",
-        "drivers_license_prompt_text", "agreement_confirm_button_text", "agreement_cancel_button_text", "school_info_field_legend",
-        "school_info_format", "responsible_person_disclaimer", "display_responsible_person_field", "phone_number_format",
-        "enable_patron_branch_select_option", "display_preferred_pickup_location", "teacher_patron_code_id", "student_patron_code_id",
-        "patron_code_id", "expiration_date", "expiration_date_years", "hide_branch_select_if_only_one_option", "disable_branch",
-        "display_ecard_checkbox", "ecard_patron_code_id", "ecard_registration_text", "ecard_barcode_prefix", "force_ecard_remotely",
-        "display_mailing_list_checkbox", "mailing_list_description_html", "mailing_list_record_set_id", "display_sms_notice_information",
-        "sms_notice_information_html", "use_legal_name_on_notices", "ecard_welcome_email_template_text",
-        "ecard_welcome_email_template_html", "welcome_email_template_text", "welcome_email_template_html", "welcome_email_from_name",
-        "welcome_email_subject", "welcome_email_from_address", "ecard_welcome_email_subject", "postmark_api_key",
-        "bypass_dupe_check", "duplicate_patron_message_html", "perform_papi_duplicate_bypass", "use_first_name_for_duplicate_workaround",
-        "block_out_of_state_registrations", "update_patron_record_with_melissa_address", "melissa_data_api_key",
-        "valid_address_registration_text", "valid_address_plus_name_registration_text", "out_of_state_block_message",
-        "valid_address_patron_code_id", "valid_address_plus_name_patron_code_id", "valid_address_record_set_id",
-        "valid_address_plus_name_record_set_id", "invalid_address_record_set_id", "registration_logon_user_id",
-        "add_to_record_set_id", "post_registration_note_text", "show_dl_ips", "reset_form", "kiosk_registration_text",
-        "kiosk_registration_header", "reset_seconds"
-    ];
-
     [TestMethod]
-    public void OrdinaryCatalog_ExactlyMatchesIndependentSupportedKeyContract()
+    public void OrdinaryCatalog_ExactlyMatchesExplicitlyAttributedProviderProperties()
     {
-        var actual = new SettingCatalog().All.Where(x => x.Group == SettingGroup.Ordinary).Select(x => x.Key).ToArray();
+        var catalog = new SettingCatalog();
+        var attributed = AdministrationProperties();
+        var expected = attributed.Select(SettingKey).ToArray();
+        var actual = catalog.All.Where(x => x.Group == SettingGroup.Ordinary).Select(x => x.Key).ToArray();
 
         Assert.AreEqual(actual.Length, actual.Distinct(StringComparer.OrdinalIgnoreCase).Count(), "Duplicate ordinary key.");
-        CollectionAssert.AreEquivalent(SupportedOrdinaryKeys, actual);
+        CollectionAssert.AreEquivalent(expected, actual);
+        foreach (var key in expected)
+        {
+            Assert.AreEqual(1, actual.Count(actualKey => actualKey.Equals(key, StringComparison.OrdinalIgnoreCase)), key);
+        }
     }
 
     [TestMethod]
-    public void OrdinaryCatalog_PreservesValueSensitivityAndEmptyValueContracts()
+    public void OrdinaryCatalog_UsesAttributedMetadataAndConservativeClrInference()
     {
-        var booleans = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        var catalog = new SettingCatalog().All.Where(x => x.Group == SettingGroup.Ordinary).ToDictionary(x => x.Key, StringComparer.OrdinalIgnoreCase);
+        foreach (var property in AdministrationProperties())
         {
-            "reset_form", "show_dl", "hide_gender", "enable_age_warning", "hide_ereceipt", "normalize_to_uppercase",
-            "bypass_dupe_check", "enable_patron_branch_select_option", "block_out_of_state_registrations",
-            "enable_legal_name_checkbox", "use_legal_name_on_notices", "display_ecard_checkbox",
-            "display_mailing_list_checkbox", "display_sms_notice_information", "display_preferred_pickup_location",
-            "display_responsible_person_field", "perform_papi_duplicate_bypass", "use_first_name_for_duplicate_workaround",
-            "update_patron_record_with_melissa_address", "hide_branch_select_if_only_one_option", "disable_branch", "force_ecard_remotely"
-        };
-        var integers = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-        {
-            "mailing_list_record_set_id", "registration_logon_user_id", "ecard_patron_code_id", "teacher_patron_code_id",
-            "student_patron_code_id", "valid_address_patron_code_id", "valid_address_plus_name_patron_code_id",
-            "valid_address_record_set_id", "valid_address_plus_name_record_set_id", "invalid_address_record_set_id", "reset_seconds"
-        };
-        var nullableIntegers = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-            { "add_to_record_set_id", "expiration_date_years", "patron_code_id" };
-        var html = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-            { "custom_form_footer_html", "duplicate_patron_message_html", "mailing_list_description_html", "sms_notice_information_html" };
-        var templates = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-            { "ecard_welcome_email_template_text", "ecard_welcome_email_template_html", "welcome_email_template_text", "welcome_email_template_html" };
-        var longStrings = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-        {
-            "warning_text", "age_warning_text", "na_gender_text", "drivers_license_button_text", "drivers_license_prompt_text",
-            "agreement_confirm_button_text", "agreement_cancel_button_text", "responsible_person_disclaimer", "registration_text",
-            "ecard_registration_text", "valid_address_registration_text", "valid_address_plus_name_registration_text",
-            "out_of_state_block_message", "post_registration_note_text", "kiosk_registration_text"
-        };
-        var shortStrings = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-        {
-            "css_file", "registration_form_header", "dl_format", "school_info_field_legend", "school_info_format",
-            "phone_number_format", "ecard_barcode_prefix", "welcome_email_from_name", "welcome_email_subject",
-            "ecard_welcome_email_subject", "postmark_api_key", "melissa_data_api_key", "show_dl_ips", "kiosk_registration_header"
-        };
-        var expectedTypes = new Dictionary<string, SettingValueType>(StringComparer.OrdinalIgnoreCase);
-        void Add(IEnumerable<string> keys, SettingValueType type)
-        {
-            foreach (var key in keys) expectedTypes.Add(key, type);
-        }
-        Add(booleans, SettingValueType.Boolean);
-        Add(integers, SettingValueType.Integer);
-        Add(nullableIntegers, SettingValueType.NullableInteger);
-        Add(html, SettingValueType.Html);
-        Add(templates, SettingValueType.EmailTemplate);
-        Add(longStrings, SettingValueType.LongString);
-        Add(shortStrings, SettingValueType.ShortString);
-        expectedTypes.Add("expiration_date", SettingValueType.NullableDate);
-        expectedTypes.Add("welcome_email_from_address", SettingValueType.EmailAddress);
-        expectedTypes.Add("header_image_url", SettingValueType.Uri);
-        CollectionAssert.AreEquivalent(SupportedOrdinaryKeys, expectedTypes.Keys.ToArray(), "The type contract must cover every supported key exactly once.");
-
-        foreach (var definition in new SettingCatalog().All.Where(x => x.Group == SettingGroup.Ordinary))
-        {
-            var expectedType = expectedTypes[definition.Key];
+            var attribute = property.GetCustomAttribute<AdminSettingAttribute>()!;
+            var definition = catalog[SettingKey(property)];
+            var expectedType = attribute.ValueType is { } overrideType && (int)overrideType >= 0
+                ? overrideType
+                : InferValueType(property.PropertyType);
             Assert.AreEqual(expectedType, definition.ValueType, definition.Key);
-            Assert.AreEqual(definition.Key is "postmark_api_key" or "melissa_data_api_key", definition.IsSensitive, definition.Key);
+            Assert.AreEqual(attribute.IsSensitive, definition.IsSensitive, definition.Key);
             Assert.AreEqual(expectedType is SettingValueType.ShortString or SettingValueType.LongString or SettingValueType.Html
                 or SettingValueType.EmailTemplate or SettingValueType.EmailAddress or SettingValueType.Uri
                 or SettingValueType.NullableInteger or SettingValueType.NullableDate, definition.AllowEmpty, definition.Key);
@@ -163,6 +103,47 @@ public class SettingsAdministrationTests
             Assert.IsFalse(string.IsNullOrWhiteSpace(definition.DisplayName), definition.Key);
             Assert.IsFalse(string.IsNullOrWhiteSpace(definition.Description), definition.Key);
         }
+    }
+
+    [TestMethod]
+    public void AdministrationMetadata_InfersKeysAndPreservesLegacyKeyOverrides()
+    {
+        var properties = AdministrationProperties().ToDictionary(property => property.Name);
+        Assert.AreEqual("enable_age_block", SettingKey(properties[nameof(DbSettingProvider.EnableAgeBlock)]));
+        Assert.AreEqual("age_block_text", SettingKey(properties[nameof(DbSettingProvider.AgeBlockText)]));
+        Assert.AreEqual("expiration_date_years", SettingKey(properties[nameof(DbSettingProvider.ExpirationDateYears)]));
+        Assert.AreEqual("postmark_api_key", SettingKey(properties[nameof(DbSettingProvider.PostmarkApiKey)]));
+        Assert.AreEqual("show_dl", SettingKey(properties[nameof(DbSettingProvider.EnableDriversLicenseSwipe)]));
+        Assert.AreEqual("dl_format", SettingKey(properties[nameof(DbSettingProvider.DriversLicenseFormat)]));
+        Assert.AreEqual("display_ecard_checkbox", SettingKey(properties[nameof(DbSettingProvider.DisplayECardCheckbox)]));
+        Assert.AreEqual("registration_form_header", SettingKey(properties[nameof(DbSettingProvider.RegistrationHeader)]));
+        Assert.AreEqual("hide_branch_select_if_only_one_option", SettingKey(properties[nameof(DbSettingProvider.HideBranchSelectIfOnlyOneBranch)]));
+        Assert.AreEqual("perform_papi_duplicate_bypass", SettingKey(properties[nameof(DbSettingProvider.PerformPapiDupeBypass)]));
+    }
+
+    [TestMethod]
+    public void AdministrationMetadata_UsesExplicitSemanticStringEditorsAndSensitiveMetadata()
+    {
+        var properties = AdministrationProperties().ToDictionary(property => property.Name);
+        var expected = new Dictionary<string, SettingValueType>
+        {
+            [nameof(DbSettingProvider.HeaderImageUrl)] = SettingValueType.Uri,
+            [nameof(DbSettingProvider.WarningText)] = SettingValueType.LongString,
+            [nameof(DbSettingProvider.CustomFormFooterHtml)] = SettingValueType.Html,
+            [nameof(DbSettingProvider.EcardWelcomeEmailTemplateText)] = SettingValueType.EmailTemplate,
+            [nameof(DbSettingProvider.WelcomeEmailFromAddress)] = SettingValueType.EmailAddress,
+            [nameof(DbSettingProvider.AgeBlockText)] = SettingValueType.Html
+        };
+        foreach (var pair in expected)
+        {
+            var attribute = properties[pair.Key].GetCustomAttribute<AdminSettingAttribute>()!;
+            Assert.AreEqual(pair.Value, attribute.ValueType, pair.Key);
+        }
+
+        Assert.IsTrue(properties[nameof(DbSettingProvider.PostmarkApiKey)].GetCustomAttribute<AdminSettingAttribute>()!.IsSensitive);
+        Assert.IsTrue(properties[nameof(DbSettingProvider.MelissaDataApiKey)].GetCustomAttribute<AdminSettingAttribute>()!.IsSensitive);
+        Assert.AreEqual(SettingValueType.Html, new SettingCatalog().All.Single(x => x.Key == "age_block_text").ValueType);
+        Assert.AreEqual(SettingValueType.Boolean, new SettingCatalog().All.Single(x => x.Key == "enable_age_block").ValueType);
     }
 
     [TestMethod]
@@ -1132,7 +1113,7 @@ public class SettingsAdministrationTests
         var cache = CacheWith(
             Setting(1, "postmark_api_key", postmarkSecret),
             Setting(1, "melissa_data_api_key", melissaSecret),
-            Setting(1, "registration_text", "Useful public text"));
+            Setting(1, "dl_format", "Useful public text"));
         var provider = new DbSettingProvider(3, cache, string.Empty, 1);
 
         var snapshot = SettingsSnapshotSerializer.Serialize(provider);
@@ -1347,6 +1328,136 @@ public class SettingsAdministrationTests
         var message = SettingInheritancePresentation.MessageFor(sensitive);
         Assert.IsFalse(message.Contains("recognizable secret", StringComparison.Ordinal));
         Assert.AreEqual("Applying this action will remove the override at this scope and use the inherited value.", message);
+    }
+
+    [TestMethod]
+    public void Catalog_ExplicitAllowEmptyOverrideIsHonored()
+    {
+        var definition = new SettingCatalog(typeof(MetadataInferenceProvider)).All.Single(x => x.Key == "required_string");
+
+        Assert.IsFalse(definition.AllowEmpty);
+        Assert.IsNotNull(definition.Validate(string.Empty));
+    }
+
+    [TestMethod]
+    public void Catalog_DoesNotExposeUnattributedProviderProperties()
+    {
+        var catalog = new SettingCatalog();
+
+        Assert.IsFalse(catalog.TryGet("require_preferred_pickup_location", out _));
+        Assert.IsFalse(catalog.TryGet("welcome_email_address", out _));
+        Assert.IsFalse(new SettingCatalog(typeof(MetadataInferenceProvider)).TryGet("unattributed_runtime_only", out _));
+    }
+
+    [TestMethod]
+    public void Catalog_InfersDecimalDateAndNullableTypesFromProviderClrTypes()
+    {
+        var catalog = new SettingCatalog(typeof(MetadataInferenceProvider));
+
+        Assert.AreEqual(SettingValueType.Decimal, catalog.All.Single(x => x.Key == "decimal_setting").ValueType);
+        Assert.AreEqual(SettingValueType.Date, catalog.All.Single(x => x.Key == "date_setting").ValueType);
+        Assert.AreEqual(SettingValueType.NullableInteger, catalog.All.Single(x => x.Key == "nullable_integer_setting").ValueType);
+        Assert.AreEqual("legacy_setting", catalog.All.Single(x => x.Key == "legacy_setting").Key);
+    }
+
+    [TestMethod]
+    public void Catalog_RejectsDuplicateAttributedDatabaseKeysClearly()
+    {
+        var exception = Assert.ThrowsException<InvalidOperationException>(() => new SettingCatalog(typeof(DuplicateKeyProvider)));
+
+        StringAssert.Contains(exception.Message, "Duplicate administration setting database key 'same_key'");
+        StringAssert.Contains(exception.Message, nameof(DuplicateKeyProvider.SameKey));
+        StringAssert.Contains(exception.Message, nameof(DuplicateKeyProvider.ExplicitSameKey));
+    }
+
+    [TestMethod]
+    public void Catalog_RejectsUnsupportedAttributedClrTypesClearly()
+    {
+        var exception = Assert.ThrowsException<InvalidOperationException>(() => new SettingCatalog(typeof(UnsupportedTypeProvider)));
+
+        StringAssert.Contains(exception.Message, nameof(UnsupportedTypeProvider.Unsupported));
+        StringAssert.Contains(exception.Message, typeof(Guid).FullName!);
+    }
+
+    [TestMethod]
+    public void PreviewSettingProvider_UsesGetSettingOverrideForPropertyMetadataReads()
+    {
+        var draft = Draft(3, new SettingMutation("enable_age_block", DraftOperation.Upsert, "true"));
+        var preview = new PreviewSettingProvider(draft, 3, new TestCache(), 1);
+
+        Assert.IsTrue(preview.EnableAgeBlock);
+    }
+
+    private static PropertyInfo[] AdministrationProperties() =>
+        typeof(DbSettingProvider).GetProperties(BindingFlags.Instance | BindingFlags.Public)
+            .Where(property => property.GetCustomAttribute<AdminSettingAttribute>() is not null)
+            .OrderBy(property => property.MetadataToken)
+            .ToArray();
+
+    private static string SettingKey(PropertyInfo property) =>
+        property.GetCustomAttribute<AdminSettingAttribute>()!.Key
+        ?? JsonNamingPolicy.SnakeCaseLower.ConvertName(property.Name);
+
+    private static SettingValueType InferValueType(Type propertyType) => propertyType switch
+    {
+        _ when propertyType == typeof(bool) => SettingValueType.Boolean,
+        _ when propertyType == typeof(int) => SettingValueType.Integer,
+        _ when propertyType == typeof(int?) => SettingValueType.NullableInteger,
+        _ when propertyType == typeof(decimal) => SettingValueType.Decimal,
+        _ when propertyType == typeof(DateTime) => SettingValueType.Date,
+        _ when propertyType == typeof(DateTime?) => SettingValueType.NullableDate,
+        _ when propertyType == typeof(string) => SettingValueType.ShortString,
+        _ => throw new InvalidOperationException($"Unsupported test type {propertyType.FullName}.")
+    };
+
+    private sealed class MetadataInferenceProvider : DbSettingProvider
+    {
+        private MetadataInferenceProvider() : base(0, null!) { }
+
+        [AdminSetting(SettingCategory.FormBehaviorAndFields, "Decimal setting", "Decimal setting.")]
+        public decimal DecimalSetting => GetPropertySetting<decimal>();
+
+        [AdminSetting(SettingCategory.FormBehaviorAndFields, "Date setting", "Date setting.")]
+        public DateTime DateSetting => GetPropertySetting<DateTime>();
+
+        [AdminSetting(SettingCategory.FormBehaviorAndFields, "Nullable integer setting", "Nullable integer setting.")]
+        public int? NullableIntegerSetting => GetPropertySetting<int?>();
+
+        [AdminSetting(SettingCategory.FormBehaviorAndFields, "HTML setting", "HTML setting.", ValueType = SettingValueType.Html)]
+        public string HtmlSetting => GetPropertySetting<string>();
+
+        [AdminSetting(SettingCategory.FormBehaviorAndFields, "Email template setting", "Email template setting.", ValueType = SettingValueType.EmailTemplate)]
+        public string TemplateSetting => GetPropertySetting<string>();
+
+        [AdminSetting(SettingCategory.FormBehaviorAndFields, "Email address setting", "Email address setting.", ValueType = SettingValueType.EmailAddress)]
+        public string EmailSetting => GetPropertySetting<string>();
+
+        [AdminSetting(SettingCategory.FormBehaviorAndFields, "Required string", "Required string.", AllowEmpty = false)]
+        public string RequiredString => GetPropertySetting<string>();
+
+        [AdminSetting(SettingCategory.FormBehaviorAndFields, "Legacy setting", "Legacy setting.", Key = "legacy_setting")]
+        public bool LegacyProperty => GetPropertySetting<bool>();
+
+        public Guid UnattributedRuntimeOnly => Guid.Empty;
+    }
+
+    private sealed class DuplicateKeyProvider : DbSettingProvider
+    {
+        private DuplicateKeyProvider() : base(0, null!) { }
+
+        [AdminSetting(SettingCategory.FormBehaviorAndFields, "Same key", "Same key.")]
+        public bool SameKey => true;
+
+        [AdminSetting(SettingCategory.FormBehaviorAndFields, "Explicit same key", "Explicit same key.", Key = "same_key")]
+        public bool ExplicitSameKey => false;
+    }
+
+    private sealed class UnsupportedTypeProvider : DbSettingProvider
+    {
+        private UnsupportedTypeProvider() : base(0, null!) { }
+
+        [AdminSetting(SettingCategory.FormBehaviorAndFields, "Unsupported", "Unsupported.")]
+        public Guid Unsupported => Guid.Empty;
     }
 
     private static string FindRepositoryRoot()

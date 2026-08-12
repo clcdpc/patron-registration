@@ -57,6 +57,7 @@ public class RegistrationModelStateTests
     {
         var settings = new Mock<ISettingProvider>();
         settings.SetupGet(value => value.PhoneNumberFormat).Returns("($1) $2-$3");
+        settings.SetupGet(value => value.FormCode).Returns(string.Empty);
         var db = new Mock<IDbHelper>();
         db.Setup(value => value.CheckPatronIsDuplicate(It.IsAny<int>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<DateTime>())).Returns(false);
         var melissa = new Mock<IMelissaRestClient>();
@@ -88,7 +89,12 @@ public class RegistrationModelStateTests
     {
         var settings = new Mock<ISettingProvider>();
         settings.SetupGet(value => value.PhoneNumberFormat).Returns("($1) $2-$3");
+        settings.SetupGet(value => value.FormCode).Returns(string.Empty);
+        settings.SetupGet(value => value.PatronCodeId).Returns(1);
         settings.SetupGet(value => value.RegistrationLogonUserId).Returns(0);
+        settings.As<IIdentifierSettingStateProvider>()
+            .Setup(value => value.GetIdentifierState("patron_code_id"))
+            .Returns(new IdentifierSettingResult(IdentifierSettingState.Positive, 1));
         settings.As<IIdentifierSettingStateProvider>()
             .Setup(value => value.GetIdentifierState("registration_logon_user_id"))
             .Returns(new IdentifierSettingResult(state, state == IdentifierSettingState.Negative ? -1 : 0));

@@ -232,6 +232,8 @@ public class SettingsControllerTests
             ]
         };
         var repository = new Mock<ISettingsAdministrationRepository>();
+        repository.Setup(service => service.GetFormCodes(It.IsAny<int>(), It.IsAny<int>())).Returns([]);
+        repository.Setup(service => service.GetLegacyFormCodes()).Returns([]);
         repository.Setup(service => service.GetActiveDraft(1, string.Empty)).Returns(new SettingDraft(
             42, 1, string.Empty, 0, DraftStatus.Active,
             [new SettingMutation("postmark_api_key", DraftOperation.Upsert, stagedSecret)]));
@@ -1214,6 +1216,8 @@ public class SettingsControllerTests
     public void LibraryAdministrator_SeesOnlyGenericRestrictedDraftIndicatorNotSensitiveMutation()
     {
         var repository = new Mock<ISettingsAdministrationRepository>();
+        repository.Setup(service => service.GetFormCodes(It.IsAny<int>(), It.IsAny<int>())).Returns([]);
+        repository.Setup(service => service.GetLegacyFormCodes()).Returns([]);
         repository.Setup(service => service.GetActiveDraft(3, string.Empty)).Returns(SensitiveDraft());
         var controller = CreateController(repository, LibraryAuthorization());
 
