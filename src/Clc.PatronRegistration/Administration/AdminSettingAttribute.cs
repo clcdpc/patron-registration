@@ -1,11 +1,10 @@
-using System.Collections.Concurrent;
 using System.Reflection;
 using System.Text.Json;
 
 namespace Clc.PatronRegistration.Administration;
 
 /// <summary>
-/// Opts a <see cref="Configuration.DbSettingProvider"/> property into settings administration.
+/// Opts an <see cref="Configuration.ISettingProvider"/> property into settings administration.
 /// </summary>
 [AttributeUsage(AttributeTargets.Property, AllowMultiple = false, Inherited = false)]
 public sealed class AdminSettingAttribute : Attribute
@@ -71,44 +70,42 @@ public sealed class AdminSettingAttribute : Attribute
 internal sealed record SettingPropertyMetadata(PropertyInfo Property, AdminSettingAttribute? Administration, string DatabaseKey);
 
 /// <summary>
-/// Shared, per-provider-type cache for property metadata used by both setting reads and catalog construction.
+/// Cached metadata for the fixed <see cref="Configuration.ISettingProvider"/> setting contract.
 /// </summary>
 internal static class SettingPropertyMetadataCache
 {
-    private static readonly ConcurrentDictionary<Type, IReadOnlyDictionary<string, SettingPropertyMetadata>> Cache = new();
+    private static readonly IReadOnlyDictionary<string, SettingPropertyMetadata> Metadata = Build();
+    private static readonly IReadOnlyList<SettingPropertyMetadata> MetadataList = Metadata.Values.ToArray();
 
-    public static SettingPropertyMetadata Get(Type providerType, string propertyName)
+    public static SettingPropertyMetadata Get(string propertyName)
     {
-        var properties = Cache.GetOrAdd(providerType, Build);
-        if (!properties.TryGetValue(propertyName, out var metadata))
+        if (!Metadata.TryGetValue(propertyName, out var metadata))
         {
             throw new InvalidOperationException(
-                $"The setting provider type '{providerType.FullName}' has no readable property named '{propertyName}'.");
+                $"The ISettingProvider contract has no readable property named '{propertyName}'.");
         }
 
         return metadata;
     }
 
-    public static IReadOnlyList<SettingPropertyMetadata> GetAll(Type providerType) =>
-        Cache.GetOrAdd(providerType, Build).Values.ToArray();
+    public static IReadOnlyList<SettingPropertyMetadata> GetAll() => MetadataList;
 
     public static string InferDatabaseKey(string propertyName) =>
         JsonNamingPolicy.SnakeCaseLower.ConvertName(propertyName);
 
-    private static IReadOnlyDictionary<string, SettingPropertyMetadata> Build(Type providerType)
+    private static IReadOnlyDictionary<string, SettingPropertyMetadata> Build()
     {
         var properties = new Dictionary<string, SettingPropertyMetadata>(StringComparer.Ordinal);
-        foreach (var property in providerType.GetProperties(BindingFlags.Instance | BindingFlags.Public))
+        foreach (var property in typeof(Configuration.ISettingProvider).GetProperties(BindingFlags.Instance | BindingFlags.Public))
         {
             if (property.GetMethod is null || property.GetIndexParameters().Length != 0)
             {
                 continue;
             }
 
-            var administration = property.GetCustomAttribute<AdminSettingAttribute>(inherit: false)
-                ?? FindHiddenBaseAdministrationAttribute(property);
+            var administration = property.GetCustomAttribute<AdminSettingAttribute>(inherit: false);
             var databaseKey = administration?.Key is { } explicitKey
-                ? ValidateExplicitKey(providerType, property, explicitKey)
+                ? ValidateExplicitKey(property, explicitKey)
                 : InferDatabaseKey(property.Name);
             properties[property.Name] = new(property, administration, databaseKey);
         }
@@ -116,31 +113,12 @@ internal static class SettingPropertyMetadataCache
         return properties;
     }
 
-    private static AdminSettingAttribute? FindHiddenBaseAdministrationAttribute(PropertyInfo property)
-    {
-        for (var baseType = property.DeclaringType?.BaseType;
-             baseType is not null;
-             baseType = baseType.BaseType)
-        {
-            var baseProperty = baseType.GetProperty(
-                property.Name,
-                BindingFlags.Instance | BindingFlags.Public | BindingFlags.DeclaredOnly);
-            var administration = baseProperty?.GetCustomAttribute<AdminSettingAttribute>(inherit: false);
-            if (administration is not null)
-            {
-                return administration;
-            }
-        }
-
-        return null;
-    }
-
-    private static string ValidateExplicitKey(Type providerType, PropertyInfo property, string explicitKey)
+    private static string ValidateExplicitKey(PropertyInfo property, string explicitKey)
     {
         if (string.IsNullOrWhiteSpace(explicitKey))
         {
             throw new InvalidOperationException(
-                $"Administration setting property '{providerType.FullName}.{property.Name}' specifies an empty database key.");
+                $"Administration setting property 'ISettingProvider.{property.Name}' specifies an empty database key.");
         }
 
         return explicitKey;

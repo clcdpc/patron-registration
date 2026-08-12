@@ -1,7 +1,6 @@
 using System.Globalization;
 using System.Net.Mail;
 using System.Text.RegularExpressions;
-using Clc.PatronRegistration.Configuration;
 
 namespace Clc.PatronRegistration.Administration;
 
@@ -189,35 +188,24 @@ public sealed class SettingCatalog : ISettingCatalog
     public IReadOnlyList<SettingDefinition> All { get; }
     private readonly Dictionary<string, SettingDefinition> byKey;
 
-    public SettingCatalog() : this(typeof(DbSettingProvider))
+    public SettingCatalog() : this(SettingPropertyMetadataCache.GetAll())
     {
     }
 
-    /// <summary>
-    /// Builds the ordinary catalog from explicitly attributed properties on a setting provider.
-    /// The provider-type overload keeps catalog construction testable without changing the runtime source of truth.
-    /// </summary>
-    public SettingCatalog(Type providerType)
+    internal SettingCatalog(IReadOnlyList<SettingPropertyMetadata> ordinaryMetadata)
     {
-        if (!typeof(DbSettingProvider).IsAssignableFrom(providerType))
-        {
-            throw new ArgumentException(
-                $"The setting catalog provider type must derive from {typeof(DbSettingProvider).FullName}.",
-                nameof(providerType));
-        }
-
-        var ordinaryMetadata = SettingPropertyMetadataCache.GetAll(providerType)
+        ordinaryMetadata = ordinaryMetadata
             .Where(metadata => metadata.Administration is not null)
             .OrderBy(metadata => metadata.Property.MetadataToken)
             .ToList();
-        EnsureUniqueOrdinaryKeys(ordinaryMetadata, providerType);
+        EnsureUniqueOrdinaryKeys(ordinaryMetadata);
 
         var list = ordinaryMetadata.Select((metadata, i) =>
         {
             var attribute = metadata.Administration!;
             var type = attribute.HasValueTypeOverride
                 ? attribute.ValueType
-                : InferValueType(metadata.Property.PropertyType, providerType, metadata.Property);
+                : InferValueType(metadata.Property.PropertyType, metadata.Property);
             var allowEmpty = attribute.HasAllowEmptyOverride ? attribute.AllowEmpty : AllowsEmpty(type);
             return new SettingDefinition(metadata.DatabaseKey, attribute.DisplayName, attribute.Description, type,
                 IsSensitive: attribute.IsSensitive, AllowEmpty: allowEmpty, SortOrder: i,
@@ -250,8 +238,7 @@ public sealed class SettingCatalog : ISettingCatalog
     public bool TryGet(string key, out SettingDefinition definition) => byKey.TryGetValue(key, out definition!);
 
     private static void EnsureUniqueOrdinaryKeys(
-        IReadOnlyList<SettingPropertyMetadata> metadata,
-        Type providerType)
+        IReadOnlyList<SettingPropertyMetadata> metadata)
     {
         foreach (var duplicate in metadata
             .GroupBy(item => item.DatabaseKey, StringComparer.OrdinalIgnoreCase)
@@ -259,11 +246,11 @@ public sealed class SettingCatalog : ISettingCatalog
         {
             var properties = string.Join(", ", duplicate.Select(item => item.Property.Name));
             throw new InvalidOperationException(
-                $"Duplicate administration setting database key '{duplicate.Key}' on {providerType.FullName}: {properties}.");
+                $"Duplicate administration setting database key '{duplicate.Key}' on ISettingProvider: {properties}.");
         }
     }
 
-    private static SettingValueType InferValueType(Type propertyType, Type providerType, System.Reflection.PropertyInfo property)
+    private static SettingValueType InferValueType(Type propertyType, System.Reflection.PropertyInfo property)
     {
         if (propertyType == typeof(bool))
         {
@@ -295,7 +282,7 @@ public sealed class SettingCatalog : ISettingCatalog
         }
 
         throw new InvalidOperationException(
-            $"Administration setting property '{providerType.FullName}.{property.Name}' has unsupported CLR type '{propertyType.FullName}'. " +
+            $"Administration setting property 'ISettingProvider.{property.Name}' has unsupported CLR type '{propertyType.FullName}'. " +
             "Specify AdminSettingAttribute.ValueType explicitly.");
     }
 
