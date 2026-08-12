@@ -5,9 +5,10 @@
 3. Run `002-preview-operational-branch.sql`. It is a no-op on fresh installations and safely revokes legacy links before adding their required operational branch.
 4. Run `003-expand-audit-setting-values.sql` so long non-sensitive HTML and templates can be audited without truncation.
 5. Run `004-registration-form-assets.sql` to create the database-backed registration image asset table.
-6. Grant the application's database identity `SELECT`, `INSERT`, `UPDATE`, and `DELETE` on the new tables and existing `RegistrationFormSettings` (least privilege may instead be supplied through approved stored procedures).
-7. Deploy the application only after all scripts succeed.
+6. Run `005-registration-form-asset-scope.sql` to add upload-scope metadata used to authorize unpublished assets.
+7. Grant the application's database identity `SELECT`, `INSERT`, `UPDATE`, and `DELETE` on the new tables and existing `RegistrationFormSettings` (least privilege may instead be supplied through approved stored procedures).
+8. Deploy the application only after all scripts succeed.
 
 The script is repeatable and uses UTC `datetime2`. The application never runs this script or any production migration automatically. The filtered unique index enforces one Active draft per organization/form-code scope. Token hashes, not bearer tokens, are persisted. `RegistrationSettingsCacheGeneration` is the cross-process invalidation counter.
 
-Registration image assets are stored separately from `RegistrationFormSettings`; settings contain only the referenced asset ID. Assets uploaded for a draft may remain as unreferenced rows when that draft is discarded. They are not enumerated by the application: the anonymous asset route serves only IDs referenced by persisted settings, while authenticated settings and token-scoped preview routes serve draft assets.
+Registration image assets are stored separately from `RegistrationFormSettings`; settings contain only the referenced asset ID. New assets record the organization/form settings scope that uploaded them. An asset can be used only at that scope or through its normal inherited settings chain. Assets uploaded for a draft may remain as unreferenced rows when that draft is discarded. They are not enumerated by the application: the anonymous asset route serves only IDs referenced by persisted settings, while authenticated settings and token-scoped preview routes serve authorized draft assets. Assets created before scope metadata was added remain usable only when the requested effective settings or active draft references them.

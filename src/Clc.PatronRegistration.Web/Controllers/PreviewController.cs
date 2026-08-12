@@ -51,7 +51,11 @@ public sealed class PreviewController(
     }
 
     [HttpGet("{token}/assets/{id:int}", Name = "PreviewRegistrationFormAsset")]
-    public IActionResult Asset(string token, int id, [FromServices] IRegistrationFormAssetRepository assets)
+    public IActionResult Asset(
+        string token,
+        int id,
+        [FromServices] IRegistrationFormAssetRepository assets,
+        [FromServices] IRegistrationFormAssetAuthorization assetAuthorization)
     {
         // PreviewRequestContextMiddleware has already authenticated the bearer token
         // and populated the draft overlay before this action can run.
@@ -62,7 +66,8 @@ public sealed class PreviewController(
         }
 
         SetSecurityHeaders();
-        var metadata = assets.GetMetadata(id);
+        var metadata = assetAuthorization.GetAuthorizedMetadata(
+            id, previewRequestContext.Current.Draft.OrganizationId, previewRequestContext.Current.Draft.FormCode);
         if (metadata is null)
         {
             return NotFound();

@@ -30,6 +30,7 @@ public sealed class SettingsController(
     ISettingsCacheInvalidator cacheInvalidator,
     ISettingsPageBrandingContextAccessor settingsPageBrandingContext,
     IRegistrationFormAssetRepository assetRepository,
+    IRegistrationFormAssetAuthorization assetAuthorization,
     IOptions<SettingsAdministrationOptions> options) : Controller
 {
     private readonly SettingsAdministrationOptions settingsOptions = options.Value;
@@ -181,7 +182,7 @@ public sealed class SettingsController(
             return null;
         }
 
-        var metadata = assetRepository.GetMetadata(assetId);
+        var metadata = assetAuthorization.GetAuthorizedMetadata(assetId, organizationId, formCode);
         if (metadata is null)
         {
             missing = true;
@@ -262,7 +263,7 @@ public sealed class SettingsController(
             return Forbid();
         }
 
-        var mutations = ValidateMutations(request.Changes, request.OrganizationId);
+        var mutations = ValidateMutations(request.Changes, request.OrganizationId, request.FormCode);
         if (!ModelState.IsValid)
         {
             repository.WriteAudit("ValidationFailed", false, CreateAudit(request.OrganizationId, request.FormCode), "One or more setting values were invalid.");
@@ -302,7 +303,7 @@ public sealed class SettingsController(
             AuditRejected(request.OrganizationId, request.FormCode, "Save-to-draft scope tampering rejected.");
             return Forbid();
         }
-        var mutations = ValidateMutations(request.Changes, request.OrganizationId);
+        var mutations = ValidateMutations(request.Changes, request.OrganizationId, request.FormCode);
         if (!ModelState.IsValid)
         {
             repository.WriteAudit("ValidationFailed", false, CreateAudit(request.OrganizationId, request.FormCode), "Draft changes were invalid.", request.ExpectedDraftId);
@@ -398,7 +399,7 @@ public sealed class SettingsController(
 
         // Asset creation is deliberately independent from setting mutation. The browser places this
         // returned ID into the normal row edit session, and Save/Save-to-draft persists it with peers.
-        var asset = assetRepository.Create(sanitizedFileName, file.ContentType, content);
+        var asset = assetRepository.Create(sanitizedFileName, file.ContentType, content, organizationId, formCode);
         var previewUrl = Url?.RouteUrl("SettingsRegistrationFormAsset", new { id = asset.AssetId, organizationId, formCode })
             ?? $"/settings/assets/{asset.AssetId}?organizationId={organizationId}&formCode={Uri.EscapeDataString(formCode)}";
         return Ok(new
@@ -991,7 +992,7 @@ public sealed class SettingsController(
         }
     }
 
-    private List<SettingMutation> ValidateMutations(IEnumerable<SettingMutationInput> inputs, int organizationId)
+    private List<SettingMutation> ValidateMutations(IEnumerable<SettingMutationInput> inputs, int organizationId, string formCode)
     {
         var result = new List<SettingMutation>();
         foreach (var input in inputs)
@@ -1011,6 +1012,15 @@ public sealed class SettingsController(
             {
                 ModelState.AddModelError(input.Key, error);
                 continue;
+            }
+            if (operation == DraftOperation.Upsert && definition.ValueType == SettingValueType.Image)
+            {
+                if (!int.TryParse(input.Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var assetId) ||
+                    assetAuthorization.GetAuthorizedMetadata(assetId, organizationId, formCode) is null)
+                {
+                    ModelState.AddModelError(input.Key, "The uploaded image is missing or is not available in this settings scope.");
+                    continue;
+                }
             }
             result.Add(new SettingMutation(input.Key, operation, operation == DraftOperation.RemoveOverride ? null : input.Value));
         }

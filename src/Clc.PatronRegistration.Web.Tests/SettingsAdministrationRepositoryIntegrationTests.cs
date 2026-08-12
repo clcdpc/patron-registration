@@ -75,7 +75,7 @@ public sealed class SettingsAdministrationRepositoryIntegrationTests
             var candidateConnectionString = databaseBuilder.ConnectionString;
             using var database = new SqlConnection(candidateConnectionString);
             database.Open();
-            foreach (var file in new[] { "001-settings-administration.sql", "002-preview-operational-branch.sql", "003-expand-audit-setting-values.sql", "004-registration-form-assets.sql" })
+            foreach (var file in new[] { "001-settings-administration.sql", "002-preview-operational-branch.sql", "003-expand-audit-setting-values.sql", "004-registration-form-assets.sql", "005-registration-form-asset-scope.sql" })
             {
                 Execute(database, File.ReadAllText(Path.Combine(RepositoryRoot(), "database", file)), 30);
             }
@@ -143,13 +143,15 @@ delete dbo.RegistrationSettingScopeVersions;");
                 $"Required schema object {requiredObject} was not deployed.");
         }
         Assert.AreEqual(1, Scalar<int>("select count(*) from sys.indexes where object_id=object_id('dbo.RegistrationSettingDrafts') and name='UX_RSD_ActiveScope' and is_unique=1 and has_filter=1"));
+        Assert.AreEqual(2, Scalar<int>("select count(*) from sys.columns where object_id=object_id('dbo.RegistrationFormAssets') and name in ('UploadOrganizationId', 'UploadFormCode')"));
+        Assert.AreEqual(1, Scalar<int>("select count(*) from sys.indexes where object_id=object_id('dbo.RegistrationFormAssets') and name='IX_RegistrationFormAssets_UploadScope'"));
     }
 
     [TestMethod]
     public void AssetRepository_StoresAndRetrievesContentMetadataAndSha256Hash()
     {
         var content = TestImageData.Create("image/png");
-        var created = assetRepository.Create("..\\uploads\\header.png", "IMAGE/PNG", content);
+        var created = assetRepository.Create("..\\uploads\\header.png", "IMAGE/PNG", content, 101, "form");
 
         Assert.AreEqual("header.png", created.FileName);
         Assert.AreEqual("image/png", created.ContentType);
@@ -160,6 +162,8 @@ delete dbo.RegistrationSettingScopeVersions;");
         Assert.IsNotNull(metadata);
         Assert.AreEqual(created.AssetId, metadata.AssetId);
         Assert.AreEqual(created.ContentHash, metadata.ContentHash);
+        Assert.AreEqual(101, metadata.UploadOrganizationId);
+        Assert.AreEqual("form", metadata.UploadFormCode);
         Assert.IsTrue(assetRepository.Exists(created.AssetId));
 
         var loaded = assetRepository.Get(created.AssetId);

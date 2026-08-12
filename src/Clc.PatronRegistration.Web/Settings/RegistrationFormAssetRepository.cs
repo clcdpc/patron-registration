@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using Dapper;
 using Microsoft.Data.SqlClient;
+using Clc.PatronRegistration.Administration;
 using Clc.PatronRegistration.Configuration;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.Formats;
@@ -14,7 +15,9 @@ public sealed record RegistrationFormAsset(
     byte[] Content,
     string ContentHash,
     DateTime CreatedDate,
-    DateTime ModifiedDate);
+    DateTime ModifiedDate,
+    int? UploadOrganizationId = null,
+    string? UploadFormCode = null);
 
 public sealed record RegistrationFormAssetMetadata(
     int AssetId,
@@ -22,15 +25,20 @@ public sealed record RegistrationFormAssetMetadata(
     string ContentType,
     string ContentHash,
     DateTime CreatedDate,
-    DateTime ModifiedDate);
+    DateTime ModifiedDate,
+    int? UploadOrganizationId = null,
+    string? UploadFormCode = null);
 
 public interface IRegistrationFormAssetRepository
 {
-    RegistrationFormAsset Create(string fileName, string contentType, byte[] content);
+    RegistrationFormAsset Create(string fileName, string contentType, byte[] content,
+        int uploadOrganizationId, string uploadFormCode);
     RegistrationFormAsset? Get(int assetId);
     RegistrationFormAssetMetadata? GetMetadata(int assetId);
     bool Exists(int assetId);
     bool IsPubliclyReferenced(int assetId);
+    bool IsReferencedBySettings(int assetId, IReadOnlyList<SettingSource> sources);
+    bool IsReferencedByActiveDraft(int assetId, int organizationId, string formCode);
 }
 
 /// <summary>
@@ -156,9 +164,15 @@ public sealed class RegistrationFormAssetRepository : IRegistrationFormAssetRepo
         this.connectionString = connectionString;
     }
 
-    public RegistrationFormAsset Create(string fileName, string contentType, byte[] content)
+    public RegistrationFormAsset Create(string fileName, string contentType, byte[] content,
+        int uploadOrganizationId, string uploadFormCode)
     {
         ArgumentNullException.ThrowIfNull(content);
+        if (uploadOrganizationId <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(uploadOrganizationId));
+        }
+        uploadFormCode = FormCodeNormalizer.Normalize(uploadFormCode);
         if (!RegistrationFormAssetUploadValidation.TryValidate(contentType, content, fileName,
                 out var sanitizedFileName, out var validationError))
         {
@@ -169,20 +183,24 @@ public sealed class RegistrationFormAssetRepository : IRegistrationFormAssetRepo
         var metadata = connection.QuerySingle<RegistrationFormAssetMetadata>(
             """
             insert dbo.RegistrationFormAssets
-                (FileName, ContentType, Content, ContentHash)
+                (FileName, ContentType, Content, ContentHash, UploadOrganizationId, UploadFormCode)
             output inserted.AssetId, inserted.FileName, inserted.ContentType,
-                   inserted.ContentHash, inserted.CreatedDate, inserted.ModifiedDate
-            values (@fileName, @contentType, @content, @contentHash);
+                   inserted.ContentHash, inserted.CreatedDate, inserted.ModifiedDate,
+                   inserted.UploadOrganizationId, inserted.UploadFormCode
+            values (@fileName, @contentType, @content, @contentHash, @uploadOrganizationId, @uploadFormCode);
             """,
             new
             {
                 fileName = sanitizedFileName,
                 contentType = contentType.Trim().ToLowerInvariant(),
                 content,
-                contentHash = RegistrationFormAssetUploadValidation.ComputeContentHash(content)
+                contentHash = RegistrationFormAssetUploadValidation.ComputeContentHash(content),
+                uploadOrganizationId,
+                uploadFormCode
             });
         return new RegistrationFormAsset(metadata.AssetId, metadata.FileName, metadata.ContentType, content,
-            metadata.ContentHash, metadata.CreatedDate, metadata.ModifiedDate);
+            metadata.ContentHash, metadata.CreatedDate, metadata.ModifiedDate,
+            metadata.UploadOrganizationId, metadata.UploadFormCode);
     }
 
     public RegistrationFormAsset? Get(int assetId)
@@ -190,7 +208,8 @@ public sealed class RegistrationFormAssetRepository : IRegistrationFormAssetRepo
         using var connection = Open();
         return connection.QuerySingleOrDefault<RegistrationFormAsset>(
             """
-            select AssetId, FileName, ContentType, Content, ContentHash, CreatedDate, ModifiedDate
+            select AssetId, FileName, ContentType, Content, ContentHash, CreatedDate, ModifiedDate,
+                   UploadOrganizationId, UploadFormCode
             from dbo.RegistrationFormAssets
             where AssetId = @assetId;
             """, new { assetId });
@@ -201,7 +220,8 @@ public sealed class RegistrationFormAssetRepository : IRegistrationFormAssetRepo
         using var connection = Open();
         return connection.QuerySingleOrDefault<RegistrationFormAssetMetadata>(
             """
-            select AssetId, FileName, ContentType, ContentHash, CreatedDate, ModifiedDate
+            select AssetId, FileName, ContentType, ContentHash, CreatedDate, ModifiedDate,
+                   UploadOrganizationId, UploadFormCode
             from dbo.RegistrationFormAssets
             where AssetId = @assetId;
             """, new { assetId });
@@ -228,6 +248,59 @@ public sealed class RegistrationFormAssetRepository : IRegistrationFormAssetRepo
                   and TRY_CONVERT(int, Value) = @assetId
             ) then 1 else 0 end;
             """, new { assetId }) == 1;
+    }
+
+    public bool IsReferencedBySettings(int assetId, IReadOnlyList<SettingSource> sources)
+    {
+        if (sources.Count == 0)
+        {
+            return false;
+        }
+
+        var parameters = new DynamicParameters(new { assetId });
+        var sourceClauses = new List<string>(sources.Count);
+        for (var index = 0; index < sources.Count; index++)
+        {
+            sourceClauses.Add($"(OrganizationID=@sourceOrganization{index} and isnull(FormCode,'')=@sourceForm{index})");
+            parameters.Add($"sourceOrganization{index}", sources[index].OrganizationId);
+            parameters.Add($"sourceForm{index}", sources[index].FormCode);
+        }
+
+        return ExecuteScalar($"""
+            select case when exists
+            (
+                select 1
+                from dbo.RegistrationFormSettings
+                where Setting = 'header_image_asset_id'
+                  and TRY_CONVERT(int, Value) = @assetId
+                  and ({string.Join(" or ", sourceClauses)})
+            ) then 1 else 0 end;
+            """, parameters) == 1;
+    }
+
+    public bool IsReferencedByActiveDraft(int assetId, int organizationId, string formCode)
+    {
+        using var connection = Open();
+        return connection.ExecuteScalar<int>("""
+            select case when exists
+            (
+                select 1
+                from dbo.RegistrationSettingDraftChanges c
+                join dbo.RegistrationSettingDrafts d on d.DraftId = c.DraftId
+                where d.OrganizationId = @organizationId
+                  and isnull(d.FormCode,'') = @formCode
+                  and d.Status = 'Active'
+                  and c.SettingKey = 'header_image_asset_id'
+                  and c.Operation = 'Upsert'
+                  and TRY_CONVERT(int, c.Value) = @assetId
+            ) then 1 else 0 end;
+            """, new { assetId, organizationId, formCode = FormCodeNormalizer.Normalize(formCode) }) == 1;
+    }
+
+    private int ExecuteScalar(string sql, object parameters)
+    {
+        using var connection = Open();
+        return connection.ExecuteScalar<int>(sql, parameters);
     }
 
     private SqlConnection Open()

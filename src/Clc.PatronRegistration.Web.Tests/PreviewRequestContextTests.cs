@@ -55,6 +55,9 @@ public class PreviewRequestContextTests
             42, "draft.png", "image/png", "hash", DateTime.UtcNow, DateTime.UtcNow));
         assets.Setup(service => service.Get(42)).Returns(new RegistrationFormAsset(
             42, "draft.png", "image/png", [1, 2], "hash", DateTime.UtcNow, DateTime.UtcNow));
+        var assetAuthorization = new Mock<IRegistrationFormAssetAuthorization>();
+        assetAuthorization.Setup(service => service.GetAuthorizedMetadata(42, 3, string.Empty))
+            .Returns(assets.Object.GetMetadata(42));
         var controller = new PreviewController(
             Mock.Of<ISettingsAdministrationRepository>(), accessor, new TestCache(), Mock.Of<IDbHelper>(),
             Mock.Of<IPapiClient>(), Mock.Of<IMelissaRestClient>(), Mock.Of<IEmailSender>())
@@ -62,10 +65,10 @@ public class PreviewRequestContextTests
             ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() }
         };
 
-        var result = (FileContentResult)controller.Asset("preview-token", 42, assets.Object);
+        var result = (FileContentResult)controller.Asset("preview-token", 42, assets.Object, assetAuthorization.Object);
 
         CollectionAssert.AreEqual(new byte[] { 1, 2 }, result.FileContents);
-        Assert.IsInstanceOfType(controller.Asset("preview-token", 99, assets.Object), typeof(NotFoundResult));
+        Assert.IsInstanceOfType(controller.Asset("preview-token", 99, assets.Object, assetAuthorization.Object), typeof(NotFoundResult));
         assets.Verify(service => service.Get(99), Times.Never);
     }
 

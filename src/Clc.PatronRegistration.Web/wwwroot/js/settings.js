@@ -64,11 +64,21 @@
         const reveal = row.querySelector(".reveal-secret");
         const isImage = row.dataset.valueType === "image";
         const imageFile = row.querySelector(".image-file");
-        const imagePending = row.querySelector(".image-pending-preview");
+        const imagePending = row.querySelector(".image-browser-pending") || row.querySelector(".image-pending-preview");
         const imagePendingPreview = imagePending?.querySelector("img");
         const imagePendingFileName = imagePending?.querySelector(".image-pending-file-name");
         const imageUploadStatus = imagePending?.querySelector(".image-upload-status");
-        let imageState = { originalValue: value?.value || "", assetId: null, uploadPromise: null, objectUrl: null, requestVersion: 0 };
+        let imageState = {
+            originalValue: value?.value || "",
+            assetId: null,
+            fileName: "",
+            previewUrl: "",
+            status: "",
+            uploadPromise: null,
+            objectUrl: null,
+            requestVersion: 0,
+            uploadFallback: null
+        };
         const serverState = {
             operation: operation.value,
             value: value.value,
@@ -95,17 +105,39 @@
             if (imageFile) imageFile.disabled = !enabled || selectedOperation === "RemoveOverride";
         }
 
-        function clearImagePreview() {
+        function imagePendingSnapshot() {
+            return {
+                assetId: imageState.assetId,
+                fileName: imageState.fileName,
+                previewUrl: imageState.previewUrl,
+                status: imageUploadStatus?.textContent || ""
+            };
+        }
+
+        function renderImagePending() {
+            if (!imagePending) return;
+            const visible = Boolean(imageState.assetId || imageState.fileName || imageState.previewUrl);
+            imagePending.hidden = !visible;
+            if (imagePendingPreview) {
+                if (imageState.previewUrl) imagePendingPreview.src = imageState.previewUrl;
+                else imagePendingPreview.removeAttribute("src");
+            }
+            if (imagePendingFileName) imagePendingFileName.textContent = imageState.fileName;
+            if (imageUploadStatus) imageUploadStatus.textContent = imageState.status || "";
+        }
+
+        function clearImagePending() {
             imageState.requestVersion++;
             if (imageState.objectUrl && globalThis.URL?.revokeObjectURL) globalThis.URL.revokeObjectURL(imageState.objectUrl);
             imageState.objectUrl = null;
-            if (imagePendingPreview) imagePendingPreview.removeAttribute("src");
-            if (imagePendingFileName) imagePendingFileName.textContent = "";
-            if (imageUploadStatus) imageUploadStatus.textContent = "";
-            if (imagePending) imagePending.hidden = true;
             if (imageFile) imageFile.value = "";
             imageState.assetId = null;
+            imageState.fileName = "";
+            imageState.previewUrl = "";
+            imageState.status = "";
             imageState.uploadPromise = null;
+            imageState.uploadFallback = null;
+            renderImagePending();
         }
 
         function setImageStatus(message, isError = false) {
@@ -115,15 +147,34 @@
                 imageUploadStatus.textContent = message;
                 imageUploadStatus.classList?.toggle("image-upload-error", isError);
             }
+            imageState.status = message;
+        }
+
+        function restoreImagePending(snapshot) {
+            if (imageState.objectUrl && globalThis.URL?.revokeObjectURL) globalThis.URL.revokeObjectURL(imageState.objectUrl);
+            imageState.objectUrl = null;
+            if (imageFile) imageFile.value = "";
+            imageState.requestVersion++;
+            imageState.uploadPromise = null;
+            imageState.uploadFallback = null;
+            imageState.assetId = snapshot?.assetId || null;
+            imageState.fileName = snapshot?.fileName || "";
+            imageState.previewUrl = snapshot?.previewUrl || "";
+            imageState.status = snapshot?.status || "";
+            imageUploadStatus?.classList?.toggle("image-upload-error", false);
+            renderImagePending();
         }
 
         async function uploadImage(file) {
             if (!isImage || !imageFile?.dataset.uploadUrl) return false;
+            imageState.uploadFallback = imagePendingSnapshot();
             if (imageState.objectUrl && globalThis.URL?.revokeObjectURL) globalThis.URL.revokeObjectURL(imageState.objectUrl);
             imageState.objectUrl = globalThis.URL?.createObjectURL?.(file) || null;
-            if (imagePendingPreview && imageState.objectUrl) imagePendingPreview.src = imageState.objectUrl;
-            if (imagePendingFileName) imagePendingFileName.textContent = file.name;
+            imageState.assetId = null;
+            imageState.fileName = file.name;
+            imageState.previewUrl = imageState.objectUrl || "";
             setImageStatus("Uploading image…");
+            renderImagePending();
             const requestVersion = ++imageState.requestVersion;
 
             const payload = new FormData();
@@ -143,15 +194,31 @@
                     if (!response.ok || !result?.assetId) throw new Error(result?.error || "The image could not be uploaded.");
                     value.value = String(result.assetId);
                     imageState.assetId = result.assetId;
-                    if (imagePendingPreview && result.previewUrl) imagePendingPreview.src = result.previewUrl;
+                    if (result.previewUrl) {
+                        imageState.previewUrl = result.previewUrl;
+                        if (imageState.objectUrl && globalThis.URL?.revokeObjectURL) globalThis.URL.revokeObjectURL(imageState.objectUrl);
+                        imageState.objectUrl = null;
+                    }
+                    imageState.uploadFallback = null;
                     setImageStatus(`${result.fileName || file.name} uploaded. Apply to keep this replacement.`);
+                    imageState.fileName = result.fileName || file.name;
+                    renderImagePending();
                     return true;
                 })
                 .catch((error) => {
                     if (requestVersion !== imageState.requestVersion) return false;
-                    imageState.assetId = null;
-                    value.value = imageState.originalValue;
-                    setImageStatus(error.message || "The image could not be uploaded.", true);
+                    const fallback = imageState.uploadFallback;
+                    if (fallback?.assetId) {
+                        value.value = String(fallback.assetId);
+                        restoreImagePending(fallback);
+                        setImageStatus(`The replacement could not be uploaded; ${fallback.fileName} remains selected.`, true);
+                    } else {
+                        imageState.assetId = null;
+                        value.value = imageState.originalValue;
+                        setImageStatus(error.message || "The image could not be uploaded.", true);
+                    }
+                    imageState.uploadFallback = null;
+                    renderImagePending();
                     return false;
                 })
                 .finally(() => {
@@ -160,14 +227,15 @@
             return imageState.uploadPromise;
         }
 
-        function showNormalState() {
+        function showNormalState(preserveImagePending = false) {
             change.hidden = false;
             if (inherit) inherit.hidden = row.dataset.appliedOperation === "RemoveOverride";
             actions.hidden = true;
             editor.hidden = true;
             message.hidden = true;
             if (imageFile) imageFile.disabled = true;
-            if (isImage) clearImagePreview();
+            if (isImage && !preserveImagePending) clearImagePending();
+            if (isImage && preserveImagePending) renderImagePending();
         }
 
         function beginEdit(candidateOperation) {
@@ -182,7 +250,7 @@
             };
             if (isImage) {
                 imageState.originalValue = value.value;
-                clearImagePreview();
+                session.imagePending = imagePendingSnapshot();
             }
             row.dataset.candidateOperation = candidateOperation;
             setBindingEnabled(false, candidateOperation);
@@ -195,7 +263,12 @@
             message.hidden = candidateOperation !== "RemoveOverride";
             row.setAttribute("open", "");
             row.closest(".setting-category, .dynamic-settings")?.setAttribute("open", "");
-            (candidateOperation === "Upsert" ? value : apply).focus();
+            if (candidateOperation === "Upsert") {
+                if (isImage) imageFile?.focus();
+                else value.focus();
+            } else {
+                apply.focus();
+            }
         }
 
         async function applyEdit() {
@@ -215,7 +288,7 @@
             setBindingEnabled(true, candidateOperation);
             delete row.dataset.candidateOperation;
             session = null;
-            showNormalState();
+            showNormalState(isImage && candidateOperation === "Upsert");
             clearEditSessionStatus();
             updatePendingActions(settingsForm);
             change.focus();
@@ -223,6 +296,7 @@
 
         function cancelEdit() {
             if (!session) return;
+            const restoreDirty = session.dirty;
             operation.value = session.operation;
             value.value = session.value;
             if (value.nextElementSibling?.classList.contains("html-preview")) {
@@ -233,10 +307,10 @@
             row.querySelector(".change-key").disabled = session.keyDisabled;
             operation.disabled = session.operationDisabled;
             value.disabled = session.valueDisabled;
-            if (isImage) clearImagePreview();
+            if (isImage) restoreImagePending(session.imagePending);
             delete row.dataset.candidateOperation;
             session = null;
-            showNormalState();
+            showNormalState(isImage && restoreDirty);
             clearEditSessionStatus();
             updatePendingActions(settingsForm);
             change.focus();
@@ -252,7 +326,7 @@
             row.querySelector(".change-key").disabled = serverState.keyDisabled;
             operation.disabled = serverState.operationDisabled;
             value.disabled = serverState.valueDisabled;
-            if (isImage) clearImagePreview();
+            if (isImage) clearImagePending();
             if (summaryValue) {
                 summaryValue.textContent = serverState.summaryValue;
                 if (serverState.summaryTitle === null) summaryValue.removeAttribute?.("title");

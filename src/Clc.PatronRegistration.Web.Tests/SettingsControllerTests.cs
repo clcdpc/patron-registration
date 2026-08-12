@@ -677,6 +677,126 @@ public class SettingsControllerTests
         Assert.IsTrue(method.GetCustomAttributes(typeof(ValidateAntiForgeryTokenAttribute), true).Any());
     }
 
+    [TestMethod]
+    public void DirectSave_AcceptsAnImageAssetAuthorizedForTheTargetScope()
+    {
+        var repository = new Mock<ISettingsAdministrationRepository>();
+        IReadOnlyList<SettingMutation>? captured = null;
+        repository.Setup(service => service.DirectSave(
+                3, string.Empty, 7, It.IsAny<IReadOnlyList<SettingMutation>>(),
+                It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), It.IsAny<AuditContext>()))
+            .Callback<int, string, long, IReadOnlyList<SettingMutation>, IReadOnlyDictionary<string, SettingDefinition>, AuditContext>(
+                (_, _, _, changes, _, _) => captured = changes);
+        var assetAuthorization = new Mock<IRegistrationFormAssetAuthorization>();
+        assetAuthorization.Setup(service => service.GetAuthorizedMetadata(42, 3, string.Empty))
+            .Returns(new RegistrationFormAssetMetadata(42, "header.png", "image/png", "hash", DateTime.UtcNow, DateTime.UtcNow, 3, string.Empty));
+        var controller = CreateController(repository, LibraryAuthorization(), suppliedAssetAuthorization: assetAuthorization);
+
+        var result = controller.DirectSave(new SaveSettingsRequest
+        {
+            OrganizationId = 3,
+            ExpectedVersion = 7,
+            Changes = [new SettingMutationInput { Key = "header_image_asset_id", Value = "42" }]
+        });
+
+        Assert.IsInstanceOfType<RedirectToActionResult>(result);
+        Assert.IsTrue(controller.ModelState.IsValid,
+            string.Join("; ", controller.ModelState.Values.SelectMany(value => value.Errors).Select(error => error.ErrorMessage)));
+        Assert.IsNotNull(captured);
+        Assert.AreEqual("42", captured.Single().Value);
+        assetAuthorization.Verify(service => service.GetAuthorizedMetadata(42, 3, string.Empty), Times.Once);
+    }
+
+    [TestMethod]
+    public void DirectSave_RejectsMissingImageAssetWithoutCallingRepository()
+    {
+        var repository = new Mock<ISettingsAdministrationRepository>();
+        var assetAuthorization = new Mock<IRegistrationFormAssetAuthorization>();
+        assetAuthorization.Setup(service => service.GetAuthorizedMetadata(999, 3, string.Empty))
+            .Returns((RegistrationFormAssetMetadata?)null);
+        var controller = CreateController(repository, LibraryAuthorization(), suppliedAssetAuthorization: assetAuthorization);
+
+        var result = controller.DirectSave(new SaveSettingsRequest
+        {
+            OrganizationId = 3,
+            ExpectedVersion = 7,
+            Changes = [new SettingMutationInput { Key = "header_image_asset_id", Value = "999" }]
+        });
+
+        Assert.IsInstanceOfType<RedirectToActionResult>(result);
+        repository.Verify(service => service.DirectSave(
+            It.IsAny<int>(), It.IsAny<string>(), It.IsAny<long>(), It.IsAny<IReadOnlyList<SettingMutation>>(),
+            It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), It.IsAny<AuditContext>()), Times.Never);
+    }
+
+    [TestMethod]
+    public void DirectSave_RejectsCrossScopeImageAssetWithoutCallingRepository()
+    {
+        var repository = new Mock<ISettingsAdministrationRepository>();
+        var assetAuthorization = new Mock<IRegistrationFormAssetAuthorization>();
+        assetAuthorization.Setup(service => service.GetAuthorizedMetadata(42, 3, string.Empty))
+            .Returns((RegistrationFormAssetMetadata?)null);
+        var controller = CreateController(repository, LibraryAuthorization(), suppliedAssetAuthorization: assetAuthorization);
+
+        var result = controller.DirectSave(new SaveSettingsRequest
+        {
+            OrganizationId = 3,
+            ExpectedVersion = 7,
+            Changes = [new SettingMutationInput { Key = "header_image_asset_id", Value = "42" }]
+        });
+
+        Assert.IsInstanceOfType<RedirectToActionResult>(result);
+        repository.Verify(service => service.DirectSave(
+            It.IsAny<int>(), It.IsAny<string>(), It.IsAny<long>(), It.IsAny<IReadOnlyList<SettingMutation>>(),
+            It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), It.IsAny<AuditContext>()), Times.Never);
+    }
+
+    [TestMethod]
+    public void SaveToSharedDraft_RejectsMissingImageAssetWithoutCallingRepository()
+    {
+        var repository = new Mock<ISettingsAdministrationRepository>();
+        var assetAuthorization = new Mock<IRegistrationFormAssetAuthorization>();
+        assetAuthorization.Setup(service => service.GetAuthorizedMetadata(999, 3, string.Empty))
+            .Returns((RegistrationFormAssetMetadata?)null);
+        var controller = CreateController(repository, LibraryAuthorization(), suppliedAssetAuthorization: assetAuthorization);
+
+        var result = controller.SaveToSharedDraft(new SaveToSharedDraftRequest
+        {
+            OrganizationId = 3,
+            ExpectedVersion = 7,
+            Changes = [new SettingMutationInput { Key = "header_image_asset_id", Value = "999" }]
+        });
+
+        Assert.IsInstanceOfType<RedirectToActionResult>(result);
+        repository.Verify(service => service.SaveToSharedDraft(
+            It.IsAny<int>(), It.IsAny<string>(), It.IsAny<long>(), It.IsAny<long?>(),
+            It.IsAny<IReadOnlyList<SettingMutation>>(), It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(),
+            It.IsAny<AuditContext>()), Times.Never);
+    }
+
+    [TestMethod]
+    public void SaveToSharedDraft_RejectsCrossScopeImageAssetWithoutCallingRepository()
+    {
+        var repository = new Mock<ISettingsAdministrationRepository>();
+        var assetAuthorization = new Mock<IRegistrationFormAssetAuthorization>();
+        assetAuthorization.Setup(service => service.GetAuthorizedMetadata(42, 3, string.Empty))
+            .Returns((RegistrationFormAssetMetadata?)null);
+        var controller = CreateController(repository, LibraryAuthorization(), suppliedAssetAuthorization: assetAuthorization);
+
+        var result = controller.SaveToSharedDraft(new SaveToSharedDraftRequest
+        {
+            OrganizationId = 3,
+            ExpectedVersion = 7,
+            Changes = [new SettingMutationInput { Key = "header_image_asset_id", Value = "42" }]
+        });
+
+        Assert.IsInstanceOfType<RedirectToActionResult>(result);
+        repository.Verify(service => service.SaveToSharedDraft(
+            It.IsAny<int>(), It.IsAny<string>(), It.IsAny<long>(), It.IsAny<long?>(),
+            It.IsAny<IReadOnlyList<SettingMutation>>(), It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(),
+            It.IsAny<AuditContext>()), Times.Never);
+    }
+
     [DataTestMethod]
     [DataRow(false, 2, false, "postmark_api_key")]
     [DataRow(false, 2, false, "melissa_data_api_key")]
@@ -857,7 +977,7 @@ public class SettingsControllerTests
     {
         var repository = new Mock<ISettingsAdministrationRepository>();
         var assets = new Mock<IRegistrationFormAssetRepository>();
-        assets.Setup(service => service.Create("header.png", "image/png", It.IsAny<byte[]>()))
+        assets.Setup(service => service.Create("header.png", "image/png", It.IsAny<byte[]>(), 3, string.Empty))
             .Returns(new RegistrationFormAsset(91, "header.png", "image/png", [1], "hash", DateTime.UtcNow, DateTime.UtcNow));
         var controller = CreateController(repository, LibraryAuthorization(), suppliedAssets: assets);
         var content = TestImageData.Create("image/png");
@@ -870,7 +990,7 @@ public class SettingsControllerTests
         var result = await controller.UploadHeaderImageAsset(file, 3, string.Empty);
 
         Assert.IsInstanceOfType<OkObjectResult>(result);
-        assets.Verify(service => service.Create("header.png", "image/png", It.Is<byte[]>(bytes => bytes.SequenceEqual(content))), Times.Once);
+        assets.Verify(service => service.Create("header.png", "image/png", It.Is<byte[]>(bytes => bytes.SequenceEqual(content)), 3, string.Empty), Times.Once);
         repository.Verify(service => service.SaveToSharedDraft(It.IsAny<int>(), It.IsAny<string>(), It.IsAny<long>(), It.IsAny<long?>(),
             It.IsAny<IReadOnlyList<SettingMutation>>(), It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), It.IsAny<AuditContext>()), Times.Never);
     }
@@ -893,7 +1013,7 @@ public class SettingsControllerTests
         var result = await controller.UploadHeaderImageAsset(file, 3, string.Empty);
 
         Assert.IsInstanceOfType<ForbidResult>(result);
-        assets.Verify(service => service.Create(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<byte[]>()), Times.Never);
+        assets.Verify(service => service.Create(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<byte[]>(), It.IsAny<int>(), It.IsAny<string>()), Times.Never);
         repository.Verify(service => service.SaveToSharedDraft(It.IsAny<int>(), It.IsAny<string>(), It.IsAny<long>(), It.IsAny<long?>(),
             It.IsAny<IReadOnlyList<SettingMutation>>(), It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), It.IsAny<AuditContext>()), Times.Never);
     }
@@ -913,7 +1033,7 @@ public class SettingsControllerTests
         var result = await controller.UploadHeaderImageAsset(file, 3, string.Empty);
 
         Assert.IsInstanceOfType<BadRequestObjectResult>(result);
-        assets.Verify(service => service.Create(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<byte[]>()), Times.Never);
+        assets.Verify(service => service.Create(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<byte[]>(), It.IsAny<int>(), It.IsAny<string>()), Times.Never);
     }
 
     [TestMethod]
@@ -1588,7 +1708,8 @@ public class SettingsControllerTests
         ISettingsPageBrandingContextAccessor? brandingAccessor = null,
         SettingsAdministrationOptions? administrationOptions = null,
         IPreviewTokenService? previewTokenService = null,
-        Mock<IRegistrationFormAssetRepository>? suppliedAssets = null)
+        Mock<IRegistrationFormAssetRepository>? suppliedAssets = null,
+        Mock<IRegistrationFormAssetAuthorization>? suppliedAssetAuthorization = null)
     {
         repository.Setup(service => service.GetCacheGeneration()).Returns(1);
         var invalidator = new Mock<ISettingsCacheInvalidator>();
@@ -1602,6 +1723,13 @@ public class SettingsControllerTests
         var assets = suppliedAssets ?? new Mock<IRegistrationFormAssetRepository>();
         assets.Setup(service => service.GetMetadata(It.IsAny<int>()))
             .Returns((RegistrationFormAssetMetadata?)null);
+        var assetAuthorization = suppliedAssetAuthorization ?? new Mock<IRegistrationFormAssetAuthorization>();
+        if (suppliedAssetAuthorization is null)
+        {
+            assetAuthorization.Setup(service => service.GetAuthorizedMetadata(
+                    It.IsAny<int>(), It.IsAny<int>(), It.IsAny<string>()))
+                .Returns((RegistrationFormAssetMetadata?)null);
+        }
         var controller = new SettingsController(
             authorization.Object,
             repository.Object,
@@ -1613,6 +1741,7 @@ public class SettingsControllerTests
             invalidator.Object,
             brandingAccessor ?? new SettingsPageBrandingContextAccessor(),
             assets.Object,
+            assetAuthorization.Object,
             options);
         controller.ControllerContext = new ControllerContext
         {

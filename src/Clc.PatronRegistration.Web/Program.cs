@@ -63,6 +63,7 @@ namespace Clc.PatronRegistration.Web
                 .ValidateOnStart();
             builder.Services.AddSingleton<ISettingCatalog, SettingCatalog>();
             builder.Services.AddSingleton<IRegistrationFormAssetRepository, RegistrationFormAssetRepository>();
+            builder.Services.AddSingleton<IRegistrationFormAssetAuthorization, RegistrationFormAssetAuthorization>();
             builder.Services.AddSingleton<RegistrationHeaderImageResolver>();
             builder.Services.AddSingleton<IPreviewTokenService, PreviewTokenService>();
             builder.Services.AddSingleton<ISettingsAuthorizationService, SettingsAuthorizationService>();

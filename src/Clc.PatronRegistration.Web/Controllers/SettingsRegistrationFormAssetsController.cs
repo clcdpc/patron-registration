@@ -12,7 +12,8 @@ namespace Clc.PatronRegistration.Web.Controllers;
 public sealed class SettingsRegistrationFormAssetsController(
     ISettingsAuthorizationService authorization,
     IFormCodeAvailabilityService formCodeAvailability,
-    IRegistrationFormAssetRepository repository) : ControllerBase
+    IRegistrationFormAssetRepository repository,
+    IRegistrationFormAssetAuthorization assetAuthorization) : ControllerBase
 {
     [HttpGet("{id:int}", Name = "SettingsRegistrationFormAsset")]
     public IActionResult Get(int id, int organizationId, string formCode = "")
@@ -30,7 +31,7 @@ public sealed class SettingsRegistrationFormAssetsController(
             return Forbid();
         }
 
-        var metadata = repository.GetMetadata(id);
+        var metadata = assetAuthorization.GetAuthorizedMetadata(id, organizationId, formCode);
         if (metadata is null)
         {
             return NotFound();

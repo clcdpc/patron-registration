@@ -1,11 +1,14 @@
 using System.Text;
 using Clc.PatronRegistration.Administration;
 using Clc.PatronRegistration.Configuration;
+using Clc.PatronRegistration.Helpers;
 using Clc.PatronRegistration.Web.Controllers;
 using Clc.PatronRegistration.Web.Settings;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Options;
 using Moq;
+using Clc.Polaris.Api.Models;
 
 namespace Clc.PatronRegistration.Tests;
 
@@ -138,7 +141,11 @@ public sealed class RegistrationFormAssetTests
             42, "draft.png", "image/png", "abc123", DateTime.UtcNow, DateTime.UtcNow));
         repository.Setup(item => item.Get(42)).Returns(new RegistrationFormAsset(
             42, "draft.png", "image/png", [1, 2], "abc123", DateTime.UtcNow, DateTime.UtcNow));
-        var controller = new SettingsRegistrationFormAssetsController(authorization.Object, forms.Object, repository.Object)
+        var assetAuthorization = new Mock<IRegistrationFormAssetAuthorization>();
+        assetAuthorization.Setup(item => item.GetAuthorizedMetadata(42, 3, string.Empty))
+            .Returns(repository.Object.GetMetadata(42));
+        var controller = new SettingsRegistrationFormAssetsController(
+            authorization.Object, forms.Object, repository.Object, assetAuthorization.Object)
         {
             ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() }
         };
@@ -147,6 +154,72 @@ public sealed class RegistrationFormAssetTests
 
         CollectionAssert.AreEqual(new byte[] { 1, 2 }, result.FileContents);
         Assert.AreEqual("private, max-age=31536000, immutable", controller.Response.Headers.CacheControl.ToString());
+    }
+
+    [TestMethod]
+    public void SettingsAssetEndpoint_DeniesAnotherLibrarysUnpublishedAsset()
+    {
+        var organizations = new List<OrganizationsGetRow>
+        {
+            new() { OrganizationID = 1, OrganizationCodeID = 1, Name = "System" },
+            new() { OrganizationID = 2, OrganizationCodeID = 2, Name = "Own library" },
+            new() { OrganizationID = 3, OrganizationCodeID = 3, ParentOrganizationID = 2, Name = "Own branch" },
+            new() { OrganizationID = 8, OrganizationCodeID = 2, Name = "Other library" },
+            new() { OrganizationID = 9, OrganizationCodeID = 3, ParentOrganizationID = 8, Name = "Other branch" }
+        };
+        var cache = new Mock<ICache>();
+        cache.SetupGet(item => item.OrganizationCache).Returns(organizations);
+        var repository = new Mock<IRegistrationFormAssetRepository>();
+        repository.Setup(item => item.GetMetadata(42)).Returns(new RegistrationFormAssetMetadata(
+            42, "other-library.png", "image/png", "abc123", DateTime.UtcNow, DateTime.UtcNow, 8, string.Empty));
+        var assetAuthorization = new RegistrationFormAssetAuthorization(
+            repository.Object, cache.Object, Options.Create(new SettingsAdministrationOptions { SystemOrganizationId = 1 }));
+        var authorization = new Mock<ISettingsAuthorizationService>();
+        authorization.Setup(item => item.Describe(It.IsAny<System.Security.Claims.ClaimsPrincipal>()))
+            .Returns(new SettingsPrincipal(true, 2, false));
+        authorization.Setup(item => item.CanManage(It.IsAny<System.Security.Claims.ClaimsPrincipal>(), 3, false)).Returns(true);
+        var forms = new Mock<IFormCodeAvailabilityService>();
+        forms.Setup(item => item.IsAvailable(3, string.Empty)).Returns(true);
+        var controller = new SettingsRegistrationFormAssetsController(
+            authorization.Object, forms.Object, repository.Object, assetAuthorization)
+        {
+            ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() }
+        };
+
+        Assert.IsInstanceOfType(controller.Get(42, 3), typeof(NotFoundResult));
+        repository.Verify(item => item.Get(It.IsAny<int>()), Times.Never);
+    }
+
+    [TestMethod]
+    public void AssetAuthorization_AllowsTargetAndInheritedScopesButNotAnUnrelatedScope()
+    {
+        var organizations = new List<OrganizationsGetRow>
+        {
+            new() { OrganizationID = 1, OrganizationCodeID = 1, Name = "System" },
+            new() { OrganizationID = 2, OrganizationCodeID = 2, Name = "Own library" },
+            new() { OrganizationID = 3, OrganizationCodeID = 3, ParentOrganizationID = 2, Name = "Own branch" },
+            new() { OrganizationID = 8, OrganizationCodeID = 2, Name = "Other library" }
+        };
+        var cache = new Mock<ICache>();
+        cache.SetupGet(item => item.OrganizationCache).Returns(organizations);
+        var repository = new Mock<IRegistrationFormAssetRepository>();
+        var created = new Dictionary<int, RegistrationFormAssetMetadata>
+        {
+            [42] = new(42, "branch.png", "image/png", "branch-hash", DateTime.UtcNow, DateTime.UtcNow, 3, "kids"),
+            [43] = new(43, "library.png", "image/png", "library-hash", DateTime.UtcNow, DateTime.UtcNow, 2, "kids"),
+            [44] = new(44, "system.png", "image/png", "system-hash", DateTime.UtcNow, DateTime.UtcNow, 1, string.Empty)
+        };
+        repository.Setup(item => item.GetMetadata(It.IsAny<int>()))
+            .Returns((int id) => created.GetValueOrDefault(id));
+        var authorization = new RegistrationFormAssetAuthorization(
+            repository.Object, cache.Object, Options.Create(new SettingsAdministrationOptions { SystemOrganizationId = 1 }));
+
+        Assert.IsNotNull(authorization.GetAuthorizedMetadata(42, 3, "kids"));
+        Assert.IsNull(authorization.GetAuthorizedMetadata(42, 2, "kids"));
+        Assert.IsNotNull(authorization.GetAuthorizedMetadata(43, 3, "kids"));
+        Assert.IsNull(authorization.GetAuthorizedMetadata(43, 3, string.Empty));
+        Assert.IsNotNull(authorization.GetAuthorizedMetadata(44, 3, "kids"));
+        Assert.IsNotNull(authorization.GetAuthorizedMetadata(44, 8, string.Empty));
     }
 
     [TestMethod]

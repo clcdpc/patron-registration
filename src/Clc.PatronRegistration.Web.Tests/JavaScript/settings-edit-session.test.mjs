@@ -153,6 +153,7 @@ test("pending actions follow applied dirty rows rather than edit sessions or ser
 
     first.controls.change.click();
     assert.equal(fixture.actions.hidden, true, "entering edit mode is not a pending change");
+    assert.equal(focused, first.controls.value, "ordinary settings continue to focus their value editor");
     first.controls.cancel.click();
     assert.equal(fixture.actions.hidden, true, "cancelling a clean candidate remains clean");
 
@@ -344,7 +345,9 @@ test("image editor uses Change/Apply/Cancel and uploads without mutating setting
         URL: { createObjectURL: () => "blob:pending", revokeObjectURL() {} },
         fetch: async (url, options) => {
             requests.push({ url, options });
-            return { ok: true, async json() { return { assetId: 91, fileName: "replacement.png", previewUrl: "/settings/assets/91" }; } };
+            const assetId = 90 + requests.length;
+            const fileName = requests.length === 1 ? "replacement.png" : "replacement.webp";
+            return { ok: true, async json() { return { assetId, fileName, previewUrl: `/settings/assets/${assetId}` }; } };
         }
     };
     sandbox.globalThis = sandbox;
@@ -358,6 +361,7 @@ test("image editor uses Change/Apply/Cancel and uploads without mutating setting
     fixture.controls.change.click();
     assert.equal(fixture.controls.editor.hidden, false);
     assert.equal(fixture.controls.file.disabled, false);
+    assert.equal(focused, fixture.controls.file, "image settings focus the file chooser");
     fixture.controls.file.files = [{ name: "replacement.png" }];
     fixture.controls.file.dispatchEvent(new Event("change"));
     await new Promise(resolve => setImmediate(resolve));
@@ -369,6 +373,9 @@ test("image editor uses Change/Apply/Cancel and uploads without mutating setting
     await fixture.controls.apply.listeners.click();
     assert.equal(fixture.row.dataset.dirty, "true");
     assert.equal(fixture.controls.operation.value, "Upsert");
+    assert.equal(fixture.controls.pending.hidden, false, "browser-pending replacement remains visible after Apply");
+    assert.equal(fixture.controls.pendingFileName.textContent, "replacement.png");
+    assert.equal(fixture.controls.pendingPreview.src, "/settings/assets/91");
     fixture.ordinaryRow.dataset.dirty = "true";
     sandbox.SettingsEditSessions.updatePendingActions(fixture.settingsForm);
     assert.equal(fixture.settingsForm.querySelector(".settings-actions").querySelector(".pending-changes-status").textContent,
@@ -379,6 +386,20 @@ test("image editor uses Change/Apply/Cancel and uploads without mutating setting
     assert.equal(fixture.controls.value.value, "91");
     assert.equal(fixture.controls.editor.hidden, true);
     assert.equal(fixture.row.dataset.dirty, "true");
+    assert.equal(fixture.controls.pending.hidden, false, "cancelling a re-edit preserves the applied browser-pending replacement");
+
+    fixture.controls.change.click();
+    fixture.controls.file.files = [{ name: "replacement.webp" }];
+    fixture.controls.file.dispatchEvent(new Event("change"));
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(fixture.controls.pendingFileName.textContent, "replacement.webp", "a replacement updates the pending presentation");
+    await fixture.controls.apply.listeners.click();
+    assert.equal(fixture.controls.value.value, "92");
+
+    fixture.controls.inherit.click();
+    await fixture.controls.apply.listeners.click();
+    assert.equal(fixture.controls.operation.value, "RemoveOverride");
+    assert.equal(fixture.controls.pending.hidden, true, "Use inherited value clears the browser-pending replacement");
 });
 
 test("image markup uses the normal setting form and keeps the chooser hidden until Change", () => {
@@ -389,6 +410,8 @@ test("image markup uses the normal setting form and keeps the chooser hidden unt
     assert.doesNotMatch(row, /header-image-upload-form|data-guard-action/);
     assert.match(row, /class="edit-setting">Change<\/button>/);
     assert.match(row, /class="value-editor image-value-editor" hidden/);
+    assert.match(row, /class="image-preview-group image-browser-pending image-pending-preview" hidden/);
+    assert.match(row, /<strong>Pending browser change<\/strong>/);
     assert.match(script, /imageFile\?\.addEventListener\("change"/);
     assert.doesNotMatch(script, /change\.hidden = isImage/);
 });
