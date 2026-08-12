@@ -10,4 +10,4 @@
 
 The script is repeatable and uses UTC `datetime2`. The application never runs this script or any production migration automatically. The filtered unique index enforces one Active draft per organization/form-code scope. Token hashes, not bearer tokens, are persisted. `RegistrationSettingsCacheGeneration` is the cross-process invalidation counter.
 
-Registration image assets are stored separately from `RegistrationFormSettings`; settings contain only the referenced asset ID. Assets uploaded for a draft may remain as unreferenced rows when that draft is discarded. They are not enumerated by the application, and only an asset ID resolved by the registration settings or preview workflow is rendered.
+Registration image assets are stored separately from `RegistrationFormSettings`; settings contain only the referenced asset ID. Assets uploaded for a draft may remain as unreferenced rows when that draft is discarded. They are not enumerated by the application: the anonymous asset route serves only IDs referenced by persisted settings, while authenticated settings and token-scoped preview routes serve draft assets.

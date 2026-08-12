@@ -1,25 +1,35 @@
+using Clc.PatronRegistration.Configuration;
+using Clc.PatronRegistration.Administration;
 using Clc.PatronRegistration.Web.Settings;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Clc.PatronRegistration.Web.Controllers;
 
-/// <summary>Serves image bytes for assets that the settings/runtime layers have selected.</summary>
-[AllowAnonymous]
-[Route("assets")]
-public sealed class RegistrationFormAssetsController(IRegistrationFormAssetRepository repository) : ControllerBase
+/// <summary>Serves a known asset to an authorized settings administrator for editing/preview.</summary>
+[Authorize]
+[Route("settings/assets")]
+public sealed class SettingsRegistrationFormAssetsController(
+    ISettingsAuthorizationService authorization,
+    IFormCodeAvailabilityService formCodeAvailability,
+    IRegistrationFormAssetRepository repository) : ControllerBase
 {
-    [HttpGet("{id:int}", Name = "RegistrationFormAsset")]
-    public IActionResult Get(int id)
+    [HttpGet("{id:int}", Name = "SettingsRegistrationFormAsset")]
+    public IActionResult Get(int id, int organizationId, string formCode = "")
     {
-        // An asset is public only while at least one persisted settings override
-        // references it. Draft-only and orphaned rows remain inaccessible here.
-        if (id <= 0 || !repository.IsPubliclyReferenced(id))
+        if (id <= 0)
         {
             return NotFound();
         }
+        formCode = FormCodeNormalizer.Normalize(formCode);
+        var principal = authorization.Describe(User);
+        if (!principal.HasRole || !principal.OrganizationId.HasValue ||
+            !authorization.CanManage(User, organizationId) ||
+            !formCodeAvailability.IsAvailable(organizationId, formCode))
+        {
+            return Forbid();
+        }
 
-        // Read metadata first so a conditional request does not load varbinary(max) content unnecessarily.
         var metadata = repository.GetMetadata(id);
         if (metadata is null)
         {
@@ -27,22 +37,16 @@ public sealed class RegistrationFormAssetsController(IRegistrationFormAssetRepos
         }
 
         var etag = $"\"{metadata.ContentHash}\"";
-        Response.Headers.CacheControl = "public, max-age=31536000, immutable";
+        Response.Headers.CacheControl = "private, max-age=31536000, immutable";
         Response.Headers.ETag = etag;
         Response.Headers["X-Content-Type-Options"] = "nosniff";
-
         if (MatchesIfNoneMatch(etag))
         {
             return StatusCode(StatusCodes.Status304NotModified);
         }
 
         var asset = repository.Get(id);
-        if (asset is null)
-        {
-            return NotFound();
-        }
-
-        return File(asset.Content, asset.ContentType);
+        return asset is null ? NotFound() : File(asset.Content, asset.ContentType);
     }
 
     private bool MatchesIfNoneMatch(string etag)

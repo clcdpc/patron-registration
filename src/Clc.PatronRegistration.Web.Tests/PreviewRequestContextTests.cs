@@ -42,6 +42,34 @@ public class PreviewRequestContextTests
     }
 
     [TestMethod]
+    public void PreviewAssetRouteServesOnlyTheAssetSelectedByTheStagedPreviewSettings()
+    {
+        var draft = ActiveDraft(new SettingMutation("header_image_asset_id", DraftOperation.Upsert, "42"));
+        var context = new PreviewRequestContext(
+            Link("Active"),
+            draft,
+            new PreviewSettingProvider(draft, 3, new TestCache(), 1));
+        var accessor = new PreviewRequestContextAccessor { IsPreviewRequest = true, PlaintextToken = "preview-token", Current = context };
+        var assets = new Mock<IRegistrationFormAssetRepository>();
+        assets.Setup(service => service.GetMetadata(42)).Returns(new RegistrationFormAssetMetadata(
+            42, "draft.png", "image/png", "hash", DateTime.UtcNow, DateTime.UtcNow));
+        assets.Setup(service => service.Get(42)).Returns(new RegistrationFormAsset(
+            42, "draft.png", "image/png", [1, 2], "hash", DateTime.UtcNow, DateTime.UtcNow));
+        var controller = new PreviewController(
+            Mock.Of<ISettingsAdministrationRepository>(), accessor, new TestCache(), Mock.Of<IDbHelper>(),
+            Mock.Of<IPapiClient>(), Mock.Of<IMelissaRestClient>(), Mock.Of<IEmailSender>())
+        {
+            ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() }
+        };
+
+        var result = (FileContentResult)controller.Asset("preview-token", 42, assets.Object);
+
+        CollectionAssert.AreEqual(new byte[] { 1, 2 }, result.FileContents);
+        Assert.IsInstanceOfType(controller.Asset("preview-token", 99, assets.Object), typeof(NotFoundResult));
+        assets.Verify(service => service.Get(99), Times.Never);
+    }
+
+    [TestMethod]
     public async Task InvalidPreviewMiddlewareResponseSetsPortableSecurityHeaders()
     {
         var nextCalled = false;

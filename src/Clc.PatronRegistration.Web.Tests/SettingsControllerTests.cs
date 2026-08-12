@@ -853,49 +853,44 @@ public class SettingsControllerTests
     }
 
     [TestMethod]
-    public async Task UploadHeaderImage_StoresAssetAndStagesOnlyTheAssetIdInTheDraft()
+    public async Task UploadHeaderImageAsset_StoresAssetWithoutMutatingTheDraft()
     {
         var repository = new Mock<ISettingsAdministrationRepository>();
-        repository.Setup(service => service.SaveToSharedDraft(3, string.Empty, 37, null,
-                It.IsAny<IReadOnlyList<SettingMutation>>(), It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), It.IsAny<AuditContext>()))
-            .Returns(new SaveToDraftResult(55, true));
         var assets = new Mock<IRegistrationFormAssetRepository>();
         assets.Setup(service => service.Create("header.png", "image/png", It.IsAny<byte[]>()))
             .Returns(new RegistrationFormAsset(91, "header.png", "image/png", [1], "hash", DateTime.UtcNow, DateTime.UtcNow));
         var controller = CreateController(repository, LibraryAuthorization(), suppliedAssets: assets);
-        var file = new FormFile(new MemoryStream([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), 0, 8, "file", "header.png")
+        var content = TestImageData.Create("image/png");
+        var file = new FormFile(new MemoryStream(content), 0, content.Length, "file", "header.png")
         {
             Headers = new HeaderDictionary(),
             ContentType = "image/png"
         };
 
-        var result = await controller.UploadHeaderImage(file, 3, string.Empty, 37, null);
+        var result = await controller.UploadHeaderImageAsset(file, 3, string.Empty);
 
-        Assert.IsInstanceOfType<RedirectToActionResult>(result);
-        assets.Verify(service => service.Create("header.png", "image/png", It.Is<byte[]>(bytes => bytes.Length == 8)), Times.Once);
-        repository.Verify(service => service.SaveToSharedDraft(3, string.Empty, 37, null,
-            It.Is<IReadOnlyList<SettingMutation>>(changes => changes.Count == 1 &&
-                changes[0].Key == "header_image_asset_id" &&
-                changes[0].Operation == DraftOperation.Upsert &&
-                changes[0].Value == "91"),
-            It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), It.IsAny<AuditContext>()), Times.Once);
+        Assert.IsInstanceOfType<OkObjectResult>(result);
+        assets.Verify(service => service.Create("header.png", "image/png", It.Is<byte[]>(bytes => bytes.SequenceEqual(content))), Times.Once);
+        repository.Verify(service => service.SaveToSharedDraft(It.IsAny<int>(), It.IsAny<string>(), It.IsAny<long>(), It.IsAny<long?>(),
+            It.IsAny<IReadOnlyList<SettingMutation>>(), It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), It.IsAny<AuditContext>()), Times.Never);
     }
 
     [TestMethod]
-    public async Task UploadHeaderImage_RejectsUnauthorizedUploadBeforeAssetStorage()
+    public async Task UploadHeaderImageAsset_RejectsUnauthorizedUploadBeforeAssetStorage()
     {
         var repository = new Mock<ISettingsAdministrationRepository>();
         var authorization = LibraryAuthorization();
         authorization.Setup(service => service.CanManage(It.IsAny<ClaimsPrincipal>(), 3, It.IsAny<bool>())).Returns(false);
         var assets = new Mock<IRegistrationFormAssetRepository>();
         var controller = CreateController(repository, authorization, suppliedAssets: assets);
-        var file = new FormFile(new MemoryStream([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), 0, 8, "file", "header.png")
+        var content = TestImageData.Create("image/png");
+        var file = new FormFile(new MemoryStream(content), 0, content.Length, "file", "header.png")
         {
             Headers = new HeaderDictionary(),
             ContentType = "image/png"
         };
 
-        var result = await controller.UploadHeaderImage(file, 3, string.Empty, 37, null);
+        var result = await controller.UploadHeaderImageAsset(file, 3, string.Empty);
 
         Assert.IsInstanceOfType<ForbidResult>(result);
         assets.Verify(service => service.Create(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<byte[]>()), Times.Never);
@@ -904,7 +899,7 @@ public class SettingsControllerTests
     }
 
     [TestMethod]
-    public async Task UploadHeaderImage_RejectsSignatureMismatchWithoutAssetStorage()
+    public async Task UploadHeaderImageAsset_RejectsSignatureMismatchWithoutAssetStorage()
     {
         var repository = new Mock<ISettingsAdministrationRepository>();
         var assets = new Mock<IRegistrationFormAssetRepository>();
@@ -915,10 +910,9 @@ public class SettingsControllerTests
             ContentType = "image/png"
         };
 
-        var result = await controller.UploadHeaderImage(file, 3, string.Empty, 37, null);
+        var result = await controller.UploadHeaderImageAsset(file, 3, string.Empty);
 
-        Assert.IsInstanceOfType<RedirectToActionResult>(result);
-        StringAssert.Contains((string)controller.TempData["SettingsError"]!, "does not match");
+        Assert.IsInstanceOfType<BadRequestObjectResult>(result);
         assets.Verify(service => service.Create(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<byte[]>()), Times.Never);
     }
 
@@ -951,9 +945,9 @@ public class SettingsControllerTests
     }
 
     [TestMethod]
-    public void UploadHeaderImage_RequiresPostAndAntiforgery()
+    public void UploadHeaderImageAsset_RequiresPostAndAntiforgeryAndDoesNotAcceptDraftParameters()
     {
-        var method = typeof(SettingsController).GetMethod(nameof(SettingsController.UploadHeaderImage))!;
+        var method = typeof(SettingsController).GetMethod(nameof(SettingsController.UploadHeaderImageAsset))!;
         Assert.IsTrue(method.GetCustomAttributes(typeof(HttpPostAttribute), true).Any());
         Assert.IsTrue(method.GetCustomAttributes(typeof(ValidateAntiForgeryTokenAttribute), true).Any());
         var sizeLimit = method.GetCustomAttributes(typeof(RequestSizeLimitAttribute), true)
@@ -961,6 +955,8 @@ public class SettingsControllerTests
         Assert.AreEqual(2_200_000, ((Microsoft.AspNetCore.Http.Metadata.IRequestSizeLimitMetadata)sizeLimit).MaxRequestBodySize);
         Assert.AreEqual(2_200_000, method.GetCustomAttributes(typeof(RequestFormLimitsAttribute), true)
             .Cast<RequestFormLimitsAttribute>().Single().MultipartBodyLengthLimit);
+        CollectionAssert.DoesNotContain(method.GetParameters().Select(parameter => parameter.Name).ToArray(), "expectedVersion");
+        CollectionAssert.DoesNotContain(method.GetParameters().Select(parameter => parameter.Name).ToArray(), "expectedDraftId");
     }
 
     [TestMethod]

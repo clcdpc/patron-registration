@@ -177,14 +177,6 @@
     <p id="search-status" aria-live="polite"></p>
 </section>
 
-<form asp-action="UploadHeaderImage" method="post" enctype="multipart/form-data" id="header-image-upload-form" aria-label="Upload header image" data-guard-action>
-    @Html.AntiForgeryToken()
-    <input type="hidden" name="organizationId" value="@Model.OrganizationId" />
-    <input type="hidden" name="formCode" value="@Model.FormCode" />
-    <input type="hidden" name="expectedVersion" value="@Model.ScopeVersion" />
-    @if (Model.ActiveDraft is not null) { <input type="hidden" name="expectedDraftId" value="@Model.ActiveDraft.DraftId" /> }
-</form>
-
 <form asp-action="DirectSave" method="post" id="settings-form">
     @Html.AntiForgeryToken()
     <input type="hidden" name="OrganizationId" value="@Model.OrganizationId" />

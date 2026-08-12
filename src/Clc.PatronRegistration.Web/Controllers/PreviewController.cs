@@ -50,6 +50,35 @@ public sealed class PreviewController(
         return View("~/Views/Registration/Create.cshtml", model);
     }
 
+    [HttpGet("{token}/assets/{id:int}", Name = "PreviewRegistrationFormAsset")]
+    public IActionResult Asset(string token, int id, [FromServices] IRegistrationFormAssetRepository assets)
+    {
+        // PreviewRequestContextMiddleware has already authenticated the bearer token
+        // and populated the draft overlay before this action can run.
+        if (previewRequestContext.Current is null || id <= 0 ||
+            previewRequestContext.Current.Settings.HeaderImageAssetId != id)
+        {
+            return NotFound();
+        }
+
+        SetSecurityHeaders();
+        var metadata = assets.GetMetadata(id);
+        if (metadata is null)
+        {
+            return NotFound();
+        }
+
+        Response.Headers.ETag = $"\"{metadata.ContentHash}\"";
+        Response.Headers["X-Content-Type-Options"] = "nosniff";
+        if (MatchesIfNoneMatch(Response.Headers.ETag.ToString()))
+        {
+            return StatusCode(StatusCodes.Status304NotModified);
+        }
+
+        var asset = assets.Get(id);
+        return asset is null ? NotFound() : File(asset.Content, asset.ContentType);
+    }
+
     [HttpPost("{token}")]
     [ValidateAntiForgeryToken]
     public IActionResult Submit(string token, Registration registration)
@@ -170,5 +199,15 @@ public sealed class PreviewController(
         Response.Headers.CacheControl = "no-store, no-cache, max-age=0";
         Response.Headers.Pragma = "no-cache";
     }
+
+    private bool MatchesIfNoneMatch(string etag)
+    {
+        var header = Request.Headers.IfNoneMatch.ToString();
+        return header.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Any(candidate => candidate == "*" || NormalizeEntityTag(candidate).Equals(etag, StringComparison.Ordinal));
+    }
+
+    private static string NormalizeEntityTag(string value) =>
+        value.StartsWith("W/", StringComparison.OrdinalIgnoreCase) ? value[2..] : value;
 
 }

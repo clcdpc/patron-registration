@@ -2,6 +2,8 @@ using System.Security.Cryptography;
 using Dapper;
 using Microsoft.Data.SqlClient;
 using Clc.PatronRegistration.Configuration;
+using SixLabors.ImageSharp;
+using SixLabors.ImageSharp.Formats;
 
 namespace Clc.PatronRegistration.Web.Settings;
 
@@ -28,6 +30,7 @@ public interface IRegistrationFormAssetRepository
     RegistrationFormAsset? Get(int assetId);
     RegistrationFormAssetMetadata? GetMetadata(int assetId);
     bool Exists(int assetId);
+    bool IsPubliclyReferenced(int assetId);
 }
 
 /// <summary>
@@ -37,6 +40,7 @@ public interface IRegistrationFormAssetRepository
 public static class RegistrationFormAssetUploadValidation
 {
     public const int MaximumUploadBytes = 2 * 1024 * 1024;
+    private const long MaximumDecodedPixelCount = 25_000_000;
 
     public static bool TryValidate(
         string? declaredContentType,
@@ -70,6 +74,27 @@ public static class RegistrationFormAssetUploadValidation
         if (!string.Equals(normalizedType, detectedType, StringComparison.Ordinal))
         {
             error = "The file content does not match its declared image type.";
+            return false;
+        }
+
+        try
+        {
+            var information = Image.Identify(content);
+            if (information is null || information.Width <= 0 || information.Height <= 0 ||
+                (long)information.Width * information.Height > MaximumDecodedPixelCount)
+            {
+                error = "The uploaded file is not a complete, valid image.";
+                return false;
+            }
+
+            // Loading the complete image through a maintained decoder rejects truncated
+            // headers and malformed chunks without transforming the stored bytes.
+            using var image = Image.Load(new DecoderOptions { SkipMetadata = true }, content);
+        }
+        catch (Exception exception) when (exception is ImageFormatException or InvalidImageContentException
+            or UnknownImageFormatException or NotSupportedException or ArgumentException or OverflowException)
+        {
+            error = "The uploaded file is not a complete, valid image.";
             return false;
         }
 
@@ -141,11 +166,11 @@ public sealed class RegistrationFormAssetRepository : IRegistrationFormAssetRepo
         }
 
         using var connection = Open();
-        return connection.QuerySingle<RegistrationFormAsset>(
+        var metadata = connection.QuerySingle<RegistrationFormAssetMetadata>(
             """
             insert dbo.RegistrationFormAssets
                 (FileName, ContentType, Content, ContentHash)
-            output inserted.AssetId, inserted.FileName, inserted.ContentType, inserted.Content,
+            output inserted.AssetId, inserted.FileName, inserted.ContentType,
                    inserted.ContentHash, inserted.CreatedDate, inserted.ModifiedDate
             values (@fileName, @contentType, @content, @contentHash);
             """,
@@ -156,6 +181,8 @@ public sealed class RegistrationFormAssetRepository : IRegistrationFormAssetRepo
                 content,
                 contentHash = RegistrationFormAssetUploadValidation.ComputeContentHash(content)
             });
+        return new RegistrationFormAsset(metadata.AssetId, metadata.FileName, metadata.ContentType, content,
+            metadata.ContentHash, metadata.CreatedDate, metadata.ModifiedDate);
     }
 
     public RegistrationFormAsset? Get(int assetId)
@@ -186,6 +213,21 @@ public sealed class RegistrationFormAssetRepository : IRegistrationFormAssetRepo
         return connection.ExecuteScalar<int>(
             "select case when exists (select 1 from dbo.RegistrationFormAssets where AssetId=@assetId) then 1 else 0 end",
             new { assetId }) == 1;
+    }
+
+    public bool IsPubliclyReferenced(int assetId)
+    {
+        using var connection = Open();
+        return connection.ExecuteScalar<int>(
+            """
+            select case when exists
+            (
+                select 1
+                from dbo.RegistrationFormSettings
+                where Setting = 'header_image_asset_id'
+                  and TRY_CONVERT(int, Value) = @assetId
+            ) then 1 else 0 end;
+            """, new { assetId }) == 1;
     }
 
     private SqlConnection Open()

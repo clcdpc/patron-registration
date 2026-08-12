@@ -72,17 +72,20 @@
         @if (definition.ValueType == SettingValueType.Image)
         {
             <div class="image-editor" aria-labelledby="@inputId-label">
-                <h3 id="@inputId-label">Header image</h3>
-                <div class="image-preview-group">
-                    <strong>Effective image</strong>
+                <div id="@inputId-label" class="image-preview-group image-current-presentation">
+                    <strong>@(Model.Resolution.IsInherited ? "Inherited image" : "Current effective image")</strong>
                     @if (Model.EffectiveAsset is not null)
                     {
-                        <img class="setting-image-preview" src="@Url.RouteUrl("RegistrationFormAsset", new { id = Model.EffectiveAsset.AssetId })" alt="Current header image" />
+                        <img class="setting-image-preview" src="@Model.EffectiveAsset.PreviewUrl" alt="Current header image" />
                         <small>@Model.EffectiveAsset.FileName</small>
                     }
                     else if (Model.EffectiveAssetMissing)
                     {
                         <p class="setting-missing-asset" role="status">The configured uploaded image is missing. The legacy URL, if configured, is used on the public page.</p>
+                    }
+                    else if (!string.IsNullOrWhiteSpace(Model.LegacyImageUrl))
+                    {
+                        <p>Legacy external image URL is active because no uploaded image is configured.</p>
                     }
                     else
                     {
@@ -92,10 +95,10 @@
                 @if (Model.DraftOperation is not null)
                 {
                     <div class="image-preview-group staged-image-preview">
-                        <strong>Staged preview</strong>
+                        <strong>Staged image</strong>
                         @if (Model.StagedAsset is not null)
                         {
-                            <img class="setting-image-preview" src="@Url.RouteUrl("RegistrationFormAsset", new { id = Model.StagedAsset.AssetId })" alt="Staged header image" />
+                            <img class="setting-image-preview" src="@Model.StagedAsset.PreviewUrl" alt="Staged header image" />
                             <small>@Model.StagedAsset.FileName</small>
                         }
                         else if (Model.StagedAssetMissing)
@@ -108,13 +111,30 @@
                         }
                     </div>
                 }
-                <label for="header-image-file">Choose file</label>
-                <input id="header-image-file" name="file" form="header-image-upload-form" type="file" accept="image/png,image/jpeg,image/webp" />
-                <button type="submit" form="header-image-upload-form">Upload</button>
-                <small>PNG, JPEG, or WebP only; maximum size 2 MB. Uploading adds the replacement to the shared draft.</small>
-            </div>
-            <div class="value-editor" hidden>
-                <input id="@inputId" class="setting-value" name="Changes[@token].Value" type="hidden" value="@editorValue" disabled />
+                <div class="value-editor image-value-editor" hidden>
+                    <div class="image-preview-group image-edit-current">
+                        <strong>Current image</strong>
+                        @if (Model.EffectiveAsset is not null)
+                        {
+                            <img class="setting-image-preview" src="@Model.EffectiveAsset.PreviewUrl" alt="Current header image" />
+                            <small>@Model.EffectiveAsset.FileName</small>
+                        }
+                        else
+                        {
+                            <p>No uploaded image is currently configured.</p>
+                        }
+                    </div>
+                    <label for="@inputId-file">Replacement image</label>
+                    <input id="@inputId-file" class="image-file" type="file" accept="image/png,image/jpeg,image/webp" data-upload-url="@Url.Action("UploadHeaderImageAsset", "Settings")" />
+                    <div class="image-preview-group image-pending-preview" hidden>
+                        <strong>Selected replacement</strong>
+                        <img class="setting-image-preview" alt="Selected replacement preview" />
+                        <small class="image-pending-file-name"></small>
+                        <p class="image-upload-status" role="status" aria-live="polite"></p>
+                    </div>
+                    <input id="@inputId" class="setting-value" name="Changes[@token].Value" type="hidden" value="@editorValue" disabled />
+                    <small>PNG, JPEG, or WebP only; maximum size 2 MB. The image is uploaded when selected, then saved with this setting when you apply and save the row.</small>
+                </div>
             </div>
         }
         else
@@ -165,7 +185,7 @@
             }
         </div>
         }
-        <button type="button" class="edit-setting" hidden="@(definition.ValueType == SettingValueType.Image)">Change</button>
+        <button type="button" class="edit-setting">Change</button>
         @if (canRemoveOverride)
         {
             <button type="button" class="inherit-setting" hidden="@isRemoveOverride">Use inherited value</button>

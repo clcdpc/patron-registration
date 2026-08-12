@@ -278,6 +278,146 @@ test("Cancel restores already-applied Upsert and RemoveOverride states", () => {
     assert.equal(removal.controls.inherit.hidden, true);
 });
 
+function imageEditorFixture() {
+    const controls = {
+        change: new Control(), inherit: new Control(), apply: new Control(), cancel: new Control(),
+        actions: new Control(), editor: new Control(), message: new Control(), operation: new Control("Upsert"),
+        value: new Control("12"), index: new Control(), key: new Control(), file: new Control(),
+        pending: new Control(), pendingPreview: new Control(), pendingFileName: new Control(), uploadStatus: new Control()
+    };
+    controls.file.files = [];
+    controls.file.dataset.uploadUrl = "/settings/assets/upload";
+    controls.pending.hidden = true;
+    controls.pending.querySelector = (selector) => selector === "img" ? controls.pendingPreview
+        : selector === ".image-pending-file-name" ? controls.pendingFileName
+            : selector === ".image-upload-status" ? controls.uploadStatus : null;
+    const selectors = {
+        ".edit-setting": controls.change, ".inherit-setting": controls.inherit,
+        ".apply-setting": controls.apply, ".cancel-setting": controls.cancel,
+        ".edit-actions": controls.actions, ".value-editor": controls.editor,
+        ".inheritance-message": controls.message, ".operation": controls.operation,
+        ".setting-value": controls.value, ".change-index": controls.index,
+        ".change-key": controls.key, ".image-file": controls.file,
+        ".image-pending-preview": controls.pending
+    };
+    const row = {
+        dataset: { valueType: "image", appliedOperation: "Upsert", dirty: "false", displayName: "Header image", oldValue: "12" },
+        querySelector(selector) { return selectors[selector] || null; },
+        querySelectorAll(selector) {
+            if (selector === ".image-file") return [controls.file];
+            return [controls.index, controls.key, controls.operation];
+        },
+        closest() { return { setAttribute() {} }; },
+        setAttribute() {}
+    };
+    const status = new Control();
+    const actions = new Control();
+    actions.querySelector = () => status;
+    const token = new Control("csrf");
+    const organization = new Control("3");
+    const formCode = new Control("");
+    const ordinaryRow = { dataset: { dirty: "false" } };
+    const settingsForm = {
+        querySelector(selector) {
+            if (selector === ".settings-actions") return actions;
+            if (selector === 'input[name="__RequestVerificationToken"]') return token;
+            if (selector === 'input[name="OrganizationId"]') return organization;
+            if (selector === 'input[name="FormCode"]') return formCode;
+            return null;
+        },
+        querySelectorAll(selector) {
+            return selector.includes('data-dirty="true"')
+                ? [row, ordinaryRow].filter(candidate => candidate.dataset.dirty === "true")
+                : [];
+        }
+    };
+    return { row, controls, settingsForm, ordinaryRow };
+}
+
+test("image editor uses Change/Apply/Cancel and uploads without mutating settings", async () => {
+    const fixture = imageEditorFixture();
+    const requests = [];
+    class FormDataStub { constructor() { this.values = []; } append(...value) { this.values.push(value); } }
+    const sandbox = {
+        document: { querySelector() { return null; }, querySelectorAll() { return []; }, createElement() { return new Control(); } },
+        window: {}, globalThis: {}, Event, FormData: FormDataStub,
+        URL: { createObjectURL: () => "blob:pending", revokeObjectURL() {} },
+        fetch: async (url, options) => {
+            requests.push({ url, options });
+            return { ok: true, async json() { return { assetId: 91, fileName: "replacement.png", previewUrl: "/settings/assets/91" }; } };
+        }
+    };
+    sandbox.globalThis = sandbox;
+    vm.runInNewContext(readFileSync(new URL("../../Clc.PatronRegistration.Web/wwwroot/js/settings.js", import.meta.url), "utf8"), sandbox);
+    sandbox.SettingsEditSessions.initializeRow(fixture.row, fixture.settingsForm);
+
+    assert.equal(fixture.controls.change.hidden, false);
+    assert.equal(fixture.controls.editor.hidden, true);
+    assert.equal(fixture.controls.file.disabled, true);
+
+    fixture.controls.change.click();
+    assert.equal(fixture.controls.editor.hidden, false);
+    assert.equal(fixture.controls.file.disabled, false);
+    fixture.controls.file.files = [{ name: "replacement.png" }];
+    fixture.controls.file.dispatchEvent(new Event("change"));
+    await new Promise(resolve => setImmediate(resolve));
+
+    assert.equal(requests.length, 1);
+    assert.equal(fixture.controls.value.value, "91");
+    assert.equal(fixture.row.dataset.dirty, "false", "uploading does not create a browser setting mutation");
+    assert.equal(fixture.controls.pending.hidden, false);
+    await fixture.controls.apply.listeners.click();
+    assert.equal(fixture.row.dataset.dirty, "true");
+    assert.equal(fixture.controls.operation.value, "Upsert");
+    fixture.ordinaryRow.dataset.dirty = "true";
+    sandbox.SettingsEditSessions.updatePendingActions(fixture.settingsForm);
+    assert.equal(fixture.settingsForm.querySelector(".settings-actions").querySelector(".pending-changes-status").textContent,
+        "2 unsaved browser changes", "image and ordinary edits share the normal Save workflow");
+
+    fixture.controls.change.click();
+    await fixture.controls.cancel.listeners.click();
+    assert.equal(fixture.controls.value.value, "91");
+    assert.equal(fixture.controls.editor.hidden, true);
+    assert.equal(fixture.row.dataset.dirty, "true");
+});
+
+test("image markup uses the normal setting form and keeps the chooser hidden until Change", () => {
+    const markup = readFileSync(new URL("../../Clc.PatronRegistration.Web/Views/Settings/Index.cshtml", import.meta.url), "utf8");
+    const row = readFileSync(new URL("../../Clc.PatronRegistration.Web/Views/Settings/_SettingRow.cshtml", import.meta.url), "utf8");
+    const script = readFileSync(new URL("../../Clc.PatronRegistration.Web/wwwroot/js/settings.js", import.meta.url), "utf8");
+    assert.doesNotMatch(markup, /header-image-upload-form/);
+    assert.doesNotMatch(row, /header-image-upload-form|data-guard-action/);
+    assert.match(row, /class="edit-setting">Change<\/button>/);
+    assert.match(row, /class="value-editor image-value-editor" hidden/);
+    assert.match(script, /imageFile\?\.addEventListener\("change"/);
+    assert.doesNotMatch(script, /change\.hidden = isImage/);
+});
+
+test("cancelling an in-flight image upload cannot repopulate the hidden setting", async () => {
+    const fixture = imageEditorFixture();
+    let resolveResponse;
+    class FormDataStub { append() {} }
+    const sandbox = {
+        document: { querySelector() { return null; }, querySelectorAll() { return []; }, createElement() { return new Control(); } },
+        window: {}, globalThis: {}, Event, FormData: FormDataStub,
+        URL: { createObjectURL: () => "blob:pending", revokeObjectURL() {} },
+        fetch: () => new Promise(resolve => { resolveResponse = resolve; })
+    };
+    sandbox.globalThis = sandbox;
+    vm.runInNewContext(readFileSync(new URL("../../Clc.PatronRegistration.Web/wwwroot/js/settings.js", import.meta.url), "utf8"), sandbox);
+    sandbox.SettingsEditSessions.initializeRow(fixture.row, fixture.settingsForm);
+    fixture.controls.change.click();
+    fixture.controls.file.files = [{ name: "replacement.png" }];
+    fixture.controls.file.dispatchEvent(new Event("change"));
+    await fixture.controls.cancel.listeners.click();
+
+    resolveResponse({ ok: true, async json() { return { assetId: 91, fileName: "replacement.png", previewUrl: "/settings/assets/91" }; } });
+    await new Promise(resolve => setImmediate(resolve));
+
+    assert.equal(fixture.controls.value.value, "12");
+    assert.equal(fixture.row.dataset.dirty, "false");
+});
+
 test("server RemoveOverride can be replaced by Upsert and Apply restores focus", () => {
     const fixture = rowFixture({ operation: "RemoveOverride" });
     assert.equal(fixture.controls.inherit.hidden, true);

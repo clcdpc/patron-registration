@@ -92,7 +92,7 @@ public enum SettingPresentationState { DraftChange, Customized, Inherited, NotSe
 public sealed record SettingRowPresentation(SettingPresentationState State, string Value, string Status,
     string CurrentValue);
 
-public sealed record SettingAssetPresentation(int AssetId, string FileName);
+public sealed record SettingAssetPresentation(int AssetId, string FileName, string PreviewUrl);
 
 public sealed class SettingsIndexViewModel
 {
@@ -127,7 +127,8 @@ public sealed record SettingRowViewModel(
     SettingAssetPresentation? EffectiveAsset = null,
     bool EffectiveAssetMissing = false,
     SettingAssetPresentation? StagedAsset = null,
-    bool StagedAssetMissing = false);
+    bool StagedAssetMissing = false,
+    string? LegacyImageUrl = null);
 
 public static class SettingInheritancePresentation
 {

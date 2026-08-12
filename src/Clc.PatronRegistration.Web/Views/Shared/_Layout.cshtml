@@ -1,10 +1,16 @@
 @inject ISettingProvider Settings
 @inject Clc.PatronRegistration.Web.Settings.RegistrationHeaderImageResolver HeaderImages
+@inject Clc.PatronRegistration.Web.Settings.IPreviewRequestContextAccessor PreviewContext
 
 @{
     var bodyClass = ViewData["BodyClass"] as string;
     var pageStylesheet = ViewData["PageStylesheet"] as string;
     var headerImage = HeaderImages.Resolve(Settings?.HeaderImageAssetId, Settings?.HeaderImageUrl);
+    var headerImageUrl = headerImage?.AssetId is int selectedAssetId
+        ? PreviewContext.IsPreviewRequest && !string.IsNullOrWhiteSpace(PreviewContext.PlaintextToken)
+            ? Url?.RouteUrl("PreviewRegistrationFormAsset", new { token = PreviewContext.PlaintextToken, id = selectedAssetId })
+            : Url?.RouteUrl("RegistrationFormAsset", new { id = selectedAssetId })
+        : null;
 }
 
 <!DOCTYPE html>
@@ -24,9 +30,9 @@
         {
             <link rel="stylesheet" href="@this.BuildUrl(Settings.CssFile)" />
             
-            if (headerImage?.AssetId is int assetId)
+            if (headerImageUrl is not null)
             {
-                <img alt="header image containing the library's logo" src="@Url.RouteUrl("RegistrationFormAsset", new { id = assetId })" role="banner" />
+                <img alt="header image containing the library's logo" src="@headerImageUrl" role="banner" />
             }
             else if (!string.IsNullOrWhiteSpace(headerImage?.LegacyUrl))
             {

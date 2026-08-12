@@ -1385,7 +1385,7 @@ public class SettingsAdministrationTests
         StringAssert.Contains(partial, "canRemoveOverride = resolution.OwnsOverride");
 
         StringAssert.Contains(script, "function beginEdit(candidateOperation)");
-        StringAssert.Contains(script, "function applyEdit()");
+        StringAssert.Contains(script, "async function applyEdit()");
         StringAssert.Contains(script, "function cancelEdit()");
         StringAssert.Contains(script, "change?.addEventListener(\"click\", () => beginEdit(\"Upsert\"))");
         StringAssert.Contains(script, "inherit?.addEventListener(\"click\", () => beginEdit(\"RemoveOverride\"))");

@@ -148,7 +148,7 @@ delete dbo.RegistrationSettingScopeVersions;");
     [TestMethod]
     public void AssetRepository_StoresAndRetrievesContentMetadataAndSha256Hash()
     {
-        var content = new byte[] { 0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x01, 0x02 };
+        var content = TestImageData.Create("image/png");
         var created = assetRepository.Create("..\\uploads\\header.png", "IMAGE/PNG", content);
 
         Assert.AreEqual("header.png", created.FileName);

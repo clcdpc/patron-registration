@@ -117,7 +117,7 @@ public sealed class SettingsController(
                 : null;
             var effectiveAssetMissing = false;
             var effectiveAsset = definition.ValueType == SettingValueType.Image
-                ? ResolveAsset(resolution.EffectiveValue, out effectiveAssetMissing)
+                ? ResolveAsset(resolution.EffectiveValue, target, formCode, out effectiveAssetMissing)
                 : null;
             var stagedAssetValue = definition.ValueType == SettingValueType.Image
                 ? draftChange?.Operation switch
@@ -129,7 +129,11 @@ public sealed class SettingsController(
                 : null;
             var stagedAssetMissing = false;
             var stagedAsset = definition.ValueType == SettingValueType.Image
-                ? ResolveAsset(stagedAssetValue, out stagedAssetMissing)
+                ? ResolveAsset(stagedAssetValue, target, formCode, out stagedAssetMissing)
+                : null;
+            var legacyImageUrl = definition.ValueType == SettingValueType.Image
+                ? resolver.Resolve(cache.SettingsCache, nameof(ISettingProvider.HeaderImageUrl), target, libraryId, formCode,
+                    settingsOptions.SystemOrganizationId).EffectiveValue
                 : null;
             rows.Add(new SettingRowViewModel(
                 $"setting-{index}",
@@ -144,7 +148,8 @@ public sealed class SettingsController(
                 effectiveAsset,
                 effectiveAssetMissing,
                 stagedAsset,
-                stagedAssetMissing));
+                stagedAssetMissing,
+                legacyImageUrl));
         }
 
         var model = new SettingsIndexViewModel
@@ -167,7 +172,7 @@ public sealed class SettingsController(
         return View(model);
     }
 
-    private SettingAssetPresentation? ResolveAsset(string? value, out bool missing)
+    private SettingAssetPresentation? ResolveAsset(string? value, int organizationId, string formCode, out bool missing)
     {
         missing = false;
         if (!int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var assetId) || assetId <= 0)
@@ -182,7 +187,13 @@ public sealed class SettingsController(
             missing = true;
             return null;
         }
-        return new SettingAssetPresentation(metadata.AssetId, metadata.FileName);
+        var previewUrl = Url?.RouteUrl("SettingsRegistrationFormAsset", new
+        {
+            id = metadata.AssetId,
+            organizationId,
+            formCode
+        }) ?? $"/settings/assets/{metadata.AssetId}?organizationId={organizationId}&formCode={Uri.EscapeDataString(formCode)}";
+        return new SettingAssetPresentation(metadata.AssetId, metadata.FileName, previewUrl);
     }
 
     private string DescribeSource(ResolvedSetting resolution)
@@ -325,16 +336,14 @@ public sealed class SettingsController(
         return RedirectToAction(nameof(Index), new { organizationId = request.OrganizationId, formCode = request.FormCode });
     }
 
-    [HttpPost("header-image/upload")]
+    [HttpPost("assets/upload")]
     [ValidateAntiForgeryToken]
     [RequestSizeLimit(2_200_000)]
     [RequestFormLimits(MultipartBodyLengthLimit = 2_200_000)]
-    public async Task<IActionResult> UploadHeaderImage(
+    public async Task<IActionResult> UploadHeaderImageAsset(
         IFormFile? file,
         int organizationId,
-        string formCode,
-        long expectedVersion,
-        long? expectedDraftId)
+        string formCode)
     {
         formCode = FormCodeNormalizer.Normalize(formCode);
         const string settingKey = "header_image_asset_id";
@@ -347,18 +356,17 @@ public sealed class SettingsController(
 
         if (file is null)
         {
-            return RedirectWithImageError(organizationId, formCode, "Choose a PNG, JPEG, or WebP image to upload.");
+            return BadRequest(new { error = "Choose a PNG, JPEG, or WebP image to upload." });
         }
 
         if (file.Length == 0)
         {
-            return RedirectWithImageError(organizationId, formCode, "Choose a non-empty image file.");
+            return BadRequest(new { error = "Choose a non-empty image file." });
         }
 
         if (file.Length > RegistrationFormAssetUploadValidation.MaximumUploadBytes)
         {
-            return RedirectWithImageError(organizationId, formCode,
-                $"Image files must be {RegistrationFormAssetUploadValidation.MaximumUploadBytes / 1024 / 1024} MB or smaller.");
+            return BadRequest(new { error = $"Image files must be {RegistrationFormAssetUploadValidation.MaximumUploadBytes / 1024 / 1024} MB or smaller." });
         }
 
         byte[] content;
@@ -375,8 +383,7 @@ public sealed class SettingsController(
                 }
                 if (buffer.Length + read > RegistrationFormAssetUploadValidation.MaximumUploadBytes)
                 {
-                    return RedirectWithImageError(organizationId, formCode,
-                        $"Image files must be {RegistrationFormAssetUploadValidation.MaximumUploadBytes / 1024 / 1024} MB or smaller.");
+                    return BadRequest(new { error = $"Image files must be {RegistrationFormAssetUploadValidation.MaximumUploadBytes / 1024 / 1024} MB or smaller." });
                 }
                 await buffer.WriteAsync(chunk.AsMemory(0, read));
             }
@@ -386,48 +393,20 @@ public sealed class SettingsController(
         if (!RegistrationFormAssetUploadValidation.TryValidate(file.ContentType, content, file.FileName,
                 out var sanitizedFileName, out var validationError))
         {
-            return RedirectWithImageError(organizationId, formCode, validationError!);
+            return BadRequest(new { error = validationError });
         }
 
-        // The asset is intentionally stored before the draft mutation. If a concurrent draft conflict
-        // prevents staging, the unreferenced asset is harmless and can be reclaimed by a future cleanup job.
+        // Asset creation is deliberately independent from setting mutation. The browser places this
+        // returned ID into the normal row edit session, and Save/Save-to-draft persists it with peers.
         var asset = assetRepository.Create(sanitizedFileName, file.ContentType, content);
-        try
+        var previewUrl = Url?.RouteUrl("SettingsRegistrationFormAsset", new { id = asset.AssetId, organizationId, formCode })
+            ?? $"/settings/assets/{asset.AssetId}?organizationId={organizationId}&formCode={Uri.EscapeDataString(formCode)}";
+        return Ok(new
         {
-            var result = repository.SaveToSharedDraft(
-                organizationId,
-                formCode,
-                expectedVersion,
-                expectedDraftId,
-                [new SettingMutation(settingKey, DraftOperation.Upsert, asset.AssetId.ToString(CultureInfo.InvariantCulture))],
-                CatalogByKey,
-                CreateAudit(organizationId, formCode));
-            TempData["SettingsStatus"] = result.DraftCreated
-                ? $"Header image was uploaded and staged in shared draft #{result.DraftId}."
-                : $"Header image was uploaded and staged in shared draft #{result.DraftId}.";
-        }
-        catch (DBConcurrencyException)
-        {
-            return DraftConflictResult(organizationId, formCode);
-        }
-        catch (SqlException exception) when (exception.Number is 1205 or 2601 or 2627)
-        {
-            return DraftConflictResult(organizationId, formCode);
-        }
-        catch (InvalidOperationException exception)
-        {
-            repository.WriteAudit("ValidationFailed", false, CreateAudit(organizationId, formCode), exception.Message, expectedDraftId);
-            return RedirectWithImageError(organizationId, formCode, "The image was uploaded but could not be staged in the settings draft.");
-        }
-
-        return RedirectToAction(nameof(Index), new { organizationId, formCode });
-    }
-
-    private IActionResult RedirectWithImageError(int organizationId, string formCode, string message)
-    {
-        TempData["SettingsError"] = message;
-        TempData["SettingsErrorGroup"] = nameof(SettingCategory.PageAppearanceAndInstructions);
-        return RedirectToAction(nameof(Index), new { organizationId, formCode });
+            assetId = asset.AssetId,
+            fileName = asset.FileName,
+            previewUrl
+        });
     }
 
     [HttpPost("drafts/{draftId:long}/changes/remove")]
