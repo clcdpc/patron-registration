@@ -285,6 +285,9 @@
             operation.value = candidateOperation;
             row.dataset.appliedOperation = candidateOperation;
             row.dataset.dirty = "true";
+            if (isImage && candidateOperation === "Upsert") {
+                setImageStatus(`${imageState.fileName || "Image"} is ready to save.`);
+            }
             setBindingEnabled(true, candidateOperation);
             delete row.dataset.candidateOperation;
             session = null;

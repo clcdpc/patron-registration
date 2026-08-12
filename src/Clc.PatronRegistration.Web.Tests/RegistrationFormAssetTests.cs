@@ -191,35 +191,119 @@ public sealed class RegistrationFormAssetTests
     }
 
     [TestMethod]
-    public void AssetAuthorization_AllowsTargetAndInheritedScopesButNotAnUnrelatedScope()
+    public void AssetAuthorization_AllowsAnAssetUploadedAtTheExactTargetScopeBeforeSave()
     {
-        var organizations = new List<OrganizationsGetRow>
-        {
-            new() { OrganizationID = 1, OrganizationCodeID = 1, Name = "System" },
-            new() { OrganizationID = 2, OrganizationCodeID = 2, Name = "Own library" },
-            new() { OrganizationID = 3, OrganizationCodeID = 3, ParentOrganizationID = 2, Name = "Own branch" },
-            new() { OrganizationID = 8, OrganizationCodeID = 2, Name = "Other library" }
-        };
+        var fixture = CreateAssetAuthorizationFixture();
+        fixture.Repository.Setup(item => item.GetMetadata(42)).Returns(new RegistrationFormAssetMetadata(
+            42, "branch.png", "image/png", "branch-hash", DateTime.UtcNow, DateTime.UtcNow, 3, "kids"));
+
+        Assert.IsNotNull(fixture.Authorization.GetAuthorizedMetadata(42, 3, "kids"));
+        fixture.Repository.Verify(item => item.IsReferencedBySettings(
+            It.IsAny<int>(), It.IsAny<IReadOnlyList<SettingSource>>()), Times.Never);
+    }
+
+    [TestMethod]
+    public void AssetAuthorization_AllowsExactScopeUploadWithoutHierarchyLookup()
+    {
         var cache = new Mock<ICache>();
-        cache.SetupGet(item => item.OrganizationCache).Returns(organizations);
+        cache.SetupGet(item => item.OrganizationCache).Returns([]);
         var repository = new Mock<IRegistrationFormAssetRepository>();
-        var created = new Dictionary<int, RegistrationFormAssetMetadata>
-        {
-            [42] = new(42, "branch.png", "image/png", "branch-hash", DateTime.UtcNow, DateTime.UtcNow, 3, "kids"),
-            [43] = new(43, "library.png", "image/png", "library-hash", DateTime.UtcNow, DateTime.UtcNow, 2, "kids"),
-            [44] = new(44, "system.png", "image/png", "system-hash", DateTime.UtcNow, DateTime.UtcNow, 1, string.Empty)
-        };
-        repository.Setup(item => item.GetMetadata(It.IsAny<int>()))
-            .Returns((int id) => created.GetValueOrDefault(id));
+        repository.Setup(item => item.GetMetadata(42)).Returns(new RegistrationFormAssetMetadata(
+            42, "branch.png", "image/png", "branch-hash", DateTime.UtcNow, DateTime.UtcNow, 99, "kids"));
         var authorization = new RegistrationFormAssetAuthorization(
             repository.Object, cache.Object, Options.Create(new SettingsAdministrationOptions { SystemOrganizationId = 1 }));
 
-        Assert.IsNotNull(authorization.GetAuthorizedMetadata(42, 3, "kids"));
-        Assert.IsNull(authorization.GetAuthorizedMetadata(42, 2, "kids"));
-        Assert.IsNotNull(authorization.GetAuthorizedMetadata(43, 3, "kids"));
-        Assert.IsNull(authorization.GetAuthorizedMetadata(43, 3, string.Empty));
-        Assert.IsNotNull(authorization.GetAuthorizedMetadata(44, 3, "kids"));
-        Assert.IsNotNull(authorization.GetAuthorizedMetadata(44, 8, string.Empty));
+        Assert.IsNotNull(authorization.GetAuthorizedMetadata(42, 99, "kids"));
+    }
+
+    [TestMethod]
+    public void AssetAuthorization_DeniesAnUnpublishedAssetUploadedAtAnotherLibrary()
+    {
+        var fixture = CreateAssetAuthorizationFixture();
+        fixture.Repository.Setup(item => item.GetMetadata(42)).Returns(new RegistrationFormAssetMetadata(
+            42, "other-library.png", "image/png", "other-hash", DateTime.UtcNow, DateTime.UtcNow, 8, string.Empty));
+
+        Assert.IsNull(fixture.Authorization.GetAuthorizedMetadata(42, 3, string.Empty));
+    }
+
+    [TestMethod]
+    public void AssetAuthorization_DeniesAnUnpublishedSystemAssetToALibrary()
+    {
+        var fixture = CreateAssetAuthorizationFixture();
+        fixture.Repository.Setup(item => item.GetMetadata(42)).Returns(new RegistrationFormAssetMetadata(
+            42, "system.png", "image/png", "system-hash", DateTime.UtcNow, DateTime.UtcNow, 1, string.Empty));
+
+        Assert.IsNull(fixture.Authorization.GetAuthorizedMetadata(42, 2, string.Empty));
+        Assert.IsNull(fixture.Authorization.GetAuthorizedMetadata(42, 3, "kids"));
+    }
+
+    [TestMethod]
+    public void AssetAuthorization_DeniesAnUnpublishedLibraryAssetToADownstreamBranchForm()
+    {
+        var fixture = CreateAssetAuthorizationFixture();
+        fixture.Repository.Setup(item => item.GetMetadata(42)).Returns(new RegistrationFormAssetMetadata(
+            42, "library.png", "image/png", "library-hash", DateTime.UtcNow, DateTime.UtcNow, 2, "kids"));
+
+        Assert.IsNull(fixture.Authorization.GetAuthorizedMetadata(42, 3, "kids"));
+    }
+
+    [TestMethod]
+    public void AssetAuthorization_AllowsPersistedSystemAndLibraryAssetsThroughInheritance()
+    {
+        var fixture = CreateAssetAuthorizationFixture();
+        fixture.Repository.Setup(item => item.GetMetadata(42)).Returns(new RegistrationFormAssetMetadata(
+            42, "system.png", "image/png", "system-hash", DateTime.UtcNow, DateTime.UtcNow, 1, string.Empty));
+        fixture.Repository.Setup(item => item.GetMetadata(43)).Returns(new RegistrationFormAssetMetadata(
+            43, "library.png", "image/png", "library-hash", DateTime.UtcNow, DateTime.UtcNow, 2, "kids"));
+        fixture.Repository.Setup(item => item.IsReferencedBySettings(
+                42, It.IsAny<IReadOnlyList<SettingSource>>())).Returns(true);
+        fixture.Repository.Setup(item => item.IsReferencedBySettings(
+                43, It.IsAny<IReadOnlyList<SettingSource>>())).Returns(true);
+
+        Assert.IsNotNull(fixture.Authorization.GetAuthorizedMetadata(42, 3, "kids"));
+        Assert.IsNotNull(fixture.Authorization.GetAuthorizedMetadata(43, 3, "kids"));
+    }
+
+    [TestMethod]
+    public void AssetAuthorization_DoesNotInheritAnUpstreamActiveDraft()
+    {
+        var fixture = CreateAssetAuthorizationFixture();
+        fixture.Repository.Setup(item => item.GetMetadata(42)).Returns(new RegistrationFormAssetMetadata(
+            42, "system.png", "image/png", "system-hash", DateTime.UtcNow, DateTime.UtcNow, 1, string.Empty));
+        fixture.Repository.Setup(item => item.IsReferencedByActiveDraft(42, 1, string.Empty)).Returns(true);
+
+        Assert.IsNull(fixture.Authorization.GetAuthorizedMetadata(42, 2, string.Empty));
+        fixture.Repository.Verify(item => item.IsReferencedByActiveDraft(42, 2, string.Empty), Times.Once);
+    }
+
+    [TestMethod]
+    public void AssetAuthorization_AllowsAnAssetReferencedByTheTargetActiveDraft()
+    {
+        var fixture = CreateAssetAuthorizationFixture();
+        fixture.Repository.Setup(item => item.GetMetadata(42)).Returns(new RegistrationFormAssetMetadata(
+            42, "system.png", "image/png", "system-hash", DateTime.UtcNow, DateTime.UtcNow, 1, string.Empty));
+        fixture.Repository.Setup(item => item.IsReferencedByActiveDraft(42, 3, "kids")).Returns(true);
+
+        Assert.IsNotNull(fixture.Authorization.GetAuthorizedMetadata(42, 3, "kids"));
+    }
+
+    [TestMethod]
+    public void AssetAuthorization_PreservesLegacyAssetsOnlyWhenEffectivelyReferenced()
+    {
+        var fixture = CreateAssetAuthorizationFixture();
+        fixture.Repository.Setup(item => item.GetMetadata(42)).Returns(new RegistrationFormAssetMetadata(
+            42, "legacy-effective.png", "image/png", "legacy-effective-hash", DateTime.UtcNow, DateTime.UtcNow));
+        fixture.Repository.Setup(item => item.GetMetadata(43)).Returns(new RegistrationFormAssetMetadata(
+            43, "legacy-draft.png", "image/png", "legacy-draft-hash", DateTime.UtcNow, DateTime.UtcNow));
+        fixture.Repository.Setup(item => item.GetMetadata(44)).Returns(new RegistrationFormAssetMetadata(
+            44, "legacy-orphan.png", "image/png", "legacy-orphan-hash", DateTime.UtcNow, DateTime.UtcNow));
+        fixture.Repository.Setup(item => item.IsReferencedBySettings(
+                42, It.IsAny<IReadOnlyList<SettingSource>>())).Returns(true);
+        fixture.Repository.Setup(item => item.IsReferencedByActiveDraft(43, 3, "kids")).Returns(true);
+
+        Assert.IsNotNull(fixture.Authorization.GetAuthorizedMetadata(42, 3, "kids"));
+        Assert.IsNotNull(fixture.Authorization.GetAuthorizedMetadata(43, 3, "kids"));
+        Assert.IsNull(fixture.Authorization.GetAuthorizedMetadata(44, 3, "kids"));
     }
 
     [TestMethod]
@@ -305,6 +389,24 @@ public sealed class RegistrationFormAssetTests
             typeof(Microsoft.AspNetCore.Authorization.AuthorizeAttribute), true).Length > 0);
         var previewMethod = typeof(PreviewController).GetMethod(nameof(PreviewController.Asset))!;
         Assert.IsNotNull(previewMethod.GetCustomAttributes(typeof(Microsoft.AspNetCore.Mvc.Routing.HttpMethodAttribute), true).SingleOrDefault());
+    }
+
+    private static (RegistrationFormAssetAuthorization Authorization, Mock<IRegistrationFormAssetRepository> Repository)
+        CreateAssetAuthorizationFixture()
+    {
+        var organizations = new List<OrganizationsGetRow>
+        {
+            new() { OrganizationID = 1, OrganizationCodeID = 1, Name = "System" },
+            new() { OrganizationID = 2, OrganizationCodeID = 2, Name = "Own library" },
+            new() { OrganizationID = 3, OrganizationCodeID = 3, ParentOrganizationID = 2, Name = "Own branch" },
+            new() { OrganizationID = 8, OrganizationCodeID = 2, Name = "Other library" }
+        };
+        var cache = new Mock<ICache>();
+        cache.SetupGet(item => item.OrganizationCache).Returns(organizations);
+        var repository = new Mock<IRegistrationFormAssetRepository>();
+        var authorization = new RegistrationFormAssetAuthorization(
+            repository.Object, cache.Object, Options.Create(new SettingsAdministrationOptions { SystemOrganizationId = 1 }));
+        return (authorization, repository);
     }
 
     private static string FindRepositoryRoot()

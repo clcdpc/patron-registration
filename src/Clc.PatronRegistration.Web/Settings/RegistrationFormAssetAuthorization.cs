@@ -42,6 +42,17 @@ public sealed class RegistrationFormAssetAuthorization(
     private bool CanUse(RegistrationFormAssetMetadata asset, int organizationId, string formCode)
     {
         formCode = FormCodeNormalizer.Normalize(formCode);
+
+        // Upload ownership grants access only at the exact settings scope that
+        // created the asset. This check intentionally precedes hierarchy lookup:
+        // an exact-scope upload must be previewable even when no inheritance
+        // calculation is needed for that request.
+        if (asset.UploadOrganizationId == organizationId &&
+            string.Equals(FormCodeNormalizer.Normalize(asset.UploadFormCode), formCode, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
         var systemOrganizationId = settingsOptions.SystemOrganizationId;
         int libraryId;
         try
@@ -56,19 +67,11 @@ public sealed class RegistrationFormAssetAuthorization(
         }
 
         var sources = SettingsResolver.BuildPrecedence(organizationId, libraryId, systemOrganizationId, formCode);
-        if (asset.UploadOrganizationId is int uploadOrganizationId)
-        {
-            return sources.Any(source => source.OrganizationId == uploadOrganizationId &&
-                IsFormMatch(source.FormCode, asset.UploadFormCode));
-        }
-
-        // Assets created before scope metadata was introduced are usable only when
-        // the target's effective settings or active draft already references them.
+        // Assets at another scope, including unpublished upstream uploads, are
+        // usable only after a persisted setting or this exact target's active
+        // draft legitimately references them. Legacy assets with null scope
+        // metadata follow the same compatibility rule.
         return assets.IsReferencedBySettings(asset.AssetId, sources) ||
             assets.IsReferencedByActiveDraft(asset.AssetId, organizationId, formCode);
     }
-
-    private static bool IsFormMatch(string sourceFormCode, string? uploadFormCode) =>
-        string.IsNullOrEmpty(uploadFormCode) ||
-        string.Equals(sourceFormCode, uploadFormCode, StringComparison.OrdinalIgnoreCase);
 }

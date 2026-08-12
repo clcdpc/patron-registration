@@ -370,12 +370,14 @@ test("image editor uses Change/Apply/Cancel and uploads without mutating setting
     assert.equal(fixture.controls.value.value, "91");
     assert.equal(fixture.row.dataset.dirty, "false", "uploading does not create a browser setting mutation");
     assert.equal(fixture.controls.pending.hidden, false);
+    assert.equal(fixture.controls.uploadStatus.textContent, "replacement.png uploaded. Apply to keep this replacement.");
     await fixture.controls.apply.listeners.click();
     assert.equal(fixture.row.dataset.dirty, "true");
     assert.equal(fixture.controls.operation.value, "Upsert");
     assert.equal(fixture.controls.pending.hidden, false, "browser-pending replacement remains visible after Apply");
     assert.equal(fixture.controls.pendingFileName.textContent, "replacement.png");
     assert.equal(fixture.controls.pendingPreview.src, "/settings/assets/91");
+    assert.equal(fixture.controls.uploadStatus.textContent, "replacement.png is ready to save.");
     fixture.ordinaryRow.dataset.dirty = "true";
     sandbox.SettingsEditSessions.updatePendingActions(fixture.settingsForm);
     assert.equal(fixture.settingsForm.querySelector(".settings-actions").querySelector(".pending-changes-status").textContent,
