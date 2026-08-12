@@ -6,8 +6,9 @@
 4. Run `003-expand-audit-setting-values.sql` so long non-sensitive HTML and templates can be audited without truncation.
 5. Run `004-registration-form-assets.sql` to create the database-backed registration image asset table.
 6. Run `005-registration-form-asset-scope.sql` to add upload-scope metadata used to authorize unpublished assets.
-7. Grant the application's database identity `SELECT`, `INSERT`, `UPDATE`, and `DELETE` on the new tables and existing `RegistrationFormSettings` (least privilege may instead be supplied through approved stored procedures).
-8. Deploy the application only after all scripts succeed.
+7. Run `006-register-header-image-asset-setting.sql` to register `header_image_asset_id` in the existing `RegistrationFormSettingTypes` allowlist. This must be applied before the application persists that key into `RegistrationFormSettings`; the existing foreign key remains enabled.
+8. Grant the application's database identity `SELECT`, `INSERT`, `UPDATE`, and `DELETE` on the new tables and existing `RegistrationFormSettings` (least privilege may instead be supplied through approved stored procedures).
+9. Deploy the application only after all scripts succeed.
 
 The script is repeatable and uses UTC `datetime2`. The application never runs this script or any production migration automatically. The filtered unique index enforces one Active draft per organization/form-code scope. Token hashes, not bearer tokens, are persisted. `RegistrationSettingsCacheGeneration` is the cross-process invalidation counter.
 
