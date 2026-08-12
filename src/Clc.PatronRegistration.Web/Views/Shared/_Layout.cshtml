@@ -1,8 +1,10 @@
 @inject ISettingProvider Settings
+@inject Clc.PatronRegistration.Web.Settings.RegistrationHeaderImageResolver HeaderImages
 
 @{
     var bodyClass = ViewData["BodyClass"] as string;
     var pageStylesheet = ViewData["PageStylesheet"] as string;
+    var headerImage = HeaderImages.Resolve(Settings?.HeaderImageAssetId, Settings?.HeaderImageUrl);
 }
 
 <!DOCTYPE html>
@@ -22,9 +24,13 @@
         {
             <link rel="stylesheet" href="@this.BuildUrl(Settings.CssFile)" />
             
-            if (!string.IsNullOrWhiteSpace(Settings?.HeaderImageUrl))
+            if (headerImage?.AssetId is int assetId)
             {
-                <img alt="header image containing the library's logo" src="@Settings.HeaderImageUrl" role="banner" />
+                <img alt="header image containing the library's logo" src="@Url.RouteUrl("RegistrationFormAsset", new { id = assetId })" role="banner" />
+            }
+            else if (!string.IsNullOrWhiteSpace(headerImage?.LegacyUrl))
+            {
+                <img alt="header image containing the library's logo" src="@headerImage?.LegacyUrl" role="banner" />
             }
         }
         @if (!string.IsNullOrWhiteSpace(pageStylesheet))

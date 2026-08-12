@@ -62,6 +62,7 @@
         const summaryValue = row.querySelector(".summary-value");
         const settingStatus = row.querySelector(".setting-status");
         const reveal = row.querySelector(".reveal-secret");
+        const isImage = row.dataset.valueType === "image";
         const serverState = {
             operation: operation.value,
             value: value.value,
@@ -88,7 +89,7 @@
         }
 
         function showNormalState() {
-            change.hidden = false;
+            change.hidden = isImage;
             if (inherit) inherit.hidden = row.dataset.appliedOperation === "RemoveOverride";
             actions.hidden = true;
             editor.hidden = true;
@@ -210,7 +211,9 @@
             const value = row.querySelector(".setting-value");
             const operation = row.querySelector(".operation");
             const item = document.createElement("li");
-            const newValue = row.dataset.sensitive === "true" ? "••••••••" : value.value;
+            const newValue = row.dataset.sensitive === "true"
+                ? "••••••••"
+                : row.dataset.valueType === "image" ? "uploaded image" : value.value;
             item.textContent = `${row.dataset.displayName}: ${operation.value === "RemoveOverride" ? "Use inherited value" : `Set to “${newValue}”`} (current value: “${row.dataset.oldValue || "not configured"}”).`;
             list.append(item);
         });

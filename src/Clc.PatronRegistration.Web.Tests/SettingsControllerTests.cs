@@ -14,6 +14,7 @@ using Microsoft.Extensions.Options;
 using Moq;
 using Clc.Polaris.Api.Models;
 using Microsoft.Data.SqlClient;
+using System.Text;
 
 namespace Clc.PatronRegistration.Tests;
 
@@ -852,6 +853,117 @@ public class SettingsControllerTests
     }
 
     [TestMethod]
+    public async Task UploadHeaderImage_StoresAssetAndStagesOnlyTheAssetIdInTheDraft()
+    {
+        var repository = new Mock<ISettingsAdministrationRepository>();
+        repository.Setup(service => service.SaveToSharedDraft(3, string.Empty, 37, null,
+                It.IsAny<IReadOnlyList<SettingMutation>>(), It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), It.IsAny<AuditContext>()))
+            .Returns(new SaveToDraftResult(55, true));
+        var assets = new Mock<IRegistrationFormAssetRepository>();
+        assets.Setup(service => service.Create("header.png", "image/png", It.IsAny<byte[]>()))
+            .Returns(new RegistrationFormAsset(91, "header.png", "image/png", [1], "hash", DateTime.UtcNow, DateTime.UtcNow));
+        var controller = CreateController(repository, LibraryAuthorization(), suppliedAssets: assets);
+        var file = new FormFile(new MemoryStream([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), 0, 8, "file", "header.png")
+        {
+            Headers = new HeaderDictionary(),
+            ContentType = "image/png"
+        };
+
+        var result = await controller.UploadHeaderImage(file, 3, string.Empty, 37, null);
+
+        Assert.IsInstanceOfType<RedirectToActionResult>(result);
+        assets.Verify(service => service.Create("header.png", "image/png", It.Is<byte[]>(bytes => bytes.Length == 8)), Times.Once);
+        repository.Verify(service => service.SaveToSharedDraft(3, string.Empty, 37, null,
+            It.Is<IReadOnlyList<SettingMutation>>(changes => changes.Count == 1 &&
+                changes[0].Key == "header_image_asset_id" &&
+                changes[0].Operation == DraftOperation.Upsert &&
+                changes[0].Value == "91"),
+            It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), It.IsAny<AuditContext>()), Times.Once);
+    }
+
+    [TestMethod]
+    public async Task UploadHeaderImage_RejectsUnauthorizedUploadBeforeAssetStorage()
+    {
+        var repository = new Mock<ISettingsAdministrationRepository>();
+        var authorization = LibraryAuthorization();
+        authorization.Setup(service => service.CanManage(It.IsAny<ClaimsPrincipal>(), 3, It.IsAny<bool>())).Returns(false);
+        var assets = new Mock<IRegistrationFormAssetRepository>();
+        var controller = CreateController(repository, authorization, suppliedAssets: assets);
+        var file = new FormFile(new MemoryStream([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), 0, 8, "file", "header.png")
+        {
+            Headers = new HeaderDictionary(),
+            ContentType = "image/png"
+        };
+
+        var result = await controller.UploadHeaderImage(file, 3, string.Empty, 37, null);
+
+        Assert.IsInstanceOfType<ForbidResult>(result);
+        assets.Verify(service => service.Create(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<byte[]>()), Times.Never);
+        repository.Verify(service => service.SaveToSharedDraft(It.IsAny<int>(), It.IsAny<string>(), It.IsAny<long>(), It.IsAny<long?>(),
+            It.IsAny<IReadOnlyList<SettingMutation>>(), It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), It.IsAny<AuditContext>()), Times.Never);
+    }
+
+    [TestMethod]
+    public async Task UploadHeaderImage_RejectsSignatureMismatchWithoutAssetStorage()
+    {
+        var repository = new Mock<ISettingsAdministrationRepository>();
+        var assets = new Mock<IRegistrationFormAssetRepository>();
+        var controller = CreateController(repository, LibraryAuthorization(), suppliedAssets: assets);
+        var file = new FormFile(new MemoryStream(Encoding.UTF8.GetBytes("<svg/>")), 0, 6, "file", "header.png")
+        {
+            Headers = new HeaderDictionary(),
+            ContentType = "image/png"
+        };
+
+        var result = await controller.UploadHeaderImage(file, 3, string.Empty, 37, null);
+
+        Assert.IsInstanceOfType<RedirectToActionResult>(result);
+        StringAssert.Contains((string)controller.TempData["SettingsError"]!, "does not match");
+        assets.Verify(service => service.Create(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<byte[]>()), Times.Never);
+    }
+
+    [TestMethod]
+    public void Index_MarksMissingHeaderAssetWithoutRewritingTheSetting()
+    {
+        var repository = new Mock<ISettingsAdministrationRepository>();
+        repository.Setup(service => service.GetActiveDraft(3, string.Empty)).Returns((SettingDraft?)null);
+        repository.Setup(service => service.GetVersion(3, string.Empty)).Returns(4);
+        repository.Setup(service => service.GetFormCodes(2, 1)).Returns([]);
+        repository.Setup(service => service.GetLegacyFormCodes()).Returns([]);
+        var assets = new Mock<IRegistrationFormAssetRepository>();
+        assets.Setup(service => service.GetMetadata(987)).Returns((RegistrationFormAssetMetadata?)null);
+        var cache = new TestCache
+        {
+            SettingsCache =
+            [
+                new() { OrganizationID = 1, FormCode = string.Empty, Setting = "header_image_asset_id", Value = "987" }
+            ]
+        };
+
+        var result = (ViewResult)CreateController(repository, LibraryAuthorization(), cache, suppliedAssets: assets).Index(3);
+        var model = (SettingsIndexViewModel)result.Model!;
+        var row = model.Settings.Single(setting => setting.Definition.Key == "header_image_asset_id");
+
+        Assert.IsTrue(row.EffectiveAssetMissing);
+        Assert.IsNull(row.EffectiveAsset);
+        repository.Verify(service => service.DirectSave(It.IsAny<int>(), It.IsAny<string>(), It.IsAny<long>(),
+            It.IsAny<IReadOnlyList<SettingMutation>>(), It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), It.IsAny<AuditContext>()), Times.Never);
+    }
+
+    [TestMethod]
+    public void UploadHeaderImage_RequiresPostAndAntiforgery()
+    {
+        var method = typeof(SettingsController).GetMethod(nameof(SettingsController.UploadHeaderImage))!;
+        Assert.IsTrue(method.GetCustomAttributes(typeof(HttpPostAttribute), true).Any());
+        Assert.IsTrue(method.GetCustomAttributes(typeof(ValidateAntiForgeryTokenAttribute), true).Any());
+        var sizeLimit = method.GetCustomAttributes(typeof(RequestSizeLimitAttribute), true)
+            .Cast<RequestSizeLimitAttribute>().Single();
+        Assert.AreEqual(2_200_000, ((Microsoft.AspNetCore.Http.Metadata.IRequestSizeLimitMetadata)sizeLimit).MaxRequestBodySize);
+        Assert.AreEqual(2_200_000, method.GetCustomAttributes(typeof(RequestFormLimitsAttribute), true)
+            .Cast<RequestFormLimitsAttribute>().Single().MultipartBodyLengthLimit);
+    }
+
+    [TestMethod]
     public void SettingsForm_PostsRenderedExpectedVersion()
     {
         var view = File.ReadAllText(Path.GetFullPath(Path.Combine(AppContext.BaseDirectory,
@@ -1479,7 +1591,8 @@ public class SettingsControllerTests
         ICache? suppliedCache = null,
         ISettingsPageBrandingContextAccessor? brandingAccessor = null,
         SettingsAdministrationOptions? administrationOptions = null,
-        IPreviewTokenService? previewTokenService = null)
+        IPreviewTokenService? previewTokenService = null,
+        Mock<IRegistrationFormAssetRepository>? suppliedAssets = null)
     {
         repository.Setup(service => service.GetCacheGeneration()).Returns(1);
         var invalidator = new Mock<ISettingsCacheInvalidator>();
@@ -1490,6 +1603,9 @@ public class SettingsControllerTests
         var options = Options.Create(administrationOptions ?? new SettingsAdministrationOptions());
         var cache = suppliedCache ?? new TestCache();
         var formCodeAvailability = new FormCodeAvailabilityService(repository.Object, cache, options);
+        var assets = suppliedAssets ?? new Mock<IRegistrationFormAssetRepository>();
+        assets.Setup(service => service.GetMetadata(It.IsAny<int>()))
+            .Returns((RegistrationFormAssetMetadata?)null);
         var controller = new SettingsController(
             authorization.Object,
             repository.Object,
@@ -1500,6 +1616,7 @@ public class SettingsControllerTests
             formCodeAvailability,
             invalidator.Object,
             brandingAccessor ?? new SettingsPageBrandingContextAccessor(),
+            assets.Object,
             options);
         controller.ControllerContext = new ControllerContext
         {

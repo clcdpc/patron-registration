@@ -125,6 +125,7 @@ namespace Clc.PatronRegistration.Configuration
                 .ToList();
         }
         public string HeaderImageUrl => GetPropertySetting<string>();
+        public int? HeaderImageAssetId => GetPropertySetting<int?>();
         public string CssFile => GetPropertySetting<string>();
         public string WarningText => GetPropertySetting<string>();
         public string CustomFormFooterHtml => GetPropertySetting<string>();

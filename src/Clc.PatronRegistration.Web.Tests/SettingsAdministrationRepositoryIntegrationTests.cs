@@ -32,6 +32,7 @@ public sealed class SettingsAdministrationRepositoryIntegrationTests
     private static bool schemaReady;
     private static TestContext? classContext;
     private SettingsAdministrationRepository repository = null!;
+    private RegistrationFormAssetRepository assetRepository = null!;
     private MutableTimeProvider clock = null!;
 
     private static readonly SettingDefinition First = new("test.first", "First", "Test value", SettingValueType.ShortString);
@@ -74,7 +75,7 @@ public sealed class SettingsAdministrationRepositoryIntegrationTests
             var candidateConnectionString = databaseBuilder.ConnectionString;
             using var database = new SqlConnection(candidateConnectionString);
             database.Open();
-            foreach (var file in new[] { "001-settings-administration.sql", "002-preview-operational-branch.sql", "003-expand-audit-setting-values.sql" })
+            foreach (var file in new[] { "001-settings-administration.sql", "002-preview-operational-branch.sql", "003-expand-audit-setting-values.sql", "004-registration-form-assets.sql" })
             {
                 Execute(database, File.ReadAllText(Path.Combine(RepositoryRoot(), "database", file)), 30);
             }
@@ -115,8 +116,10 @@ public sealed class SettingsAdministrationRepositoryIntegrationTests
             "The SQL integration fixture attempted setup but did not finish deploying the schema.");
         clock = new MutableTimeProvider(new DateTimeOffset(2030, 4, 5, 6, 7, 8, TimeSpan.Zero));
         repository = new SettingsAdministrationRepository(databaseConnectionString!, clock);
+        assetRepository = new RegistrationFormAssetRepository(databaseConnectionString!);
         using var connection = Open();
-        Execute(connection, @"delete dbo.RegistrationSettingAuditEvents;
+        Execute(connection, @"delete dbo.RegistrationFormAssets;
+delete dbo.RegistrationSettingAuditEvents;
 delete dbo.RegistrationSettingPreviewLinks;
 delete dbo.RegistrationSettingDraftChanges;
 delete dbo.RegistrationSettingDrafts;
@@ -131,7 +134,8 @@ delete dbo.RegistrationSettingScopeVersions;");
             "dbo.RegistrationSettingScopeVersions",
             "dbo.RegistrationSettingDrafts",
             "dbo.RegistrationSettingDraftChanges",
-            "dbo.RegistrationSettingAuditEvents"
+            "dbo.RegistrationSettingAuditEvents",
+            "dbo.RegistrationFormAssets"
         };
         foreach (var requiredObject in requiredObjects)
         {
@@ -139,6 +143,37 @@ delete dbo.RegistrationSettingScopeVersions;");
                 $"Required schema object {requiredObject} was not deployed.");
         }
         Assert.AreEqual(1, Scalar<int>("select count(*) from sys.indexes where object_id=object_id('dbo.RegistrationSettingDrafts') and name='UX_RSD_ActiveScope' and is_unique=1 and has_filter=1"));
+    }
+
+    [TestMethod]
+    public void AssetRepository_StoresAndRetrievesContentMetadataAndSha256Hash()
+    {
+        var content = new byte[] { 0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x01, 0x02 };
+        var created = assetRepository.Create("..\\uploads\\header.png", "IMAGE/PNG", content);
+
+        Assert.AreEqual("header.png", created.FileName);
+        Assert.AreEqual("image/png", created.ContentType);
+        CollectionAssert.AreEqual(content, created.Content);
+        Assert.AreEqual(RegistrationFormAssetUploadValidation.ComputeContentHash(content), created.ContentHash);
+
+        var metadata = assetRepository.GetMetadata(created.AssetId);
+        Assert.IsNotNull(metadata);
+        Assert.AreEqual(created.AssetId, metadata.AssetId);
+        Assert.AreEqual(created.ContentHash, metadata.ContentHash);
+        Assert.IsTrue(assetRepository.Exists(created.AssetId));
+
+        var loaded = assetRepository.Get(created.AssetId);
+        Assert.IsNotNull(loaded);
+        CollectionAssert.AreEqual(content, loaded.Content);
+        Assert.AreEqual(created.ContentType, loaded.ContentType);
+    }
+
+    [TestMethod]
+    public void AssetRepository_ReturnsNoResultForMissingAsset()
+    {
+        Assert.IsFalse(assetRepository.Exists(987654321));
+        Assert.IsNull(assetRepository.Get(987654321));
+        Assert.IsNull(assetRepository.GetMetadata(987654321));
     }
 
     [TestMethod]

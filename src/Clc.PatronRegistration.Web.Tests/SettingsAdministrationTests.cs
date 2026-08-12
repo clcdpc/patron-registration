@@ -16,7 +16,7 @@ public class SettingsAdministrationTests
     // Compatibility contract: this list intentionally remains independent of provider attributes and catalog construction.
     private static readonly string[] ExpectedOrdinaryKeys =
     [
-        "header_image_url", "css_file", "warning_text", "custom_form_footer_html", "registration_text", "registration_form_header",
+        "header_image_url", "header_image_asset_id", "css_file", "warning_text", "custom_form_footer_html", "registration_text", "registration_form_header",
         "show_dl", "hide_gender", "enable_age_warning", "age_warning_text", "enable_age_block", "age_block_text", "hide_ereceipt", "na_gender_text",
         "normalize_to_uppercase", "dl_format", "enable_legal_name_checkbox", "drivers_license_button_text",
         "drivers_license_prompt_text", "agreement_confirm_button_text", "agreement_cancel_button_text", "school_info_field_legend",
@@ -42,6 +42,7 @@ public class SettingsAdministrationTests
         new Dictionary<string, SettingValueType>(StringComparer.OrdinalIgnoreCase)
         {
             ["header_image_url"] = SettingValueType.Uri,
+            ["header_image_asset_id"] = SettingValueType.Image,
             ["warning_text"] = SettingValueType.LongString,
             ["custom_form_footer_html"] = SettingValueType.Html,
             ["age_warning_text"] = SettingValueType.LongString,
@@ -1375,7 +1376,8 @@ public class SettingsAdministrationTests
 
         Assert.IsFalse(partial.Contains("<select id=\"@operationId\"", StringComparison.Ordinal));
         StringAssert.Contains(partial, "class=\"operation\" type=\"hidden\"");
-        StringAssert.Contains(partial, "class=\"edit-setting\">Change</button>");
+        StringAssert.Contains(partial, "class=\"edit-setting\"");
+        StringAssert.Contains(partial, ">Change</button>");
         StringAssert.Contains(partial, "class=\"apply-setting\">Apply</button>");
         StringAssert.Contains(partial, "class=\"cancel-setting\">Cancel</button>");
         StringAssert.Contains(partial, "class=\"edit-actions\" hidden");
@@ -1404,7 +1406,8 @@ public class SettingsAdministrationTests
         var script = File.ReadAllText(Path.Combine(root, "src/Clc.PatronRegistration.Web/wwwroot/js/settings.js"));
 
         StringAssert.Contains(partial, "SettingInheritancePresentation.MessageFor(Model)");
-        StringAssert.Contains(script, "row.dataset.sensitive === \"true\" ? \"••••••••\" : value.value");
+        StringAssert.Contains(script, "row.dataset.sensitive === \"true\"");
+        StringAssert.Contains(script, "row.dataset.valueType === \"image\" ? \"uploaded image\" : value.value");
         StringAssert.Contains(script, "operation.value === \"RemoveOverride\" ? \"Use inherited value\"");
     }
 
@@ -1493,7 +1496,7 @@ public class SettingsAdministrationTests
         var interfaceProperties = typeof(ISettingProvider).GetProperties(BindingFlags.Instance | BindingFlags.Public);
         var providerProperties = typeof(DbSettingProvider).GetProperties(BindingFlags.Instance | BindingFlags.Public);
 
-        Assert.AreEqual(78, AdministrationProperties().Length);
+        Assert.AreEqual(79, AdministrationProperties().Length);
         Assert.IsFalse(providerProperties.Any(property => property.GetCustomAttribute<AdminSettingAttribute>() is not null));
         Assert.IsTrue(SettingPropertyMetadataCache.GetAll().Where(metadata => metadata.Administration is not null)
             .All(metadata => metadata.Property.DeclaringType == typeof(ISettingProvider)));
@@ -1508,6 +1511,7 @@ public class SettingsAdministrationTests
         {
             [nameof(ISettingProvider.EnableAgeBlock)] = "enable_age_block",
             [nameof(ISettingProvider.AgeBlockText)] = "age_block_text",
+            [nameof(ISettingProvider.HeaderImageAssetId)] = "header_image_asset_id",
             [nameof(ISettingProvider.ExpirationDateYears)] = "expiration_date_years",
             [nameof(ISettingProvider.EnableDriversLicenseSwipe)] = "show_dl",
             [nameof(ISettingProvider.DriversLicenseFormat)] = "dl_format",
@@ -1543,10 +1547,12 @@ public class SettingsAdministrationTests
     {
         var draft = Draft(3,
             new SettingMutation("enable_age_block", DraftOperation.Upsert, "true"),
+            new SettingMutation("header_image_asset_id", DraftOperation.Upsert, "42"),
             new SettingMutation("display_ecard_checkbox", DraftOperation.Upsert, "true"));
         var preview = new PreviewSettingProvider(draft, 3, new TestCache(), 1);
 
         Assert.IsTrue(preview.EnableAgeBlock);
+        Assert.AreEqual(42, preview.HeaderImageAssetId);
         Assert.IsTrue(preview.DisplayECardCheckbox);
         Assert.IsTrue(new SettingCatalog().TryGet("display_ecard_checkbox", out _));
     }

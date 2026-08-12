@@ -11,6 +11,8 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Filters;
 using Microsoft.Extensions.Options;
 using Microsoft.Data.SqlClient;
+using System.Globalization;
+using Microsoft.AspNetCore.Http.Features;
 
 namespace Clc.PatronRegistration.Web.Controllers;
 
@@ -27,6 +29,7 @@ public sealed class SettingsController(
     IFormCodeAvailabilityService formCodeAvailability,
     ISettingsCacheInvalidator cacheInvalidator,
     ISettingsPageBrandingContextAccessor settingsPageBrandingContext,
+    IRegistrationFormAssetRepository assetRepository,
     IOptions<SettingsAdministrationOptions> options) : Controller
 {
     private readonly SettingsAdministrationOptions settingsOptions = options.Value;
@@ -112,6 +115,22 @@ public sealed class SettingsController(
                         (target, formCode, definition.Key)
                     })
                 : null;
+            var effectiveAssetMissing = false;
+            var effectiveAsset = definition.ValueType == SettingValueType.Image
+                ? ResolveAsset(resolution.EffectiveValue, out effectiveAssetMissing)
+                : null;
+            var stagedAssetValue = definition.ValueType == SettingValueType.Image
+                ? draftChange?.Operation switch
+                {
+                    DraftOperation.Upsert => draftChange.Value,
+                    DraftOperation.RemoveOverride => inheritedResolution?.EffectiveValue,
+                    _ => resolution.EffectiveValue
+                }
+                : null;
+            var stagedAssetMissing = false;
+            var stagedAsset = definition.ValueType == SettingValueType.Image
+                ? ResolveAsset(stagedAssetValue, out stagedAssetMissing)
+                : null;
             rows.Add(new SettingRowViewModel(
                 $"setting-{index}",
                 definition,
@@ -121,7 +140,11 @@ public sealed class SettingsController(
                 draft?.DraftId,
                 DescribeSource(resolution),
                 inheritedResolution?.EffectiveValue,
-                inheritedResolution?.SourceOrganizationId.HasValue == true));
+                inheritedResolution?.SourceOrganizationId.HasValue == true,
+                effectiveAsset,
+                effectiveAssetMissing,
+                stagedAsset,
+                stagedAssetMissing));
         }
 
         var model = new SettingsIndexViewModel
@@ -142,6 +165,24 @@ public sealed class SettingsController(
             Settings = rows
         };
         return View(model);
+    }
+
+    private SettingAssetPresentation? ResolveAsset(string? value, out bool missing)
+    {
+        missing = false;
+        if (!int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var assetId) || assetId <= 0)
+        {
+            missing = !string.IsNullOrWhiteSpace(value);
+            return null;
+        }
+
+        var metadata = assetRepository.GetMetadata(assetId);
+        if (metadata is null)
+        {
+            missing = true;
+            return null;
+        }
+        return new SettingAssetPresentation(metadata.AssetId, metadata.FileName);
     }
 
     private string DescribeSource(ResolvedSetting resolution)
@@ -282,6 +323,111 @@ public sealed class SettingsController(
             return RedirectToAction(nameof(Index), new { organizationId = request.OrganizationId, formCode = request.FormCode });
         }
         return RedirectToAction(nameof(Index), new { organizationId = request.OrganizationId, formCode = request.FormCode });
+    }
+
+    [HttpPost("header-image/upload")]
+    [ValidateAntiForgeryToken]
+    [RequestSizeLimit(2_200_000)]
+    [RequestFormLimits(MultipartBodyLengthLimit = 2_200_000)]
+    public async Task<IActionResult> UploadHeaderImage(
+        IFormFile? file,
+        int organizationId,
+        string formCode,
+        long expectedVersion,
+        long? expectedDraftId)
+    {
+        formCode = FormCodeNormalizer.Normalize(formCode);
+        const string settingKey = "header_image_asset_id";
+        if (!ValidateScope(organizationId, formCode) || !catalog.TryGet(settingKey, out var definition) ||
+            !authorization.CanManage(User, organizationId, definition.IsSensitive))
+        {
+            AuditRejected(organizationId, formCode, "Header-image upload scope or authorization was rejected.");
+            return Forbid();
+        }
+
+        if (file is null)
+        {
+            return RedirectWithImageError(organizationId, formCode, "Choose a PNG, JPEG, or WebP image to upload.");
+        }
+
+        if (file.Length == 0)
+        {
+            return RedirectWithImageError(organizationId, formCode, "Choose a non-empty image file.");
+        }
+
+        if (file.Length > RegistrationFormAssetUploadValidation.MaximumUploadBytes)
+        {
+            return RedirectWithImageError(organizationId, formCode,
+                $"Image files must be {RegistrationFormAssetUploadValidation.MaximumUploadBytes / 1024 / 1024} MB or smaller.");
+        }
+
+        byte[] content;
+        await using (var stream = file.OpenReadStream())
+        await using (var buffer = new MemoryStream())
+        {
+            var chunk = new byte[64 * 1024];
+            while (true)
+            {
+                var read = await stream.ReadAsync(chunk.AsMemory());
+                if (read == 0)
+                {
+                    break;
+                }
+                if (buffer.Length + read > RegistrationFormAssetUploadValidation.MaximumUploadBytes)
+                {
+                    return RedirectWithImageError(organizationId, formCode,
+                        $"Image files must be {RegistrationFormAssetUploadValidation.MaximumUploadBytes / 1024 / 1024} MB or smaller.");
+                }
+                await buffer.WriteAsync(chunk.AsMemory(0, read));
+            }
+            content = buffer.ToArray();
+        }
+
+        if (!RegistrationFormAssetUploadValidation.TryValidate(file.ContentType, content, file.FileName,
+                out var sanitizedFileName, out var validationError))
+        {
+            return RedirectWithImageError(organizationId, formCode, validationError!);
+        }
+
+        // The asset is intentionally stored before the draft mutation. If a concurrent draft conflict
+        // prevents staging, the unreferenced asset is harmless and can be reclaimed by a future cleanup job.
+        var asset = assetRepository.Create(sanitizedFileName, file.ContentType, content);
+        try
+        {
+            var result = repository.SaveToSharedDraft(
+                organizationId,
+                formCode,
+                expectedVersion,
+                expectedDraftId,
+                [new SettingMutation(settingKey, DraftOperation.Upsert, asset.AssetId.ToString(CultureInfo.InvariantCulture))],
+                CatalogByKey,
+                CreateAudit(organizationId, formCode));
+            TempData["SettingsStatus"] = result.DraftCreated
+                ? $"Header image was uploaded and staged in shared draft #{result.DraftId}."
+                : $"Header image was uploaded and staged in shared draft #{result.DraftId}.";
+        }
+        catch (DBConcurrencyException)
+        {
+            return DraftConflictResult(organizationId, formCode);
+        }
+        catch (SqlException exception) when (exception.Number is 1205 or 2601 or 2627)
+        {
+            return DraftConflictResult(organizationId, formCode);
+        }
+        catch (InvalidOperationException exception)
+        {
+            repository.WriteAudit("ValidationFailed", false, CreateAudit(organizationId, formCode), exception.Message, expectedDraftId);
+            return RedirectWithImageError(organizationId, formCode, "The image was uploaded but could not be staged in the settings draft.");
+        }
+
+        return RedirectToAction(nameof(Index), new { organizationId, formCode });
+    }
+
+    private IActionResult RedirectWithImageError(int organizationId, string formCode, string message)
+    {
+        TempData["SettingsError"] = message;
+        TempData["SettingsErrorGroup"] = nameof(SettingCategory.PageAppearanceAndInstructions);
+        return RedirectToAction(nameof(Index), new { organizationId, formCode });
     }
 
     [HttpPost("drafts/{draftId:long}/changes/remove")]

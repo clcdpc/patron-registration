@@ -62,6 +62,8 @@ namespace Clc.PatronRegistration.Web
                     $"PreviewLinkLifetimeHours must be from 1 through {SettingsAdministrationOptions.MaximumPreviewLinkLifetimeHours}.")
                 .ValidateOnStart();
             builder.Services.AddSingleton<ISettingCatalog, SettingCatalog>();
+            builder.Services.AddSingleton<IRegistrationFormAssetRepository, RegistrationFormAssetRepository>();
+            builder.Services.AddSingleton<RegistrationHeaderImageResolver>();
             builder.Services.AddSingleton<IPreviewTokenService, PreviewTokenService>();
             builder.Services.AddSingleton<ISettingsAuthorizationService, SettingsAuthorizationService>();
             builder.Services.AddSingleton<ISettingsAdministrationRepository, SettingsAdministrationRepository>();

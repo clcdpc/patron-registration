@@ -1,0 +1,190 @@
+using System.Text;
+using Clc.PatronRegistration.Administration;
+using Clc.PatronRegistration.Configuration;
+using Clc.PatronRegistration.Web.Controllers;
+using Clc.PatronRegistration.Web.Settings;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
+using Moq;
+
+namespace Clc.PatronRegistration.Tests;
+
+[TestClass]
+public sealed class RegistrationFormAssetTests
+{
+    [TestMethod]
+    public void UploadValidation_AcceptsPngJpegAndWebpSignatures()
+    {
+        var cases = new[]
+        {
+            ("image/png", new byte[] { 0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a }, "header.png"),
+            ("image/jpeg", new byte[] { 0xff, 0xd8, 0xff, 0xe0 }, "header.jpg"),
+            ("image/webp", Encoding.ASCII.GetBytes("RIFFxxxxWEBP"), "header.webp")
+        };
+
+        foreach (var (contentType, content, fileName) in cases)
+        {
+            Assert.IsTrue(RegistrationFormAssetUploadValidation.TryValidate(contentType, content, fileName,
+                out var sanitized, out var error), contentType);
+            Assert.AreEqual(fileName, sanitized);
+            Assert.IsNull(error, contentType);
+        }
+    }
+
+    [TestMethod]
+    public void UploadValidation_RejectsEmptyOversizeSvgUnsupportedAndMismatchedFiles()
+    {
+        Assert.IsFalse(RegistrationFormAssetUploadValidation.TryValidate("image/png", [], "empty.png", out _, out _));
+        Assert.IsFalse(RegistrationFormAssetUploadValidation.TryValidate(
+            "image/png", new byte[RegistrationFormAssetUploadValidation.MaximumUploadBytes + 1], "large.png", out _, out _));
+        Assert.IsFalse(RegistrationFormAssetUploadValidation.TryValidate("image/svg+xml", Encoding.UTF8.GetBytes("<svg/>"), "logo.svg", out _, out _));
+        Assert.IsFalse(RegistrationFormAssetUploadValidation.TryValidate("image/png", Encoding.UTF8.GetBytes("<svg/>"), "logo.png", out _, out _));
+        Assert.IsFalse(RegistrationFormAssetUploadValidation.TryValidate("image/gif", [0x47, 0x49, 0x46, 0x38], "logo.gif", out _, out _));
+        Assert.IsFalse(RegistrationFormAssetUploadValidation.TryValidate("image/jpeg", [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], "logo.png", out _, out _));
+    }
+
+    [TestMethod]
+    public void UploadValidation_SanitizesDisplayNameAndComputesLowercaseSha256()
+    {
+        var content = new byte[] { 1, 2, 3 };
+        Assert.IsTrue(RegistrationFormAssetUploadValidation.TryValidate("image/png",
+            [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], "..\\nested\\header.png", out var name, out _));
+        Assert.AreEqual("header.png", name);
+        Assert.AreEqual("039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81",
+            RegistrationFormAssetUploadValidation.ComputeContentHash(content));
+    }
+
+    [TestMethod]
+    public void ImageDefinitionRequiresPositiveAssetId()
+    {
+        var definition = new SettingCatalog().All.Single(setting => setting.Key == "header_image_asset_id");
+        Assert.AreEqual(SettingValueType.Image, definition.ValueType);
+        Assert.AreEqual(SettingCategory.PageAppearanceAndInstructions, definition.Category);
+        Assert.AreEqual("Header image", definition.DisplayName);
+        StringAssert.Contains(definition.Description, "uploaded image");
+        Assert.IsNotNull(definition.Validate("0"));
+        Assert.IsNotNull(definition.Validate("not-an-id"));
+        Assert.IsNull(definition.Validate("42"));
+        Assert.IsNotNull(definition.Validate(string.Empty));
+    }
+
+    [TestMethod]
+    public void AssetEndpoint_ReturnsBytesTypeEtagAndImmutableCachingHeaders()
+    {
+        var content = new byte[] { 1, 2, 3 };
+        var repository = new Mock<IRegistrationFormAssetRepository>();
+        repository.Setup(item => item.GetMetadata(42)).Returns(new RegistrationFormAssetMetadata(
+            42, "header.png", "image/png", "abc123", DateTime.UtcNow, DateTime.UtcNow));
+        repository.Setup(item => item.Get(42)).Returns(new RegistrationFormAsset(
+            42, "header.png", "image/png", content,
+            "abc123", DateTime.UtcNow, DateTime.UtcNow));
+        var controller = new RegistrationFormAssetsController(repository.Object)
+        {
+            ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() }
+        };
+
+        var result = (FileContentResult)controller.Get(42);
+
+        CollectionAssert.AreEqual(content, result.FileContents);
+        Assert.AreEqual("image/png", result.ContentType);
+        Assert.AreEqual("\"abc123\"", controller.Response.Headers.ETag.ToString());
+        Assert.AreEqual("public, max-age=31536000, immutable", controller.Response.Headers.CacheControl.ToString());
+    }
+
+    [TestMethod]
+    public void AssetEndpoint_ReturnsNotFoundForUnknownAsset()
+    {
+        var repository = new Mock<IRegistrationFormAssetRepository>();
+        repository.Setup(item => item.Get(42)).Returns((RegistrationFormAsset?)null);
+        var controller = new RegistrationFormAssetsController(repository.Object)
+        {
+            ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() }
+        };
+
+        Assert.IsInstanceOfType(controller.Get(42), typeof(NotFoundResult));
+    }
+
+    [TestMethod]
+    public void AssetEndpoint_ReturnsNotModifiedForMatchingEtag()
+    {
+        var repository = new Mock<IRegistrationFormAssetRepository>();
+        repository.Setup(item => item.GetMetadata(42)).Returns(new RegistrationFormAssetMetadata(
+            42, "header.png", "image/png", "abc123", DateTime.UtcNow, DateTime.UtcNow));
+        repository.Setup(item => item.Get(42)).Returns(new RegistrationFormAsset(
+            42, "header.png", "image/png", [1], "abc123", DateTime.UtcNow, DateTime.UtcNow));
+        var context = new DefaultHttpContext();
+        context.Request.Headers.IfNoneMatch = "W/\"abc123\"";
+        var controller = new RegistrationFormAssetsController(repository.Object)
+        {
+            ControllerContext = new ControllerContext { HttpContext = context }
+        };
+
+        var result = (StatusCodeResult)controller.Get(42);
+
+        Assert.AreEqual(StatusCodes.Status304NotModified, result.StatusCode);
+        repository.Verify(item => item.Get(42), Times.Never);
+    }
+
+    [TestMethod]
+    public void HeaderImageResolver_PrefersValidAssetThenFallsBackToLegacyUrl()
+    {
+        var repository = new Mock<IRegistrationFormAssetRepository>();
+        repository.Setup(item => item.GetMetadata(42)).Returns(new RegistrationFormAssetMetadata(
+            42, "header.png", "image/png", "hash", DateTime.UtcNow, DateTime.UtcNow));
+        var resolver = new RegistrationHeaderImageResolver(repository.Object);
+
+        var asset = resolver.Resolve(42, "https://example.test/legacy.png");
+        Assert.IsNotNull(asset);
+        Assert.IsTrue(asset.UsesAsset);
+        Assert.AreEqual(42, asset.AssetId);
+        Assert.IsNull(asset.LegacyUrl);
+
+        var legacy = resolver.Resolve(99, "https://example.test/legacy.png");
+        Assert.IsNotNull(legacy);
+        Assert.IsFalse(legacy.UsesAsset);
+        Assert.AreEqual("https://example.test/legacy.png", legacy.LegacyUrl);
+
+        Assert.IsNull(resolver.Resolve(99, " "));
+    }
+
+    [TestMethod]
+    public void PreviewProvider_ResolvesStagedHeaderAssetThroughNormalSettingOverlay()
+    {
+        var draft = new SettingDraft(7, 3, string.Empty, 0, DraftStatus.Active,
+            [new SettingMutation("header_image_asset_id", DraftOperation.Upsert, "42")]);
+        var preview = new PreviewSettingProvider(draft, 3, new TestCache(), 1);
+
+        Assert.AreEqual(42, preview.HeaderImageAssetId);
+    }
+
+    [TestMethod]
+    public void SharedLayoutUsesAssetRouteBeforeLegacyUrlWithoutEmbeddingContent()
+    {
+        var root = FindRepositoryRoot();
+        var layout = File.ReadAllText(Path.Combine(root, "src/Clc.PatronRegistration.Web/Views/Shared/_Layout.cshtml"));
+
+        StringAssert.Contains(layout, "HeaderImages.Resolve(Settings?.HeaderImageAssetId, Settings?.HeaderImageUrl)");
+        StringAssert.Contains(layout, "RegistrationFormAsset");
+        StringAssert.Contains(layout, "headerImage?.LegacyUrl");
+        Assert.IsFalse(layout.Contains("Convert.ToBase64String", StringComparison.Ordinal));
+    }
+
+    [TestMethod]
+    public void AssetEndpointIsAnonymousButDoesNotExposeAdministrativeOperations()
+    {
+        var endpoint = typeof(RegistrationFormAssetsController).GetCustomAttributes(typeof(Microsoft.AspNetCore.Authorization.AllowAnonymousAttribute), true);
+        Assert.AreEqual(1, endpoint.Length);
+        Assert.IsFalse(typeof(RegistrationFormAssetsController).GetMethods()
+            .Any(method => method.Name.Contains("Upload", StringComparison.OrdinalIgnoreCase)));
+    }
+
+    private static string FindRepositoryRoot()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "src", "Clc.PatronRegistration.sln")))
+        {
+            directory = directory.Parent;
+        }
+        return directory?.FullName ?? throw new InvalidOperationException("Repository root was not found.");
+    }
+}

@@ -25,11 +25,12 @@
          data-search="@searchText"
          data-display-name="@definition.DisplayName"
          data-setting-key="@definition.Key"
-         data-old-value="@(definition.IsSensitive ? "••••••••" : resolution.EffectiveValue)"
+         data-old-value="@(definition.IsSensitive ? "••••••••" : definition.ValueType == SettingValueType.Image ? presentation.CurrentValue : resolution.EffectiveValue)"
          data-sensitive="@definition.IsSensitive.ToString().ToLowerInvariant()"
          data-server-operation="@(Model.DraftOperation?.ToString() ?? string.Empty)"
          data-draft-change="@hasDraftOperation.ToString().ToLowerInvariant()"
          data-applied-operation="@(isRemoveOverride ? "RemoveOverride" : "Upsert")"
+         data-value-type="@definition.ValueType.ToString().ToLowerInvariant()"
          data-presentation-state="@presentation.State.ToString().ToLowerInvariant()">
     <input class="change-index" type="hidden" name="Changes.Index" value="@token" disabled />
     <input class="change-key" type="hidden" name="Changes[@token].Key" value="@definition.Key" disabled />
@@ -62,12 +63,62 @@
         {
             <div>
                 <dt>Draft change</dt>
-                <dd>@(isRemoveOverride ? "Use inherited value" : isDraftUpsert && definition.IsSensitive ? "Set a hidden value" : $"Set “{Model.DraftValue}”")</dd>
+                <dd>@(isRemoveOverride ? "Use inherited value" : isDraftUpsert && definition.IsSensitive ? "Set a hidden value" : isDraftUpsert && definition.ValueType == SettingValueType.Image ? "Set uploaded image" : $"Set “{Model.DraftValue}”")</dd>
             </div>
         }
     </dl>
 
     <div class="setting-editor">
+        @if (definition.ValueType == SettingValueType.Image)
+        {
+            <div class="image-editor" aria-labelledby="@inputId-label">
+                <h3 id="@inputId-label">Header image</h3>
+                <div class="image-preview-group">
+                    <strong>Effective image</strong>
+                    @if (Model.EffectiveAsset is not null)
+                    {
+                        <img class="setting-image-preview" src="@Url.RouteUrl("RegistrationFormAsset", new { id = Model.EffectiveAsset.AssetId })" alt="Current header image" />
+                        <small>@Model.EffectiveAsset.FileName</small>
+                    }
+                    else if (Model.EffectiveAssetMissing)
+                    {
+                        <p class="setting-missing-asset" role="status">The configured uploaded image is missing. The legacy URL, if configured, is used on the public page.</p>
+                    }
+                    else
+                    {
+                        <p>No uploaded image is configured.</p>
+                    }
+                </div>
+                @if (Model.DraftOperation is not null)
+                {
+                    <div class="image-preview-group staged-image-preview">
+                        <strong>Staged preview</strong>
+                        @if (Model.StagedAsset is not null)
+                        {
+                            <img class="setting-image-preview" src="@Url.RouteUrl("RegistrationFormAsset", new { id = Model.StagedAsset.AssetId })" alt="Staged header image" />
+                            <small>@Model.StagedAsset.FileName</small>
+                        }
+                        else if (Model.StagedAssetMissing)
+                        {
+                            <p class="setting-missing-asset" role="status">The staged uploaded image is missing. The public page will use the legacy URL fallback, if any.</p>
+                        }
+                        else
+                        {
+                            <p>No image will be used by the staged setting.</p>
+                        }
+                    </div>
+                }
+                <label for="header-image-file">Choose file</label>
+                <input id="header-image-file" name="file" form="header-image-upload-form" type="file" accept="image/png,image/jpeg,image/webp" />
+                <button type="submit" form="header-image-upload-form">Upload</button>
+                <small>PNG, JPEG, or WebP only; maximum size 2 MB. Uploading adds the replacement to the shared draft.</small>
+            </div>
+            <div class="value-editor" hidden>
+                <input id="@inputId" class="setting-value" name="Changes[@token].Value" type="hidden" value="@editorValue" disabled />
+            </div>
+        }
+        else
+        {
         <div class="value-editor" hidden>
             <label for="@inputId">Value</label>
             @if (definition.ValueType == SettingValueType.Boolean)
@@ -113,7 +164,8 @@
                 }
             }
         </div>
-        <button type="button" class="edit-setting">Change</button>
+        }
+        <button type="button" class="edit-setting" hidden="@(definition.ValueType == SettingValueType.Image)">Change</button>
         @if (canRemoveOverride)
         {
             <button type="button" class="inherit-setting" hidden="@isRemoveOverride">Use inherited value</button>

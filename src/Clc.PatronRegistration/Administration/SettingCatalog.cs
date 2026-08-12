@@ -18,6 +18,7 @@ public enum SettingValueType
     EmailTemplate,
     EmailAddress,
     Uri,
+    Image,
     Enumeration
 }
 
@@ -128,6 +129,7 @@ public sealed record SettingDefinition(string Key, string DisplayName, string De
             SettingValueType.Date or SettingValueType.NullableDate when value.Length > 0 && !DateTime.TryParseExact(value, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out _) => "Enter a date as yyyy-MM-dd.",
             SettingValueType.EmailAddress when !MailAddress.TryCreate(value, out _) => "Enter a valid email address.",
             SettingValueType.Uri when !System.Uri.TryCreate(value, UriKind.Absolute, out var uri) || (uri.Scheme != "https" && uri.Scheme != "http") => "Enter an absolute HTTP or HTTPS URL.",
+            SettingValueType.Image when !int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var assetId) || assetId <= 0 => "Choose a valid uploaded image.",
             SettingValueType.Enumeration when AllowedValues?.Contains(value, StringComparer.OrdinalIgnoreCase) != true => "Select a recognized value.",
             _ when value.Length > 100_000 => "Value is too long.",
             _ => null

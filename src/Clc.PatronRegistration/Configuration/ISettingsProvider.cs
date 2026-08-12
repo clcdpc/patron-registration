@@ -11,9 +11,12 @@ namespace Clc.PatronRegistration.Configuration
         int LibraryId { get; }
         string FormCode { get; }
 
-        [AdminSetting(SettingCategory.PageAppearanceAndInstructions, "Header image URL", "Displays this image in the shared layout above the public registration page.", ValueType = SettingValueType.Uri)]
+        [AdminSetting(SettingCategory.PageAppearanceAndInstructions, "Header image URL", "Legacy external image URL used when no uploaded database-backed header image is configured; uploaded images take precedence.", ValueType = SettingValueType.Uri)]
         [JsonIgnore]
         string HeaderImageUrl { get; }
+        [AdminSetting(SettingCategory.PageAppearanceAndInstructions, "Header image", "Displays the uploaded image above the public registration page.", ValueType = SettingValueType.Image)]
+        [JsonIgnore]
+        int? HeaderImageAssetId { get; }
         [AdminSetting(SettingCategory.PageAppearanceAndInstructions, "Registration agreement content", "Displays this agreement content before the registration form becomes available; blank content skips the agreement step.", ValueType = SettingValueType.LongString)]
         [JsonIgnore]
         string WarningText { get; }
