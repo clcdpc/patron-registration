@@ -56,7 +56,6 @@ namespace Clc.PatronRegistration.Web
                 .AddSingleton<IDbHelper, DbHelper>();
 
             builder.Services.AddSingleton<ICache, MemoryCache>();
-            builder.Services.AddMemoryCache(options => options.SizeLimit = 512);
             builder.Services.AddOptions<SettingsAdministrationOptions>()
                 .Bind(builder.Configuration.GetSection(SettingsAdministrationOptions.SectionName))
                 .Validate(options => SettingsAdministrationOptions.IsValidPreviewLinkLifetime(options.PreviewLinkLifetimeHours),
@@ -65,6 +64,7 @@ namespace Clc.PatronRegistration.Web
             builder.Services.AddSingleton<ISettingCatalog, SettingCatalog>();
             builder.Services.AddSingleton<IRegistrationFormAssetRepository, RegistrationFormAssetRepository>();
             builder.Services.AddSingleton<IRegistrationFormAssetAuthorization, RegistrationFormAssetAuthorization>();
+            builder.Services.AddSingleton<RegistrationHeaderImageMetadataCache>();
             builder.Services.AddSingleton<RegistrationHeaderImageResolver>();
             builder.Services.AddSingleton<IPreviewTokenService, PreviewTokenService>();
             builder.Services.AddSingleton<ISettingsAuthorizationService, SettingsAuthorizationService>();

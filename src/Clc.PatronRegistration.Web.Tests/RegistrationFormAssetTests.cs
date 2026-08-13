@@ -334,7 +334,8 @@ public sealed class RegistrationFormAssetTests
         var repository = new Mock<IRegistrationFormAssetRepository>();
         repository.Setup(item => item.GetMetadata(42)).Returns(new RegistrationFormAssetMetadata(
             42, "header.png", "image/png", "hash", DateTime.UtcNow, DateTime.UtcNow));
-        var resolver = new RegistrationHeaderImageResolver(repository.Object);
+        using var metadataCache = new RegistrationHeaderImageMetadataCache();
+        var resolver = new RegistrationHeaderImageResolver(repository.Object, metadataCache);
 
         var asset = resolver.Resolve(42, "https://example.test/legacy.png");
         Assert.IsNotNull(asset);
@@ -356,12 +357,27 @@ public sealed class RegistrationFormAssetTests
         var repository = new Mock<IRegistrationFormAssetRepository>();
         repository.Setup(item => item.GetMetadata(42)).Returns(new RegistrationFormAssetMetadata(
             42, "header.png", "image/png", "hash", DateTime.UtcNow, DateTime.UtcNow));
-        var resolver = new RegistrationHeaderImageResolver(repository.Object);
+        using var metadataCache = new RegistrationHeaderImageMetadataCache();
+        var resolver = new RegistrationHeaderImageResolver(repository.Object, metadataCache);
 
         Assert.IsTrue(resolver.Resolve(42, null)?.UsesAsset);
         Assert.IsTrue(resolver.Resolve(42, null)?.UsesAsset);
+        Assert.IsNotNull(resolver.Resolve(99, "https://example.test/legacy.png"));
+        Assert.IsNotNull(resolver.Resolve(99, "https://example.test/legacy.png"));
 
         repository.Verify(item => item.GetMetadata(42), Times.Once);
+        repository.Verify(item => item.GetMetadata(99), Times.Once);
+    }
+
+    [TestMethod]
+    public void ProductionConfiguration_UsesDedicatedHeaderMetadataCacheWithoutGlobalSizeLimit()
+    {
+        var root = FindRepositoryRoot();
+        var program = File.ReadAllText(Path.Combine(root, "src/Clc.PatronRegistration.Web/Program.cs"));
+
+        StringAssert.Contains(program, "AddSingleton<RegistrationHeaderImageMetadataCache>();");
+        Assert.IsFalse(program.Contains("AddMemoryCache", StringComparison.Ordinal));
+        Assert.IsFalse(program.Contains("IMemoryCache", StringComparison.Ordinal));
     }
 
     [TestMethod]
@@ -370,7 +386,7 @@ public sealed class RegistrationFormAssetTests
         var root = FindRepositoryRoot();
         var row = File.ReadAllText(Path.Combine(root, "src/Clc.PatronRegistration.Web/Views/Settings/_SettingRow.cshtml"));
 
-        StringAssert.Contains(row, "A legacy external header image is currently active. Upload an image to migrate this setting to database-backed storage.");
+        StringAssert.Contains(row, "A legacy external header image is currently active. Upload an image to replace it with database-backed storage.");
     }
 
     [TestMethod]
