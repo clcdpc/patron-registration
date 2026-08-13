@@ -279,41 +279,46 @@ test("Cancel restores already-applied Upsert and RemoveOverride states", () => {
     assert.equal(removal.controls.inherit.hidden, true);
 });
 
-function imageEditorFixture() {
+function imageEditorFixture({ value = "", operation = "Upsert", dirty = false, ownsOverride = true, hasInherited = true } = {}) {
     const controls = {
-        change: new Control(), inherit: new Control(), apply: new Control(), cancel: new Control(),
-        actions: new Control(), editor: new Control(), message: new Control(), operation: new Control("Upsert"),
-        value: new Control("12"), index: new Control(), key: new Control(), file: new Control(),
-        pending: new Control(), pendingPreview: new Control(), pendingFileName: new Control(), uploadStatus: new Control()
+        uploadTrigger: new Control(), chooseAnother: new Control(), undo: new Control(),
+        inherit: ownsOverride ? new Control() : null, file: new Control(), pending: new Control(),
+        pendingHeading: new Control(), pendingPreview: new Control(), pendingFileName: new Control(), uploadStatus: new Control(),
+        operation: new Control(operation), value: new Control(value), index: new Control(), key: new Control(),
+        summary: new Control(value ? "current.png" : "No image configured"), settingStatus: new Control("Customized")
     };
     controls.file.files = [];
     controls.file.dataset.uploadUrl = "/settings/assets/upload";
     controls.pending.hidden = true;
-    controls.pending.querySelector = (selector) => selector === "img" ? controls.pendingPreview
-        : selector === ".image-pending-file-name" ? controls.pendingFileName
-            : selector === ".image-upload-status" ? controls.uploadStatus : null;
+    controls.pending.querySelector = (selector) => selector === ".image-pending-heading" ? controls.pendingHeading
+        : selector === ".image-pending-preview" || selector === "img" ? controls.pendingPreview
+            : selector === ".image-pending-file-name" ? controls.pendingFileName
+                : selector === ".image-upload-status" ? controls.uploadStatus : null;
     const selectors = {
-        ".edit-setting": controls.change, ".inherit-setting": controls.inherit,
-        ".apply-setting": controls.apply, ".cancel-setting": controls.cancel,
-        ".edit-actions": controls.actions, ".value-editor": controls.editor,
-        ".inheritance-message": controls.message, ".operation": controls.operation,
-        ".setting-value": controls.value, ".change-index": controls.index,
-        ".change-key": controls.key, ".image-file": controls.file,
-        ".image-pending-preview": controls.pending
+        ".image-upload-trigger": controls.uploadTrigger, ".image-choose-another": controls.chooseAnother,
+        ".image-undo-pending": controls.undo, ".image-inherit-action": controls.inherit,
+        ".image-file": controls.file, ".image-pending": controls.pending,
+        ".operation": controls.operation, ".setting-value": controls.value,
+        ".change-index": controls.index, ".change-key": controls.key,
+        ".summary-value": controls.summary, ".setting-status": controls.settingStatus
     };
     const row = {
-        dataset: { valueType: "image", appliedOperation: "Upsert", dirty: "false", displayName: "Header image", oldValue: "12" },
-        querySelector(selector) { return selectors[selector] || null; },
-        querySelectorAll(selector) {
-            if (selector === ".image-file") return [controls.file];
-            return [controls.index, controls.key, controls.operation];
+        dataset: {
+            valueType: "image", appliedOperation: operation, dirty: dirty.toString(), displayName: "Header image",
+            oldValue: value ? "current.png" : "No image configured", imageHasInherited: hasInherited.toString(),
+            imageInheritedPreviewUrl: hasInherited ? "/settings/assets/10" : "",
+            imageInheritedFileName: hasInherited ? "inherited.png" : ""
         },
+        querySelector(selector) { return selectors[selector] || null; },
+        querySelectorAll() { return [controls.index, controls.key, controls.operation]; },
         closest() { return { setAttribute() {} }; },
-        setAttribute() {}
+        setAttribute(name, value) { this[name] = value; }
     };
+    controls.summary.textContent = value ? "current.png" : "No image configured";
+    controls.settingStatus.textContent = "Customized";
     const status = new Control();
     const actions = new Control();
-    actions.querySelector = () => status;
+    actions.querySelector = (selector) => selector === ".pending-changes-status" ? status : null;
     const token = new Control("csrf");
     const organization = new Control("3");
     const formCode = new Control("");
@@ -327,6 +332,9 @@ function imageEditorFixture() {
             return null;
         },
         querySelectorAll(selector) {
+            if (selector === '.setting-row[data-image-uploading="true"]') {
+                return row.dataset.imageUploading === "true" ? [row] : [];
+            }
             return selector.includes('data-dirty="true"')
                 ? [row, ordinaryRow].filter(candidate => candidate.dataset.dirty === "true")
                 : [];
@@ -335,112 +343,217 @@ function imageEditorFixture() {
     return { row, controls, settingsForm, ordinaryRow };
 }
 
-test("image editor uses Change/Apply/Cancel and uploads without mutating settings", async () => {
-    const fixture = imageEditorFixture();
-    const requests = [];
+function imageUploadSandbox(fixture, fetchImplementation) {
     class FormDataStub { constructor() { this.values = []; } append(...value) { this.values.push(value); } }
     const sandbox = {
         document: { querySelector() { return null; }, querySelectorAll() { return []; }, createElement() { return new Control(); } },
         window: {}, globalThis: {}, Event, FormData: FormDataStub,
         URL: { createObjectURL: () => "blob:pending", revokeObjectURL() {} },
-        fetch: async (url, options) => {
-            requests.push({ url, options });
-            const assetId = 90 + requests.length;
-            const fileName = requests.length === 1 ? "replacement.png" : "replacement.webp";
-            return { ok: true, async json() { return { assetId, fileName, previewUrl: `/settings/assets/${assetId}` }; } };
-        }
+        fetch: fetchImplementation
     };
     sandbox.globalThis = sandbox;
     vm.runInNewContext(readFileSync(new URL("../../Clc.PatronRegistration.Web/wwwroot/js/settings.js", import.meta.url), "utf8"), sandbox);
     sandbox.SettingsEditSessions.initializeRow(fixture.row, fixture.settingsForm);
+    return sandbox;
+}
 
-    assert.equal(fixture.controls.change.hidden, false);
-    assert.equal(fixture.controls.editor.hidden, true);
-    assert.equal(fixture.controls.file.disabled, true);
+const flush = () => new Promise(resolve => setImmediate(resolve));
 
-    fixture.controls.change.click();
-    assert.equal(fixture.controls.editor.hidden, false);
-    assert.equal(fixture.controls.file.disabled, false);
+test("image upload focuses the chooser and immediately creates a browser-pending mutation", async () => {
+    const fixture = imageEditorFixture({ value: "" });
+    const requests = [];
+    const sandbox = imageUploadSandbox(fixture, async (url, options) => {
+        requests.push({ url, options });
+        return { ok: true, async json() { return { assetId: 91, fileName: "replacement.png", previewUrl: "/settings/assets/91" }; } };
+    });
+
+    assert.equal(fixture.controls.pending.hidden, true);
+    fixture.controls.uploadTrigger.click();
     assert.equal(focused, fixture.controls.file, "image settings focus the file chooser");
     fixture.controls.file.files = [{ name: "replacement.png" }];
     fixture.controls.file.dispatchEvent(new Event("change"));
-    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(fixture.controls.uploadStatus.textContent, "Uploading image…");
+    assert.equal(fixture.row.dataset.dirty, "false", "asset-only upload does not mutate settings before success");
+    await flush();
 
     assert.equal(requests.length, 1);
     assert.equal(fixture.controls.value.value, "91");
-    assert.equal(fixture.row.dataset.dirty, "false", "uploading does not create a browser setting mutation");
-    assert.equal(fixture.controls.pending.hidden, false);
-    assert.equal(fixture.controls.uploadStatus.textContent, "replacement.png uploaded. Apply to keep this replacement.");
-    await fixture.controls.apply.listeners.click();
-    assert.equal(fixture.row.dataset.dirty, "true");
     assert.equal(fixture.controls.operation.value, "Upsert");
-    assert.equal(fixture.controls.pending.hidden, false, "browser-pending replacement remains visible after Apply");
+    assert.equal(fixture.row.dataset.dirty, "true");
+    assert.equal(fixture.controls.index.disabled, false);
+    assert.equal(fixture.controls.key.disabled, false);
+    assert.equal(fixture.controls.operation.disabled, false);
+    assert.equal(fixture.controls.value.disabled, false);
+    assert.equal(fixture.controls.pending.hidden, false);
     assert.equal(fixture.controls.pendingFileName.textContent, "replacement.png");
     assert.equal(fixture.controls.pendingPreview.src, "/settings/assets/91");
     assert.equal(fixture.controls.uploadStatus.textContent, "replacement.png is ready to save.");
+    assert.equal(fixture.controls.apply, undefined, "image rows do not expose a separate Apply control");
+
     fixture.ordinaryRow.dataset.dirty = "true";
     sandbox.SettingsEditSessions.updatePendingActions(fixture.settingsForm);
     assert.equal(fixture.settingsForm.querySelector(".settings-actions").querySelector(".pending-changes-status").textContent,
-        "2 unsaved browser changes", "image and ordinary edits share the normal Save workflow");
-
-    fixture.controls.change.click();
-    await fixture.controls.cancel.listeners.click();
-    assert.equal(fixture.controls.value.value, "91");
-    assert.equal(fixture.controls.editor.hidden, true);
-    assert.equal(fixture.row.dataset.dirty, "true");
-    assert.equal(fixture.controls.pending.hidden, false, "cancelling a re-edit preserves the applied browser-pending replacement");
-
-    fixture.controls.change.click();
-    fixture.controls.file.files = [{ name: "replacement.webp" }];
-    fixture.controls.file.dispatchEvent(new Event("change"));
-    await new Promise(resolve => setImmediate(resolve));
-    assert.equal(fixture.controls.pendingFileName.textContent, "replacement.webp", "a replacement updates the pending presentation");
-    await fixture.controls.apply.listeners.click();
-    assert.equal(fixture.controls.value.value, "92");
-
-    fixture.controls.inherit.click();
-    await fixture.controls.apply.listeners.click();
-    assert.equal(fixture.controls.operation.value, "RemoveOverride");
-    assert.equal(fixture.controls.pending.hidden, true, "Use inherited value clears the browser-pending replacement");
+        "2 unsaved browser changes", "image and ordinary edits share the page Save workflow");
 });
 
-test("image markup uses the normal setting form and keeps the chooser hidden until Change", () => {
-    const markup = readFileSync(new URL("../../Clc.PatronRegistration.Web/Views/Settings/Index.cshtml", import.meta.url), "utf8");
-    const row = readFileSync(new URL("../../Clc.PatronRegistration.Web/Views/Settings/_SettingRow.cshtml", import.meta.url), "utf8");
-    const script = readFileSync(new URL("../../Clc.PatronRegistration.Web/wwwroot/js/settings.js", import.meta.url), "utf8");
-    assert.doesNotMatch(markup, /header-image-upload-form/);
-    assert.doesNotMatch(row, /header-image-upload-form|data-guard-action/);
-    assert.match(row, /class="edit-setting">Change<\/button>/);
-    assert.match(row, /class="value-editor image-value-editor" hidden/);
-    assert.match(row, /class="image-preview-group image-browser-pending image-pending-preview" hidden/);
-    assert.match(row, /<strong>Pending browser change<\/strong>/);
-    assert.match(script, /imageFile\?\.addEventListener\("change"/);
-    assert.doesNotMatch(script, /change\.hidden = isImage/);
-});
+test("image replacement can be replaced again and Undo restores the server-rendered state", async () => {
+    const fixture = imageEditorFixture({ value: "12" });
+    let requestCount = 0;
+    const sandbox = imageUploadSandbox(fixture, async () => {
+        requestCount++;
+        const assetId = requestCount === 1 ? 91 : 92;
+        const fileName = requestCount === 1 ? "replacement.png" : "replacement.webp";
+        return { ok: true, async json() { return { assetId, fileName, previewUrl: `/settings/assets/${assetId}` }; } };
+    });
 
-test("cancelling an in-flight image upload cannot repopulate the hidden setting", async () => {
-    const fixture = imageEditorFixture();
-    let resolveResponse;
-    class FormDataStub { append() {} }
-    const sandbox = {
-        document: { querySelector() { return null; }, querySelectorAll() { return []; }, createElement() { return new Control(); } },
-        window: {}, globalThis: {}, Event, FormData: FormDataStub,
-        URL: { createObjectURL: () => "blob:pending", revokeObjectURL() {} },
-        fetch: () => new Promise(resolve => { resolveResponse = resolve; })
-    };
-    sandbox.globalThis = sandbox;
-    vm.runInNewContext(readFileSync(new URL("../../Clc.PatronRegistration.Web/wwwroot/js/settings.js", import.meta.url), "utf8"), sandbox);
-    sandbox.SettingsEditSessions.initializeRow(fixture.row, fixture.settingsForm);
-    fixture.controls.change.click();
+    fixture.controls.uploadTrigger.click();
     fixture.controls.file.files = [{ name: "replacement.png" }];
     fixture.controls.file.dispatchEvent(new Event("change"));
-    await fixture.controls.cancel.listeners.click();
+    await flush();
+    assert.equal(fixture.controls.value.value, "91");
+
+    fixture.controls.chooseAnother.click();
+    fixture.controls.file.files = [{ name: "replacement.webp" }];
+    fixture.controls.file.dispatchEvent(new Event("change"));
+    await flush();
+    assert.equal(fixture.controls.value.value, "92");
+    assert.equal(fixture.controls.pendingFileName.textContent, "replacement.webp");
+    assert.equal(fixture.controls.pendingPreview.src, "/settings/assets/92");
+
+    fixture.controls.undo.click();
+    assert.equal(fixture.controls.value.value, "12");
+    assert.equal(fixture.controls.operation.value, "Upsert");
+    assert.equal(fixture.row.dataset.dirty, "false");
+    assert.equal(fixture.controls.index.disabled, true);
+    assert.equal(fixture.controls.pending.hidden, true);
+    assert.equal(fixture.controls.summary.textContent, "current.png");
+});
+
+test("a failed replacement leaves the earlier successful replacement intact", async () => {
+    const fixture = imageEditorFixture({ value: "12" });
+    let requestCount = 0;
+    const sandbox = imageUploadSandbox(fixture, async () => {
+        requestCount++;
+        if (requestCount === 1) return { ok: true, async json() { return { assetId: 91, fileName: "replacement.png", previewUrl: "/settings/assets/91" }; } };
+        return { ok: false, async json() { return { error: "The image is invalid." }; } };
+    });
+
+    fixture.controls.uploadTrigger.click();
+    fixture.controls.file.files = [{ name: "replacement.png" }];
+    fixture.controls.file.dispatchEvent(new Event("change"));
+    await flush();
+    fixture.controls.chooseAnother.click();
+    fixture.controls.file.files = [{ name: "bad.webp" }];
+    fixture.controls.file.dispatchEvent(new Event("change"));
+    await flush();
+
+    assert.equal(fixture.controls.value.value, "91");
+    assert.equal(fixture.controls.pendingFileName.textContent, "replacement.png");
+    assert.match(fixture.controls.uploadStatus.textContent, /replacement.png remains selected/);
+    assert.equal(fixture.row.dataset.dirty, "true");
+});
+
+test("Undo during an image upload prevents a late response from repopulating the row", async () => {
+    const fixture = imageEditorFixture({ value: "12" });
+    let resolveResponse;
+    const sandbox = imageUploadSandbox(fixture, () => new Promise(resolve => { resolveResponse = resolve; }));
+    fixture.controls.uploadTrigger.click();
+    fixture.controls.file.files = [{ name: "replacement.png" }];
+    fixture.controls.file.dispatchEvent(new Event("change"));
+    fixture.controls.undo.click();
 
     resolveResponse({ ok: true, async json() { return { assetId: 91, fileName: "replacement.png", previewUrl: "/settings/assets/91" }; } });
-    await new Promise(resolve => setImmediate(resolve));
+    await flush();
+    assert.equal(fixture.controls.value.value, "12");
+    assert.equal(fixture.row.dataset.dirty, "false");
+    assert.equal(fixture.controls.pending.hidden, true);
+});
+
+test("a replacement selected while an earlier upload is in flight does not leave an invalid pending AssetId after failure", async () => {
+    const fixture = imageEditorFixture({ value: "12" });
+    let firstResolve;
+    let requestCount = 0;
+    const sandbox = imageUploadSandbox(fixture, () => {
+        requestCount++;
+        if (requestCount === 1) return new Promise(resolve => { firstResolve = resolve; });
+        return Promise.resolve({ ok: false, async json() { return { error: "The image is invalid." }; } });
+    });
+
+    fixture.controls.uploadTrigger.click();
+    fixture.controls.file.files = [{ name: "first.png" }];
+    fixture.controls.file.dispatchEvent(new Event("change"));
+    fixture.controls.chooseAnother.click();
+    fixture.controls.file.files = [{ name: "second.png" }];
+    fixture.controls.file.dispatchEvent(new Event("change"));
+    await flush();
 
     assert.equal(fixture.controls.value.value, "12");
     assert.equal(fixture.row.dataset.dirty, "false");
+    assert.equal(fixture.controls.pending.hidden, false, "the retry error remains available");
+    firstResolve({ ok: true, async json() { return { assetId: 91, fileName: "first.png", previewUrl: "/settings/assets/91" }; } });
+    await flush();
+    assert.equal(fixture.controls.value.value, "12");
+    assert.equal(fixture.row.dataset.dirty, "false");
+});
+
+test("image inheritance and removal create immediate RemoveOverride mutations with review text", () => {
+    const inherited = imageEditorFixture({ value: "12", hasInherited: true });
+    initializeRow(inherited.row, inherited.settingsForm);
+    inherited.controls.inherit.click();
+    assert.equal(inherited.controls.operation.value, "RemoveOverride");
+    assert.equal(inherited.controls.value.disabled, true);
+    assert.equal(inherited.row.dataset.dirty, "true");
+    assert.equal(inherited.controls.uploadStatus.textContent, "Use inherited image.");
+    assert.equal(inherited.controls.pendingPreview.src, "/settings/assets/10");
+    assert.equal(inherited.controls.undo.textContent, "Undo image change");
+    const list = { children: [], replaceChildren() { this.children = []; }, append(item) { this.children.push(item); } };
+    assert.equal(populateReviewList(inherited.settingsForm, list), true);
+    assert.match(list.children[0].textContent, /Header image: Use inherited image/);
+    inherited.controls.undo.click();
+    assert.equal(inherited.controls.operation.value, "Upsert");
+    assert.equal(inherited.row.dataset.dirty, "false");
+
+    const removal = imageEditorFixture({ value: "12", hasInherited: false });
+    initializeRow(removal.row, removal.settingsForm);
+    removal.controls.inherit.click();
+    assert.equal(removal.controls.uploadStatus.textContent, "No image will be configured.");
+    const removalList = { children: [], replaceChildren() { this.children = []; }, append(item) { this.children.push(item); } };
+    assert.equal(populateReviewList(removal.settingsForm, removalList), true);
+    assert.match(removalList.children[0].textContent, /Header image: Remove image/);
+});
+
+test("image review describes filenames and blocks invalid AssetIds", () => {
+    const fixture = imageEditorFixture({ value: "91" });
+    fixture.row.dataset.dirty = "true";
+    fixture.row.dataset.imagePendingFileName = "replacement.png";
+    initializeRow(fixture.row, fixture.settingsForm);
+    const list = { children: [], replaceChildren() { this.children = []; }, append(item) { this.children.push(item); } };
+    assert.equal(populateReviewList(fixture.settingsForm, list), true);
+    assert.match(list.children[0].textContent, /Header image: Replace with “replacement\.png”/);
+    assert.doesNotMatch(list.children[0].textContent, /91/);
+
+    fixture.controls.value.value = "not-an-asset";
+    assert.equal(populateReviewList(fixture.settingsForm, list), false);
+    assert.equal(list.children.length, 0);
+});
+
+test("image markup uses a dedicated upload interaction without a generic edit session", () => {
+    const markup = readFileSync(new URL("../../Clc.PatronRegistration.Web/Views/Settings/Index.cshtml", import.meta.url), "utf8");
+    const row = readFileSync(new URL("../../Clc.PatronRegistration.Web/Views/Settings/_SettingRow.cshtml", import.meta.url), "utf8");
+    const script = readFileSync(new URL("../../Clc.PatronRegistration.Web/wwwroot/js/settings.js", import.meta.url), "utf8");
+    const imageBranch = row.match(/@if \(isImage\)[\s\S]*?\n    \}\n    else\n    \{/)?.[0] ?? "";
+    assert.doesNotMatch(markup, /header-image-upload-form/);
+    assert.doesNotMatch(row, /header-image-upload-form|data-guard-action/);
+    assert.match(row, /class="image-upload-trigger">@imageActionLabel<\/button>/);
+    assert.match(row, /class="image-card image-pending image-browser-pending"[^>]*hidden/);
+    assert.match(row, /class="image-choose-another">Choose another image<\/button>/);
+    assert.match(row, /class="image-undo-pending">Undo replacement<\/button>/);
+    assert.match(row, /class="image-inherit-action"/);
+    assert.doesNotMatch(imageBranch, /image-value-editor|class="edit-setting"|class="apply-setting"|class="cancel-setting"/);
+    assert.match(script, /imageFile\?\.addEventListener\("change"/);
+    assert.match(script, /function initializeImageRow/);
+    assert.match(script, /function markUpsert/);
+    assert.doesNotMatch(script, /change\.hidden = isImage/);
 });
 
 test("server RemoveOverride can be replaced by Upsert and Apply restores focus", () => {
@@ -670,7 +783,7 @@ test("shared draft filter markup and CSS keep the checkbox intrinsic", () => {
 
 test("draft summaries identify proposed values without automatically opening rows", () => {
     const row = readFileSync(new URL("../../Clc.PatronRegistration.Web/Views/Settings/_SettingRow.cshtml", import.meta.url), "utf8");
-    assert.match(row, /hasDraftOperation \? \$"Draft: \{presentation\.Value\}"/);
+    assert.match(row, /hasDraftOperation && !isImage \? \$"Draft: \{imageSummary\}"/);
     assert.match(row, /definition\.IsSensitive/);
     assert.doesNotMatch(row, /<details class="setting-row"[^>]*open=/);
 });

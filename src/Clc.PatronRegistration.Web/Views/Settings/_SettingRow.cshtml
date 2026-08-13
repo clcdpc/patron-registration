@@ -6,6 +6,7 @@
     var token = Model.Token;
     var inputId = $"{token}-value";
     var operationId = $"{token}-operation";
+    bool isImage = definition.ValueType == SettingValueType.Image;
     bool hasDraftOperation = Model.DraftOperation.HasValue;
     bool isRemoveOverride = Model.DraftOperation == DraftOperation.RemoveOverride;
     bool isDraftUpsert = Model.DraftOperation == DraftOperation.Upsert;
@@ -16,10 +17,23 @@
     var safeEffective = definition.IsSensitive ? string.Empty : resolution.EffectiveValue;
     var searchText = $"{definition.DisplayName} {definition.Key} {definition.Description} {safeEffective}".ToLowerInvariant();
     var presentation = Clc.PatronRegistration.Web.Models.SettingValuePresentation.ForRow(Model);
-    var collapsedValue = hasDraftOperation ? $"Draft: {presentation.Value}" : presentation.Value;
-    bool isNotSet = presentation.State == Clc.PatronRegistration.Web.Models.SettingPresentationState.NotSet;
+    var imageHasValue = Model.EffectiveAsset is not null || Model.EffectiveAssetMissing;
+    var imageHasStagedValue = Model.StagedAsset is not null || Model.StagedAssetMissing;
+    var imageSummary = !isImage
+        ? presentation.Value
+        : hasDraftOperation
+            ? isRemoveOverride
+                ? Model.HasInheritedValue ? "Use inherited image" : "Remove image"
+                : Model.StagedAsset?.FileName ?? (Model.StagedAssetMissing ? "Missing uploaded image" : "No image configured")
+            : Model.EffectiveAsset?.FileName ?? (Model.EffectiveAssetMissing ? "Missing uploaded image" : "No image configured");
+    var collapsedValue = hasDraftOperation && !isImage ? $"Draft: {imageSummary}" : imageSummary;
+    bool isNotSet = presentation.State == SettingPresentationState.NotSet;
     bool canRemoveOverride = resolution.OwnsOverride;
     var inheritanceMessage = Clc.PatronRegistration.Web.Models.SettingInheritancePresentation.MessageFor(Model);
+    var imageActionLabel = imageHasValue || imageHasStagedValue ? "Replace image" : "Upload image";
+    var imageSource = Model.EffectiveAsset is null
+        ? Model.EffectiveAssetMissing ? "Missing uploaded image" : "No image configured"
+        : resolution.OwnsOverride ? "Customized" : $"Inherited from {Model.SourceDescription}";
 }
 <details class="setting-row"
          data-search="@searchText"
@@ -31,7 +45,10 @@
          data-draft-change="@hasDraftOperation.ToString().ToLowerInvariant()"
          data-applied-operation="@(isRemoveOverride ? "RemoveOverride" : "Upsert")"
          data-value-type="@definition.ValueType.ToString().ToLowerInvariant()"
-         data-presentation-state="@presentation.State.ToString().ToLowerInvariant()">
+         data-presentation-state="@presentation.State.ToString().ToLowerInvariant()"
+         data-image-has-inherited="@Model.HasInheritedValue.ToString().ToLowerInvariant()"
+         data-image-inherited-preview-url="@(Model.InheritedAsset?.PreviewUrl ?? string.Empty)"
+         data-image-inherited-file-name="@(Model.InheritedAsset?.FileName ?? string.Empty)">
     <input class="change-index" type="hidden" name="Changes.Index" value="@token" disabled />
     <input class="change-key" type="hidden" name="Changes[@token].Key" value="@definition.Key" disabled />
     <input id="@operationId" class="operation" type="hidden" name="Changes[@token].Operation"
@@ -41,7 +58,7 @@
         <span class="setting-summary-content">
             <span class="setting-name">@definition.DisplayName</span>
             <span class="summary-value" title="@collapsedValue">@collapsedValue</span>
-            <span class="setting-status">@presentation.Status</span>
+            <span class="setting-status">@(isImage && hasDraftOperation ? "Shared draft" : isImage ? imageSource : presentation.Status)</span>
         </span>
     </summary>
     <div class="setting-content">
@@ -59,82 +76,94 @@
             <dt>Status</dt>
             <dd>@(isNotSet ? "Not configured at the system, library, or branch level" : presentation.Status)</dd>
         </div>
-        @if (hasDraftOperation)
+        @if (hasDraftOperation && !isImage)
         {
             <div>
                 <dt>Draft change</dt>
-                <dd>@(isRemoveOverride ? "Use inherited value" : isDraftUpsert && definition.IsSensitive ? "Set a hidden value" : isDraftUpsert && definition.ValueType == SettingValueType.Image ? "Set uploaded image" : $"Set “{Model.DraftValue}”")</dd>
+                <dd>@(isRemoveOverride ? "Use inherited value" : isDraftUpsert && definition.IsSensitive ? "Set a hidden value" : $"Set “{Model.DraftValue}”")</dd>
             </div>
         }
     </dl>
 
-    <div class="setting-editor">
-        @if (definition.ValueType == SettingValueType.Image)
-        {
-            <div class="image-editor" aria-labelledby="@inputId-label">
-                <div id="@inputId-label" class="image-preview-group image-current-presentation">
-                    <strong>@(Model.Resolution.IsInherited ? "Inherited image" : "Current effective image")</strong>
-                    @if (Model.EffectiveAsset is not null)
+    @if (isImage)
+    {
+        <div class="image-setting" aria-labelledby="@inputId-label">
+            <span id="@inputId-label" class="visually-hidden">@definition.DisplayName image controls</span>
+            <div class="image-card image-current" data-image-current>
+                <strong>Current</strong>
+                @if (Model.EffectiveAsset is not null)
+                {
+                    <img class="setting-image-preview" src="@Model.EffectiveAsset.PreviewUrl" alt="Current header image" />
+                    <small>@Model.EffectiveAsset.FileName</small>
+                    <span class="image-source-status">@imageSource</span>
+                }
+                else if (Model.EffectiveAssetMissing)
+                {
+                    <p class="setting-missing-asset" role="status">The configured uploaded image is missing.</p>
+                    <span class="image-source-status">@imageSource</span>
+                }
+                else
+                {
+                    <p>No image configured.</p>
+                }
+            </div>
+
+            @if (hasDraftOperation)
+            {
+                <div class="image-card image-draft" data-image-draft>
+                    <strong>Shared draft</strong>
+                    @if (isDraftUpsert && Model.StagedAsset is not null)
                     {
-                        <img class="setting-image-preview" src="@Model.EffectiveAsset.PreviewUrl" alt="Current header image" />
-                        <small>@Model.EffectiveAsset.FileName</small>
+                        <img class="setting-image-preview" src="@Model.StagedAsset.PreviewUrl" alt="Shared draft header image" />
+                        <small>@Model.StagedAsset.FileName</small>
+                        <span>Replace with this uploaded image.</span>
                     }
-                    else if (Model.EffectiveAssetMissing)
+                    else if (isDraftUpsert && Model.StagedAssetMissing)
                     {
-                        <p class="setting-missing-asset" role="status">The configured uploaded image is missing.</p>
+                        <p class="setting-missing-asset" role="status">The staged uploaded image is missing.</p>
+                    }
+                    else if (Model.StagedAsset is not null)
+                    {
+                        <img class="setting-image-preview" src="@Model.StagedAsset.PreviewUrl" alt="Inherited shared draft header image" />
+                        <small>@Model.StagedAsset.FileName</small>
+                        <span>Use inherited image.</span>
                     }
                     else
                     {
-                        <p>No uploaded image is configured.</p>
+                        <p>No image will be configured.</p>
+                        <span>@(Model.HasInheritedValue ? "Use inherited image." : "Remove image.")</span>
                     }
                 </div>
-                @if (Model.DraftOperation is not null)
-                {
-                    <div class="image-preview-group staged-image-preview">
-                        <strong>Staged image</strong>
-                        @if (Model.StagedAsset is not null)
-                        {
-                            <img class="setting-image-preview" src="@Model.StagedAsset.PreviewUrl" alt="Staged header image" />
-                            <small>@Model.StagedAsset.FileName</small>
-                        }
-                        else if (Model.StagedAssetMissing)
-                        {
-                            <p class="setting-missing-asset" role="status">The staged uploaded image is missing.</p>
-                        }
-                        else
-                        {
-                            <p>No image will be used by the staged setting.</p>
-                        }
-                    </div>
-                }
-                <div class="image-preview-group image-browser-pending image-pending-preview" hidden>
-                    <strong>Pending browser change</strong>
-                    <img class="setting-image-preview" alt="Pending header image replacement" />
-                    <small class="image-pending-file-name"></small>
-                    <p class="image-upload-status" role="status" aria-live="polite"></p>
-                </div>
-                <div class="value-editor image-value-editor" hidden>
-                    <div class="image-preview-group image-edit-current">
-                        <strong>Current image</strong>
-                        @if (Model.EffectiveAsset is not null)
-                        {
-                            <img class="setting-image-preview" src="@Model.EffectiveAsset.PreviewUrl" alt="Current header image" />
-                            <small>@Model.EffectiveAsset.FileName</small>
-                        }
-                        else
-                        {
-                            <p>No uploaded image is currently configured.</p>
-                        }
-                    </div>
-                    <label for="@inputId-file">Replacement image</label>
-                    <input id="@inputId-file" class="image-file" type="file" accept="image/png,image/jpeg,image/webp" data-upload-url="@Url.Action("UploadHeaderImageAsset", "Settings")" />
-                    <input id="@inputId" class="setting-value" name="Changes[@token].Value" type="hidden" value="@editorValue" disabled />
-                    <small>PNG, JPEG, or WebP only; maximum size 2 MB. The image is uploaded when selected, then saved with this setting when you apply and save the row.</small>
+            }
+
+            <div class="image-card image-pending image-browser-pending" data-image-pending hidden>
+                <strong class="image-pending-heading">Unsaved replacement</strong>
+                <img class="setting-image-preview image-pending-preview" alt="Unsaved header image change" />
+                <small class="image-pending-file-name"></small>
+                <p class="image-upload-status" role="status" aria-live="polite"></p>
+                <div class="image-pending-actions">
+                    <button type="button" class="image-choose-another">Choose another image</button>
+                    <button type="button" class="image-undo-pending">Undo replacement</button>
                 </div>
             </div>
-        }
-        else
-        {
+
+            <div class="image-actions">
+                <button type="button" class="image-upload-trigger">@imageActionLabel</button>
+                <input id="@inputId-file" class="image-file" type="file" accept="image/png,image/jpeg,image/webp"
+                       aria-label="Choose a header image"
+                       data-upload-url="@Url.Action("UploadHeaderImageAsset", "Settings")" />
+                @if (canRemoveOverride)
+                {
+                    <button type="button" class="image-inherit-action" hidden="@isRemoveOverride">@(Model.HasInheritedValue ? "Use inherited image" : "Remove image")</button>
+                }
+            </div>
+            <input id="@inputId" class="setting-value" name="Changes[@token].Value" type="hidden" value="@editorValue" disabled />
+            <small>PNG, JPEG, or WebP only; maximum size 2 MB. The image is uploaded when selected, then saved with the page changes.</small>
+        </div>
+    }
+    else
+    {
+        <div class="setting-editor">
         <div class="value-editor" hidden>
             <label for="@inputId">Value</label>
             @if (definition.ValueType == SettingValueType.Boolean)
@@ -180,7 +209,6 @@
                 }
             }
         </div>
-        }
         <button type="button" class="edit-setting">Change</button>
         @if (canRemoveOverride)
         {
@@ -193,18 +221,19 @@
             <button type="button" class="apply-setting">Apply</button>
             <button type="button" class="cancel-setting">Cancel</button>
         </span>
-        @if (hasDraftOperation && Model.DraftId.HasValue)
-        {
-            <button type="submit"
-                    formaction="@Url.Action("RemoveDraftChange", new { draftId = Model.DraftId })"
-                    name="settingKey"
-                    value="@definition.Key"
-                    data-submit-kind="guarded"
-                    formnovalidate>
-                Remove draft change
-            </button>
-        }
-    </div>
+        </div>
+    }
+    @if (hasDraftOperation && Model.DraftId.HasValue)
+    {
+        <button type="submit"
+                formaction="@Url.Action("RemoveDraftChange", new { draftId = Model.DraftId })"
+                name="settingKey"
+                value="@definition.Key"
+                data-submit-kind="guarded"
+                formnovalidate>
+            Remove draft change
+        </button>
+    }
     <details class="technical-details"><summary>Technical details</summary><p>Setting key: <code>@definition.Key</code></p></details>
     </div>
 </details>

@@ -533,7 +533,7 @@ public class SettingsAdministrationTests
         Assert.IsFalse(index.Contains("No shared draft", StringComparison.Ordinal));
         StringAssert.Contains(css, ".settings-search input[type=\"search\"]");
         Assert.IsFalse(css.Contains(".settings-search input {", StringComparison.Ordinal));
-        StringAssert.Contains(row, "$\"Draft: {presentation.Value}\"");
+        StringAssert.Contains(row, "$\"Draft: {imageSummary}\"");
         StringAssert.Contains(row, "definition.IsSensitive ? string.Empty");
         Assert.IsFalse(row.Contains("<details class=\"setting-row\" open=", StringComparison.Ordinal));
         Assert.IsFalse(row.Contains("tabindex=\"-1\"", StringComparison.Ordinal));
@@ -1376,6 +1376,10 @@ public class SettingsAdministrationTests
 
         Assert.IsFalse(partial.Contains("<select id=\"@operationId\"", StringComparison.Ordinal));
         StringAssert.Contains(partial, "class=\"operation\" type=\"hidden\"");
+        StringAssert.Contains(partial, "class=\"image-setting\"");
+        StringAssert.Contains(partial, "class=\"image-upload-trigger\"");
+        StringAssert.Contains(partial, "class=\"image-choose-another\"");
+        StringAssert.Contains(partial, "class=\"image-undo-pending\"");
         StringAssert.Contains(partial, "class=\"edit-setting\"");
         StringAssert.Contains(partial, ">Change</button>");
         StringAssert.Contains(partial, "class=\"apply-setting\">Apply</button>");
@@ -1385,6 +1389,10 @@ public class SettingsAdministrationTests
         StringAssert.Contains(partial, "canRemoveOverride = resolution.OwnsOverride");
 
         StringAssert.Contains(script, "function beginEdit(candidateOperation)");
+        StringAssert.Contains(script, "function initializeImageRow(row, settingsForm)");
+        StringAssert.Contains(script, "function initializeStandardRow(row, settingsForm)");
+        StringAssert.Contains(script, "function markUpsert(assetId, fileName, previewUrl)");
+        StringAssert.Contains(script, "imageState.status = `${fileName} is ready to save.`");
         StringAssert.Contains(script, "async function applyEdit()");
         StringAssert.Contains(script, "function cancelEdit()");
         StringAssert.Contains(script, "change?.addEventListener(\"click\", () => beginEdit(\"Upsert\"))");
@@ -1407,7 +1415,8 @@ public class SettingsAdministrationTests
 
         StringAssert.Contains(partial, "SettingInheritancePresentation.MessageFor(Model)");
         StringAssert.Contains(script, "row.dataset.sensitive === \"true\"");
-        StringAssert.Contains(script, "row.dataset.valueType === \"image\" ? \"uploaded image\" : value.value");
+        StringAssert.Contains(script, "row.dataset.valueType === \"image\"");
+        StringAssert.Contains(script, "Replace with “${row.dataset.imagePendingFileName || \"uploaded image\"}”");
         StringAssert.Contains(script, "operation.value === \"RemoveOverride\" ? \"Use inherited value\"");
     }
 

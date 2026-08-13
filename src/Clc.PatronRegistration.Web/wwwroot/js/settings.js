@@ -48,7 +48,298 @@
         editStatus.textContent = "";
     }
 
-    function initializeRow(row, settingsForm) {
+    function initializeImageRow(row, settingsForm) {
+        const activeForm = settingsForm || form;
+        const uploadTrigger = row.querySelector(".image-upload-trigger");
+        const chooseAnother = row.querySelector(".image-choose-another");
+        const undo = row.querySelector(".image-undo-pending");
+        const inherit = row.querySelector(".image-inherit-action");
+        const imageFile = row.querySelector(".image-file");
+        const pending = row.querySelector(".image-pending") || row.querySelector(".image-browser-pending");
+        const pendingPreview = pending?.querySelector(".image-pending-preview") || pending?.querySelector("img");
+        const pendingFileName = pending?.querySelector(".image-pending-file-name");
+        const uploadStatus = pending?.querySelector(".image-upload-status");
+        const operation = row.querySelector(".operation");
+        const value = row.querySelector(".setting-value");
+        const summaryValue = row.querySelector(".summary-value");
+        const settingStatus = row.querySelector(".setting-status");
+        const changeIndex = row.querySelector(".change-index");
+        const changeKey = row.querySelector(".change-key");
+        const serverState = {
+            operation: operation?.value || "Upsert",
+            value: value?.value || "",
+            dirty: row.dataset.dirty === "true",
+            appliedOperation: row.dataset.appliedOperation || "Upsert",
+            indexDisabled: changeIndex?.disabled ?? true,
+            keyDisabled: changeKey?.disabled ?? true,
+            operationDisabled: operation?.disabled ?? true,
+            valueDisabled: value?.disabled ?? true,
+            summaryValue: summaryValue?.textContent || "",
+            summaryTitle: summaryValue?.getAttribute?.("title"),
+            status: settingStatus?.textContent || "",
+            inheritHidden: inherit?.hidden ?? true
+        };
+        const imageState = {
+            pendingOperation: null,
+            assetId: null,
+            fileName: "",
+            previewUrl: "",
+            status: "",
+            error: false,
+            objectUrl: null,
+            uploadPromise: null,
+            uploadFallback: null,
+            requestVersion: 0
+        };
+
+        function setBindingEnabled(enabled, selectedOperation) {
+            [changeIndex, changeKey, operation].filter(Boolean).forEach((control) => { control.disabled = !enabled; });
+            if (value) value.disabled = !enabled || selectedOperation === "RemoveOverride";
+        }
+
+        function revokeObjectUrl() {
+            if (imageState.objectUrl && globalThis.URL?.revokeObjectURL) globalThis.URL.revokeObjectURL(imageState.objectUrl);
+            imageState.objectUrl = null;
+        }
+
+        function pendingSnapshot() {
+            if (!imageState.pendingOperation) return null;
+            return {
+                operation: imageState.pendingOperation,
+                assetId: imageState.assetId,
+                fileName: imageState.fileName,
+                previewUrl: imageState.previewUrl,
+                status: imageState.status,
+                error: imageState.error
+            };
+        }
+
+        function setPendingState(snapshot) {
+            revokeObjectUrl();
+            imageState.pendingOperation = snapshot?.operation || null;
+            imageState.assetId = snapshot?.assetId || null;
+            imageState.fileName = snapshot?.fileName || "";
+            imageState.previewUrl = snapshot?.previewUrl || "";
+            imageState.status = snapshot?.status || "";
+            imageState.error = snapshot?.error || false;
+            if (uploadStatus?.classList?.toggle) uploadStatus.classList.toggle("image-upload-error", imageState.error);
+        }
+
+        function renderPending() {
+            if (!pending) return;
+            const visible = Boolean(imageState.pendingOperation || imageState.status);
+            pending.hidden = !visible;
+            const isRemoval = imageState.pendingOperation === "RemoveOverride";
+            const heading = pending.querySelector(".image-pending-heading");
+            if (heading) heading.textContent = isRemoval ? "Unsaved image change" : "Unsaved replacement";
+            if (pendingPreview) {
+                pendingPreview.hidden = !imageState.previewUrl || isRemoval && !imageState.previewUrl;
+                if (imageState.previewUrl) pendingPreview.src = imageState.previewUrl;
+                else pendingPreview.removeAttribute?.("src");
+            }
+            if (pendingFileName) pendingFileName.textContent = imageState.fileName;
+            if (uploadStatus) uploadStatus.textContent = imageState.status || "";
+            if (chooseAnother) chooseAnother.hidden = isRemoval;
+            if (undo) {
+                undo.hidden = !imageState.pendingOperation;
+                undo.textContent = isRemoval ? "Undo image change" : "Undo replacement";
+            }
+        }
+
+        function updateSummary() {
+            if (!summaryValue) return;
+            if (imageState.pendingOperation === "Upsert") {
+                summaryValue.textContent = `Unsaved: ${imageState.fileName || "new image"}`;
+                summaryValue.setAttribute?.("title", summaryValue.textContent);
+                if (settingStatus) settingStatus.textContent = "Unsaved change";
+            } else if (imageState.pendingOperation === "RemoveOverride") {
+                const summary = row.dataset.imageHasInherited === "true" ? "Unsaved: use inherited image" : "Unsaved: remove image";
+                summaryValue.textContent = summary;
+                summaryValue.setAttribute?.("title", summary);
+                if (settingStatus) settingStatus.textContent = "Unsaved change";
+            } else {
+                summaryValue.textContent = serverState.summaryValue;
+                if (serverState.summaryTitle === null) summaryValue.removeAttribute?.("title");
+                else summaryValue.setAttribute?.("title", serverState.summaryTitle);
+                if (settingStatus) settingStatus.textContent = serverState.status;
+            }
+        }
+
+        function updateImagePresentation() {
+            renderPending();
+            updateSummary();
+        }
+
+        function cancelUpload() {
+            imageState.requestVersion++;
+            imageState.uploadPromise = null;
+            imageState.uploadFallback = null;
+            delete row.dataset.imageUploading;
+            revokeObjectUrl();
+        }
+
+        function restoreServerState(errorMessage = "") {
+            cancelUpload();
+            if (imageFile) imageFile.value = "";
+            if (operation) operation.value = serverState.operation;
+            if (value) value.value = serverState.value;
+            row.dataset.dirty = serverState.dirty.toString();
+            row.dataset.appliedOperation = serverState.appliedOperation;
+            if (changeIndex) changeIndex.disabled = serverState.indexDisabled;
+            if (changeKey) changeKey.disabled = serverState.keyDisabled;
+            if (operation) operation.disabled = serverState.operationDisabled;
+            if (value) value.disabled = serverState.valueDisabled;
+            if (inherit) inherit.hidden = serverState.inheritHidden;
+            delete row.dataset.imagePendingFileName;
+            delete row.dataset.imagePendingAction;
+            setPendingState(null);
+            imageState.status = errorMessage;
+            imageState.error = Boolean(errorMessage);
+            updateImagePresentation();
+            updatePendingActions(activeForm);
+        }
+
+        function markUpsert(assetId, fileName, previewUrl) {
+            imageState.pendingOperation = "Upsert";
+            imageState.assetId = assetId;
+            imageState.fileName = fileName;
+            imageState.previewUrl = previewUrl;
+            imageState.error = false;
+            imageState.status = `${fileName} is ready to save.`;
+            if (value) value.value = String(assetId);
+            if (operation) operation.value = "Upsert";
+            row.dataset.appliedOperation = "Upsert";
+            row.dataset.dirty = "true";
+            row.dataset.imagePendingFileName = fileName;
+            row.dataset.imagePendingAction = "Upsert";
+            setBindingEnabled(true, "Upsert");
+            if (inherit) inherit.hidden = false;
+            updateImagePresentation();
+            updatePendingActions(activeForm);
+        }
+
+        async function uploadImage(file) {
+            if (!imageFile?.dataset.uploadUrl || !file) return false;
+            const currentPending = imageState.pendingOperation === "RemoveOverride" || imageState.assetId
+                ? pendingSnapshot()
+                : null;
+            const fallback = imageState.uploadFallback || currentPending;
+            cancelUpload();
+            imageState.uploadFallback = fallback;
+            imageState.pendingOperation = "Upsert";
+            imageState.assetId = fallback?.assetId || null;
+            imageState.fileName = file.name;
+            imageState.previewUrl = globalThis.URL?.createObjectURL?.(file) || "";
+            imageState.status = "Uploading image…";
+            imageState.error = false;
+            const requestVersion = ++imageState.requestVersion;
+            row.dataset.imageUploading = "true";
+            updateImagePresentation();
+
+            const payload = new FormData();
+            payload.append("file", file, file.name);
+            const token = activeForm?.querySelector?.('input[name="__RequestVerificationToken"]');
+            const organization = activeForm?.querySelector?.('input[name="OrganizationId"]');
+            const formCode = activeForm?.querySelector?.('input[name="FormCode"]');
+            if (token) payload.append("__RequestVerificationToken", token.value);
+            if (organization) payload.append("organizationId", organization.value);
+            if (formCode) payload.append("formCode", formCode.value);
+
+            imageState.uploadPromise = fetch(imageFile.dataset.uploadUrl, { method: "POST", body: payload })
+                .then(async (response) => {
+                    if (requestVersion !== imageState.requestVersion) return false;
+                    let result = null;
+                    try { result = await response.json(); } catch { /* use generic response error */ }
+                    const assetId = Number(result?.assetId);
+                    if (!response.ok || !Number.isInteger(assetId) || assetId <= 0) {
+                        throw new Error(result?.error || "The image could not be uploaded.");
+                    }
+                    const safeFileName = result.fileName || file.name;
+                    const previewUrl = result.previewUrl || imageState.previewUrl;
+                    if (result.previewUrl) revokeObjectUrl();
+                    imageState.uploadFallback = null;
+                    delete row.dataset.imageUploading;
+                    markUpsert(assetId, safeFileName, previewUrl);
+                    return true;
+                })
+                .catch((error) => {
+                    if (requestVersion !== imageState.requestVersion) return false;
+                    const previous = imageState.uploadFallback;
+                    const message = error.message || "The image could not be uploaded.";
+                    if (previous?.operation) {
+                        setPendingState(previous);
+                        imageState.status = previous.operation === "RemoveOverride"
+                            ? "The replacement could not be uploaded; the pending image change remains selected."
+                            : `The replacement could not be uploaded; ${previous.fileName} remains selected.`;
+                        imageState.error = true;
+                        if (value && previous.assetId) value.value = String(previous.assetId);
+                        if (operation) operation.value = previous.operation;
+                        row.dataset.imagePendingAction = previous.operation;
+                        row.dataset.dirty = "true";
+                        row.dataset.appliedOperation = previous.operation;
+                        if (previous.operation === "Upsert") row.dataset.imagePendingFileName = previous.fileName;
+                        else delete row.dataset.imagePendingFileName;
+                        setBindingEnabled(true, previous.operation);
+                    } else {
+                        restoreServerState(message);
+                        return false;
+                    }
+                    delete row.dataset.imageUploading;
+                    imageState.uploadFallback = null;
+                    updateImagePresentation();
+                    updatePendingActions(activeForm);
+                    return false;
+                })
+                .finally(() => {
+                    if (requestVersion === imageState.requestVersion) imageState.uploadPromise = null;
+                });
+            return imageState.uploadPromise;
+        }
+
+        function openFileChooser() {
+            imageFile?.focus?.();
+            imageFile?.click?.();
+        }
+
+        function selectInheritedOrRemove() {
+            cancelUpload();
+            const hasInherited = row.dataset.imageHasInherited === "true";
+            const previewUrl = row.dataset.imageInheritedPreviewUrl || "";
+            const fileName = row.dataset.imageInheritedFileName || (hasInherited ? "Inherited image" : "");
+            imageState.pendingOperation = "RemoveOverride";
+            imageState.assetId = null;
+            imageState.fileName = fileName;
+            imageState.previewUrl = previewUrl;
+            imageState.status = hasInherited ? "Use inherited image." : "No image will be configured.";
+            imageState.error = false;
+            if (operation) operation.value = "RemoveOverride";
+            row.dataset.appliedOperation = "RemoveOverride";
+            row.dataset.dirty = "true";
+            row.dataset.imagePendingAction = "RemoveOverride";
+            delete row.dataset.imagePendingFileName;
+            setBindingEnabled(true, "RemoveOverride");
+            updateImagePresentation();
+            updatePendingActions(activeForm);
+        }
+
+        function undoImageChange() {
+            restoreServerState();
+        }
+
+        row._discardPendingChange = undoImageChange;
+        uploadTrigger?.addEventListener("click", openFileChooser);
+        chooseAnother?.addEventListener("click", openFileChooser);
+        undo?.addEventListener("click", undoImageChange);
+        inherit?.addEventListener("click", selectInheritedOrRemove);
+        imageFile?.addEventListener("change", () => {
+            const selected = imageFile.files?.[0];
+            imageFile.value = "";
+            if (selected) uploadImage(selected);
+        });
+        updateImagePresentation();
+    }
+
+    function initializeStandardRow(row, settingsForm) {
         const change = row.querySelector(".edit-setting");
         const inherit = row.querySelector(".inherit-setting");
         const apply = row.querySelector(".apply-setting");
@@ -62,23 +353,6 @@
         const summaryValue = row.querySelector(".summary-value");
         const settingStatus = row.querySelector(".setting-status");
         const reveal = row.querySelector(".reveal-secret");
-        const isImage = row.dataset.valueType === "image";
-        const imageFile = row.querySelector(".image-file");
-        const imagePending = row.querySelector(".image-browser-pending") || row.querySelector(".image-pending-preview");
-        const imagePendingPreview = imagePending?.querySelector("img");
-        const imagePendingFileName = imagePending?.querySelector(".image-pending-file-name");
-        const imageUploadStatus = imagePending?.querySelector(".image-upload-status");
-        let imageState = {
-            originalValue: value?.value || "",
-            assetId: null,
-            fileName: "",
-            previewUrl: "",
-            status: "",
-            uploadPromise: null,
-            objectUrl: null,
-            requestVersion: 0,
-            uploadFallback: null
-        };
         const serverState = {
             operation: operation.value,
             value: value.value,
@@ -102,140 +376,14 @@
             row.querySelectorAll(".change-index, .change-key, .operation")
                 .forEach((control) => { control.disabled = !enabled; });
             value.disabled = !enabled || selectedOperation === "RemoveOverride";
-            if (imageFile) imageFile.disabled = !enabled || selectedOperation === "RemoveOverride";
         }
 
-        function imagePendingSnapshot() {
-            return {
-                assetId: imageState.assetId,
-                fileName: imageState.fileName,
-                previewUrl: imageState.previewUrl,
-                status: imageUploadStatus?.textContent || ""
-            };
-        }
-
-        function renderImagePending() {
-            if (!imagePending) return;
-            const visible = Boolean(imageState.assetId || imageState.fileName || imageState.previewUrl);
-            imagePending.hidden = !visible;
-            if (imagePendingPreview) {
-                if (imageState.previewUrl) imagePendingPreview.src = imageState.previewUrl;
-                else imagePendingPreview.removeAttribute("src");
-            }
-            if (imagePendingFileName) imagePendingFileName.textContent = imageState.fileName;
-            if (imageUploadStatus) imageUploadStatus.textContent = imageState.status || "";
-        }
-
-        function clearImagePending() {
-            imageState.requestVersion++;
-            if (imageState.objectUrl && globalThis.URL?.revokeObjectURL) globalThis.URL.revokeObjectURL(imageState.objectUrl);
-            imageState.objectUrl = null;
-            if (imageFile) imageFile.value = "";
-            imageState.assetId = null;
-            imageState.fileName = "";
-            imageState.previewUrl = "";
-            imageState.status = "";
-            imageState.uploadPromise = null;
-            imageState.uploadFallback = null;
-            renderImagePending();
-        }
-
-        function setImageStatus(message, isError = false) {
-            if (!imagePending) return;
-            imagePending.hidden = false;
-            if (imageUploadStatus) {
-                imageUploadStatus.textContent = message;
-                imageUploadStatus.classList?.toggle("image-upload-error", isError);
-            }
-            imageState.status = message;
-        }
-
-        function restoreImagePending(snapshot) {
-            if (imageState.objectUrl && globalThis.URL?.revokeObjectURL) globalThis.URL.revokeObjectURL(imageState.objectUrl);
-            imageState.objectUrl = null;
-            if (imageFile) imageFile.value = "";
-            imageState.requestVersion++;
-            imageState.uploadPromise = null;
-            imageState.uploadFallback = null;
-            imageState.assetId = snapshot?.assetId || null;
-            imageState.fileName = snapshot?.fileName || "";
-            imageState.previewUrl = snapshot?.previewUrl || "";
-            imageState.status = snapshot?.status || "";
-            imageUploadStatus?.classList?.toggle("image-upload-error", false);
-            renderImagePending();
-        }
-
-        async function uploadImage(file) {
-            if (!isImage || !imageFile?.dataset.uploadUrl) return false;
-            imageState.uploadFallback = imagePendingSnapshot();
-            if (imageState.objectUrl && globalThis.URL?.revokeObjectURL) globalThis.URL.revokeObjectURL(imageState.objectUrl);
-            imageState.objectUrl = globalThis.URL?.createObjectURL?.(file) || null;
-            imageState.assetId = null;
-            imageState.fileName = file.name;
-            imageState.previewUrl = imageState.objectUrl || "";
-            setImageStatus("Uploading image…");
-            renderImagePending();
-            const requestVersion = ++imageState.requestVersion;
-
-            const payload = new FormData();
-            payload.append("file", file, file.name);
-            const token = settingsForm.querySelector('input[name="__RequestVerificationToken"]');
-            const organization = settingsForm.querySelector('input[name="OrganizationId"]');
-            const formCode = settingsForm.querySelector('input[name="FormCode"]');
-            if (token) payload.append("__RequestVerificationToken", token.value);
-            if (organization) payload.append("organizationId", organization.value);
-            if (formCode) payload.append("formCode", formCode.value);
-
-            imageState.uploadPromise = fetch(imageFile.dataset.uploadUrl, { method: "POST", body: payload })
-                .then(async (response) => {
-                    if (requestVersion !== imageState.requestVersion) return false;
-                    let result = null;
-                    try { result = await response.json(); } catch { /* use generic response error */ }
-                    if (!response.ok || !result?.assetId) throw new Error(result?.error || "The image could not be uploaded.");
-                    value.value = String(result.assetId);
-                    imageState.assetId = result.assetId;
-                    if (result.previewUrl) {
-                        imageState.previewUrl = result.previewUrl;
-                        if (imageState.objectUrl && globalThis.URL?.revokeObjectURL) globalThis.URL.revokeObjectURL(imageState.objectUrl);
-                        imageState.objectUrl = null;
-                    }
-                    imageState.uploadFallback = null;
-                    setImageStatus(`${result.fileName || file.name} uploaded. Apply to keep this replacement.`);
-                    imageState.fileName = result.fileName || file.name;
-                    renderImagePending();
-                    return true;
-                })
-                .catch((error) => {
-                    if (requestVersion !== imageState.requestVersion) return false;
-                    const fallback = imageState.uploadFallback;
-                    if (fallback?.assetId) {
-                        value.value = String(fallback.assetId);
-                        restoreImagePending(fallback);
-                        setImageStatus(`The replacement could not be uploaded; ${fallback.fileName} remains selected.`, true);
-                    } else {
-                        imageState.assetId = null;
-                        value.value = imageState.originalValue;
-                        setImageStatus(error.message || "The image could not be uploaded.", true);
-                    }
-                    imageState.uploadFallback = null;
-                    renderImagePending();
-                    return false;
-                })
-                .finally(() => {
-                    if (requestVersion === imageState.requestVersion) imageState.uploadPromise = null;
-                });
-            return imageState.uploadPromise;
-        }
-
-        function showNormalState(preserveImagePending = false) {
+        function showNormalState() {
             change.hidden = false;
             if (inherit) inherit.hidden = row.dataset.appliedOperation === "RemoveOverride";
             actions.hidden = true;
             editor.hidden = true;
             message.hidden = true;
-            if (imageFile) imageFile.disabled = true;
-            if (isImage && !preserveImagePending) clearImagePending();
-            if (isImage && preserveImagePending) renderImagePending();
         }
 
         function beginEdit(candidateOperation) {
@@ -248,14 +396,9 @@
                 operationDisabled: operation.disabled,
                 valueDisabled: value.disabled
             };
-            if (isImage) {
-                imageState.originalValue = value.value;
-                session.imagePending = imagePendingSnapshot();
-            }
             row.dataset.candidateOperation = candidateOperation;
             setBindingEnabled(false, candidateOperation);
             value.disabled = candidateOperation === "RemoveOverride";
-            if (imageFile) imageFile.disabled = candidateOperation === "RemoveOverride";
             change.hidden = true;
             if (inherit) inherit.hidden = true;
             actions.hidden = false;
@@ -264,8 +407,7 @@
             row.setAttribute("open", "");
             row.closest(".setting-category, .dynamic-settings")?.setAttribute("open", "");
             if (candidateOperation === "Upsert") {
-                if (isImage) imageFile?.focus();
-                else value.focus();
+                value.focus();
             } else {
                 apply.focus();
             }
@@ -274,24 +416,14 @@
         async function applyEdit() {
             const candidateOperation = row.dataset.candidateOperation;
             if (!session || !candidateOperation) return;
-            if (isImage && candidateOperation === "Upsert") {
-                if (imageState.uploadPromise) await imageState.uploadPromise;
-                if (!imageState.assetId) {
-                    setImageStatus("Choose a valid replacement image before applying.", true);
-                    return;
-                }
-            }
             if (candidateOperation === "Upsert" && !value.reportValidity()) return;
             operation.value = candidateOperation;
             row.dataset.appliedOperation = candidateOperation;
             row.dataset.dirty = "true";
-            if (isImage && candidateOperation === "Upsert") {
-                setImageStatus(`${imageState.fileName || "Image"} is ready to save.`);
-            }
             setBindingEnabled(true, candidateOperation);
             delete row.dataset.candidateOperation;
             session = null;
-            showNormalState(isImage && candidateOperation === "Upsert");
+            showNormalState();
             clearEditSessionStatus();
             updatePendingActions(settingsForm);
             change.focus();
@@ -310,10 +442,9 @@
             row.querySelector(".change-key").disabled = session.keyDisabled;
             operation.disabled = session.operationDisabled;
             value.disabled = session.valueDisabled;
-            if (isImage) restoreImagePending(session.imagePending);
             delete row.dataset.candidateOperation;
             session = null;
-            showNormalState(isImage && restoreDirty);
+            showNormalState();
             clearEditSessionStatus();
             updatePendingActions(settingsForm);
             change.focus();
@@ -329,7 +460,6 @@
             row.querySelector(".change-key").disabled = serverState.keyDisabled;
             operation.disabled = serverState.operationDisabled;
             value.disabled = serverState.valueDisabled;
-            if (isImage) clearImagePending();
             if (summaryValue) {
                 summaryValue.textContent = serverState.summaryValue;
                 if (serverState.summaryTitle === null) summaryValue.removeAttribute?.("title");
@@ -352,11 +482,15 @@
         inherit?.addEventListener("click", () => beginEdit("RemoveOverride"));
         apply?.addEventListener("click", applyEdit);
         cancel?.addEventListener("click", cancelEdit);
-        imageFile?.addEventListener("change", () => {
-            const selected = imageFile.files?.[0];
-            if (selected) uploadImage(selected);
-        });
         showNormalState();
+    }
+
+    function initializeRow(row, settingsForm) {
+        if (row.dataset.valueType === "image") {
+            initializeImageRow(row, settingsForm);
+            return;
+        }
+        initializeStandardRow(row, settingsForm);
     }
 
     document.querySelectorAll(".setting-row").forEach((row) => initializeRow(row, form));
@@ -364,28 +498,54 @@
 
     function blockActiveEdit(settingsForm, status) {
         const activeRow = settingsForm.querySelector('.setting-row[data-candidate-operation]');
-        if (!activeRow) return false;
-        activeRow.setAttribute("open", "");
-        activeRow.closest(".setting-category, .dynamic-settings")?.setAttribute("open", "");
-        status.textContent = "Apply or Cancel the active setting edit before saving.";
+        if (activeRow) {
+            activeRow.setAttribute("open", "");
+            activeRow.closest(".setting-category, .dynamic-settings")?.setAttribute("open", "");
+            status.textContent = "Apply or Cancel the active setting edit before saving.";
+            status.hidden = false;
+            status.focus();
+            activeRow.querySelector(".apply-setting").focus();
+            return true;
+        }
+        const uploadingRow = [...(settingsForm.querySelectorAll?.('.setting-row[data-image-uploading="true"]') || [])]
+            .find(row => row.dataset.valueType === "image");
+        if (!uploadingRow) return false;
+        uploadingRow.setAttribute("open", "");
+        status.textContent = "Wait for the image upload to finish before saving.";
         status.hidden = false;
         status.focus();
-        activeRow.querySelector(".apply-setting").focus();
+        uploadingRow.querySelector(".image-upload-trigger")?.focus();
         return true;
     }
 
     function populateReviewList(settingsForm, list) {
         list.replaceChildren();
+        let valid = true;
         settingsForm.querySelectorAll('.setting-row[data-dirty="true"]').forEach((row) => {
             const value = row.querySelector(".setting-value");
             const operation = row.querySelector(".operation");
+            if (row.dataset.valueType === "image") {
+                const assetId = Number(value?.value);
+                if (operation?.value === "Upsert" && (!Number.isInteger(assetId) || assetId <= 0)) {
+                    valid = false;
+                    return;
+                }
+                const item = document.createElement("li");
+                const description = operation?.value === "RemoveOverride"
+                    ? row.dataset.imageHasInherited === "true" ? "Use inherited image" : "Remove image"
+                    : `Replace with “${row.dataset.imagePendingFileName || "uploaded image"}”`;
+                item.textContent = `${row.dataset.displayName}: ${description}`;
+                list.append(item);
+                return;
+            }
             const item = document.createElement("li");
             const newValue = row.dataset.sensitive === "true"
                 ? "••••••••"
-                : row.dataset.valueType === "image" ? "uploaded image" : value.value;
+                : value.value;
             item.textContent = `${row.dataset.displayName}: ${operation.value === "RemoveOverride" ? "Use inherited value" : `Set to “${newValue}”`} (current value: “${row.dataset.oldValue || "not configured"}”).`;
             list.append(item);
         });
+        return valid;
     }
 
     function handleSaveAttempt(event, settingsForm, status, reviewDialog, isApproved) {
@@ -398,7 +558,12 @@
 
         event.preventDefault();
         const list = reviewDialog.querySelector("ul");
-        populateReviewList(settingsForm, list);
+        if (!populateReviewList(settingsForm, list)) {
+            status.textContent = "Choose a valid uploaded image before saving.";
+            status.hidden = false;
+            status.focus();
+            return "invalid";
+        }
         if (!list.children.length) {
             window.alert("No settings have changed.");
             return "empty";
@@ -590,7 +755,12 @@
         if (approved) { submitting = true; return; }
         event.preventDefault();
         const list = dialog.querySelector("ul");
-        populateReviewList(form, list);
+        if (!populateReviewList(form, list)) {
+            editStatus.textContent = "Choose a valid uploaded image before saving.";
+            editStatus.hidden = false;
+            editStatus.focus();
+            return;
+        }
         if (!list.children.length) return;
         dialog._trigger = event.submitter;
         dialog.showModal();
