@@ -351,6 +351,29 @@ public sealed class RegistrationFormAssetTests
     }
 
     [TestMethod]
+    public void HeaderImageResolver_CachesAssetMetadataForTheCacheLifetime()
+    {
+        var repository = new Mock<IRegistrationFormAssetRepository>();
+        repository.Setup(item => item.GetMetadata(42)).Returns(new RegistrationFormAssetMetadata(
+            42, "header.png", "image/png", "hash", DateTime.UtcNow, DateTime.UtcNow));
+        var resolver = new RegistrationHeaderImageResolver(repository.Object);
+
+        Assert.IsTrue(resolver.Resolve(42, null)?.UsesAsset);
+        Assert.IsTrue(resolver.Resolve(42, null)?.UsesAsset);
+
+        repository.Verify(item => item.GetMetadata(42), Times.Once);
+    }
+
+    [TestMethod]
+    public void SettingsImageRow_ExplainsLegacyMigrationPath()
+    {
+        var root = FindRepositoryRoot();
+        var row = File.ReadAllText(Path.Combine(root, "src/Clc.PatronRegistration.Web/Views/Settings/_SettingRow.cshtml"));
+
+        StringAssert.Contains(row, "A legacy external header image is currently active. Upload an image to migrate this setting to database-backed storage.");
+    }
+
+    [TestMethod]
     public void PreviewProvider_ResolvesStagedHeaderAssetThroughNormalSettingOverlay()
     {
         var draft = new SettingDraft(7, 3, string.Empty, 0, DraftStatus.Active,

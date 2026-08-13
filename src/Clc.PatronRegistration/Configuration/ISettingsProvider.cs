@@ -11,7 +11,6 @@ namespace Clc.PatronRegistration.Configuration
         int LibraryId { get; }
         string FormCode { get; }
 
-        [AdminSetting(SettingCategory.PageAppearanceAndInstructions, "Header image URL", "Legacy external image URL used when no uploaded database-backed header image is configured; uploaded images take precedence.", ValueType = SettingValueType.Uri)]
         [JsonIgnore]
         string HeaderImageUrl { get; }
         [AdminSetting(SettingCategory.PageAppearanceAndInstructions, "Header image", "Displays the uploaded image above the public registration page.", ValueType = SettingValueType.Image)]

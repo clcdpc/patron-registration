@@ -16,7 +16,7 @@ public class SettingsAdministrationTests
     // Compatibility contract: this list intentionally remains independent of provider attributes and catalog construction.
     private static readonly string[] ExpectedOrdinaryKeys =
     [
-        "header_image_url", "header_image_asset_id", "css_file", "warning_text", "custom_form_footer_html", "registration_text", "registration_form_header",
+        "header_image_asset_id", "css_file", "warning_text", "custom_form_footer_html", "registration_text", "registration_form_header",
         "show_dl", "hide_gender", "enable_age_warning", "age_warning_text", "enable_age_block", "age_block_text", "hide_ereceipt", "na_gender_text",
         "normalize_to_uppercase", "dl_format", "enable_legal_name_checkbox", "drivers_license_button_text",
         "drivers_license_prompt_text", "agreement_confirm_button_text", "agreement_cancel_button_text", "school_info_field_legend",
@@ -41,7 +41,6 @@ public class SettingsAdministrationTests
     private static readonly IReadOnlyDictionary<string, SettingValueType> ExpectedSemanticValueTypes =
         new Dictionary<string, SettingValueType>(StringComparer.OrdinalIgnoreCase)
         {
-            ["header_image_url"] = SettingValueType.Uri,
             ["header_image_asset_id"] = SettingValueType.Image,
             ["warning_text"] = SettingValueType.LongString,
             ["custom_form_footer_html"] = SettingValueType.Html,
@@ -227,7 +226,6 @@ public class SettingsAdministrationTests
         var properties = AdministrationProperties().ToDictionary(property => property.Name);
         var expected = new Dictionary<string, SettingValueType>
         {
-            [nameof(ISettingProvider.HeaderImageUrl)] = SettingValueType.Uri,
             [nameof(ISettingProvider.WarningText)] = SettingValueType.LongString,
             [nameof(ISettingProvider.CustomFormFooterHtml)] = SettingValueType.Html,
             [nameof(ISettingProvider.EcardWelcomeEmailTemplateText)] = SettingValueType.EmailTemplate,
@@ -323,7 +321,7 @@ public class SettingsAdministrationTests
     public void Catalog_UsesStaffFriendlyAcronymsAndAlphabetizesDynamicGroups()
     {
         var catalog = new SettingCatalog().All;
-        foreach (var expected in new[] { "CSS file", "Header image URL", "Custom form footer HTML", "Additional post-registration record set", "Attempt PAPI duplicate workaround", "E-card patron code" })
+        foreach (var expected in new[] { "CSS file", "Header image", "Custom form footer HTML", "Additional post-registration record set", "Attempt PAPI duplicate workaround", "E-card patron code" })
             Assert.IsTrue(catalog.Any(setting => setting.DisplayName == expected), expected);
         foreach (var group in new[] { SettingGroup.Alert, SettingGroup.Label, SettingGroup.Require })
         {
@@ -392,7 +390,9 @@ public class SettingsAdministrationTests
         StringAssert.Contains(view, "(SettingGroup.Require, \"Required fields\")");
         StringAssert.Contains(view, "if (rows.Count == 0) { continue; }");
         Assert.AreEqual(2, Directory.GetFiles(Path.Combine(root, "src"), "*.cs", SearchOption.AllDirectories)
-            .Where(path => !path.Contains(".Web.Tests", StringComparison.Ordinal))
+            .Where(path => !path.Contains(".Web.Tests", StringComparison.Ordinal)
+                && !path.Contains("\\obj\\", StringComparison.OrdinalIgnoreCase)
+                && !path.Contains("\\bin\\", StringComparison.OrdinalIgnoreCase))
             .SelectMany(File.ReadLines).Count(line => line.Contains("ShowValidationMessageSettings", StringComparison.Ordinal)) +
             view.Split('\n').Count(line => line.Contains("ShowValidationMessageSettings", StringComparison.Ordinal)),
             "The toggle must remain local to the Razor presentation and occur only in its declaration and conditional.");
@@ -1496,12 +1496,37 @@ public class SettingsAdministrationTests
         var interfaceProperties = typeof(ISettingProvider).GetProperties(BindingFlags.Instance | BindingFlags.Public);
         var providerProperties = typeof(DbSettingProvider).GetProperties(BindingFlags.Instance | BindingFlags.Public);
 
-        Assert.AreEqual(79, AdministrationProperties().Length);
+        Assert.AreEqual(78, AdministrationProperties().Length);
         Assert.IsFalse(providerProperties.Any(property => property.GetCustomAttribute<AdminSettingAttribute>() is not null));
         Assert.IsTrue(SettingPropertyMetadataCache.GetAll().Where(metadata => metadata.Administration is not null)
             .All(metadata => metadata.Property.DeclaringType == typeof(ISettingProvider)));
         Assert.IsNotNull(interfaceProperties.Single(property => property.Name == nameof(ISettingProvider.EnableAgeBlock))
             .GetCustomAttribute<AdminSettingAttribute>());
+
+        var legacyHeaderUrl = interfaceProperties.Single(property => property.Name == nameof(ISettingProvider.HeaderImageUrl));
+        Assert.IsNull(legacyHeaderUrl.GetCustomAttribute<AdminSettingAttribute>());
+        Assert.IsFalse(new SettingCatalog().TryGet("header_image_url", out _));
+        Assert.AreEqual("header_image_url", SettingPropertyMetadataCache.Get(nameof(ISettingProvider.HeaderImageUrl)).DatabaseKey);
+    }
+
+    [TestMethod]
+    public void HeaderImageUrl_RemainsReadableThroughLegacyRuntimeResolution()
+    {
+        var provider = new DbSettingProvider(3, CacheWith(Setting(3, "header_image_url", "https://example.test/legacy.png")));
+
+        Assert.AreEqual("https://example.test/legacy.png", provider.HeaderImageUrl);
+        Assert.IsFalse(new SettingCatalog().TryGet("header_image_url", out _));
+    }
+
+    [TestMethod]
+    public void SettingsPage_VersionsSettingsJavaScript()
+    {
+        var root = FindRepositoryRoot();
+        var index = File.ReadAllText(Path.Combine(root, "src/Clc.PatronRegistration.Web/Views/Settings/Index.cshtml"));
+        var previewLink = File.ReadAllText(Path.Combine(root, "src/Clc.PatronRegistration.Web/Views/Settings/PreviewLinkCreated.cshtml"));
+
+        StringAssert.Contains(index, "<script src=\"~/js/settings.js\" asp-append-version=\"true\"></script>");
+        StringAssert.Contains(previewLink, "<script src=\"~/js/settings.js\" asp-append-version=\"true\"></script>");
     }
 
     [TestMethod]
