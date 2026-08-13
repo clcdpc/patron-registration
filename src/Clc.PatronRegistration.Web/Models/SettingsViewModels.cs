@@ -128,7 +128,8 @@ public sealed record SettingRowViewModel(
     bool EffectiveAssetMissing = false,
     SettingAssetPresentation? StagedAsset = null,
     bool StagedAssetMissing = false,
-    SettingAssetPresentation? InheritedAsset = null);
+    SettingAssetPresentation? InheritedAsset = null,
+    bool InheritedAssetMissing = false);
 
 public static class SettingInheritancePresentation
 {

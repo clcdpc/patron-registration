@@ -122,6 +122,11 @@
                     {
                         <p class="setting-missing-asset" role="status">The staged uploaded image is missing.</p>
                     }
+                    else if (!isDraftUpsert && Model.HasInheritedValue && Model.InheritedAssetMissing)
+                    {
+                        <p class="setting-missing-asset" role="status">The inherited uploaded image is missing.</p>
+                        <span>Use the inherited image setting.</span>
+                    }
                     else if (Model.StagedAsset is not null)
                     {
                         <img class="setting-image-preview" src="@Model.StagedAsset.PreviewUrl" alt="Inherited shared draft header image" />

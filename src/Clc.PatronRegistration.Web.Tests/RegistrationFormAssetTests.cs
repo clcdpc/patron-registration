@@ -372,6 +372,20 @@ public sealed class RegistrationFormAssetTests
     }
 
     [TestMethod]
+    public void SettingsImageRow_DistinguishesInheritedMissingAssetFromNoInheritedImage()
+    {
+        var root = FindRepositoryRoot();
+        var row = File.ReadAllText(Path.Combine(root, "src/Clc.PatronRegistration.Web/Views/Settings/_SettingRow.cshtml"));
+
+        StringAssert.Contains(row, "Model.HasInheritedValue && Model.InheritedAssetMissing");
+        StringAssert.Contains(row, "The inherited uploaded image is missing.");
+        StringAssert.Contains(row, "Use the inherited image setting.");
+        StringAssert.Contains(row, "No image will be configured.");
+        Assert.IsTrue(row.IndexOf("The inherited uploaded image is missing.", StringComparison.Ordinal)
+            < row.IndexOf("No image will be configured.", StringComparison.Ordinal));
+    }
+
+    [TestMethod]
     public void AssetEndpointIsAnonymousButDoesNotExposeAdministrativeOperations()
     {
         var endpoint = typeof(RegistrationFormAssetsController).GetCustomAttributes(typeof(Microsoft.AspNetCore.Authorization.AllowAnonymousAttribute), true);

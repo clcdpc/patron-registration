@@ -122,7 +122,6 @@
             imageState.previewUrl = snapshot?.previewUrl || "";
             imageState.status = snapshot?.status || "";
             imageState.error = snapshot?.error || false;
-            if (uploadStatus?.classList?.toggle) uploadStatus.classList.toggle("image-upload-error", imageState.error);
         }
 
         function renderPending() {
@@ -138,7 +137,10 @@
                 else pendingPreview.removeAttribute?.("src");
             }
             if (pendingFileName) pendingFileName.textContent = imageState.fileName;
-            if (uploadStatus) uploadStatus.textContent = imageState.status || "";
+            if (uploadStatus) {
+                uploadStatus.textContent = imageState.status || "";
+                uploadStatus.classList?.toggle?.("image-upload-error", imageState.error);
+            }
             if (chooseAnother) chooseAnother.hidden = isRemoval;
             if (undo) {
                 undo.hidden = !imageState.pendingOperation;
@@ -496,6 +498,23 @@
     document.querySelectorAll(".setting-row").forEach((row) => initializeRow(row, form));
     updatePendingActions(form);
 
+    function imageUploadRows(settingsForm = form) {
+        return [...(settingsForm?.querySelectorAll?.('.setting-row[data-image-uploading="true"]') || [])];
+    }
+    function imageUploadRow(settingsForm = form) {
+        return imageUploadRows(settingsForm)[0] || null;
+    }
+    function hasImageUpload(settingsForm = form) {
+        return imageUploadRows(settingsForm).length > 0;
+    }
+    function browserWorkRows(settingsForm = form) {
+        const rows = new Set([
+            ...(settingsForm?.querySelectorAll?.('.setting-row[data-dirty="true"]') || []),
+            ...(settingsForm?.querySelectorAll?.('.setting-row[data-candidate-operation]') || [])
+        ]);
+        imageUploadRows(settingsForm).forEach((row) => rows.add(row));
+        return rows;
+    }
     function blockActiveEdit(settingsForm, status) {
         const activeRow = settingsForm.querySelector('.setting-row[data-candidate-operation]');
         if (activeRow) {
@@ -507,14 +526,13 @@
             activeRow.querySelector(".apply-setting").focus();
             return true;
         }
-        const uploadingRow = [...(settingsForm.querySelectorAll?.('.setting-row[data-image-uploading="true"]') || [])]
-            .find(row => row.dataset.valueType === "image");
+        const uploadingRow = hasImageUpload(settingsForm) ? imageUploadRow(settingsForm) : null;
         if (!uploadingRow) return false;
         uploadingRow.setAttribute("open", "");
-        status.textContent = "Wait for the image upload to finish before saving.";
+        status.textContent = "Wait for the image upload to finish or undo the image change before continuing.";
         status.hidden = false;
-        status.focus();
-        uploadingRow.querySelector(".image-upload-trigger")?.focus();
+        const undo = uploadingRow.querySelector(".image-undo-pending");
+        (undo || uploadingRow.querySelector(".image-upload-trigger"))?.focus();
         return true;
     }
 
@@ -572,7 +590,7 @@
         return "review";
     }
 
-    globalThis.SettingsEditSessions = { initializeSettingsContext, setNavigationGuard, initializeRow, updatePendingActions, blockActiveEdit, populateReviewList, handleSaveAttempt };
+    globalThis.SettingsEditSessions = { initializeSettingsContext, setNavigationGuard, initializeRow, updatePendingActions, hasImageUpload, blockActiveEdit, populateReviewList, handleSaveAttempt };
 
     document.querySelectorAll(".reveal-secret").forEach((button) => {
         button.addEventListener("click", () => {
@@ -683,10 +701,7 @@
             .forEach((control) => { control.disabled = true; });
     }
     function discardPendingChanges(settingsForm = form) {
-        const rows = new Set([
-            ...(settingsForm?.querySelectorAll('.setting-row[data-dirty="true"]') || []),
-            ...(settingsForm?.querySelectorAll('.setting-row[data-candidate-operation]') || [])
-        ]);
+        const rows = browserWorkRows(settingsForm);
         rows.forEach((row) => row._discardPendingChange?.());
         updatePendingActions(settingsForm);
         clearEditSessionStatus(settingsForm);
@@ -713,6 +728,11 @@
             restoreContextControl(action.trigger);
             blockActiveEdit(form, editStatus);
             return "candidate";
+        }
+        if (hasImageUpload()) {
+            restoreContextControl(action.trigger);
+            blockActiveEdit(form, editStatus);
+            return "uploading";
         }
         const count = dirtyCount();
         if (!skipDirty && count) {
@@ -775,6 +795,11 @@
 
     navigationGuard = (action, trigger) => {
         if (hasCandidate()) {
+            restoreContextControl(trigger);
+            blockActiveEdit(form, editStatus);
+            return false;
+        }
+        if (hasImageUpload()) {
             restoreContextControl(trigger);
             blockActiveEdit(form, editStatus);
             return false;
@@ -844,11 +869,7 @@
         if (action) continuePipeline(action, true, true);
     });
     document.querySelector("[data-discard-pending]")?.addEventListener("click", (event) => {
-        const affectedRows = [
-            ...(form?.querySelectorAll('.setting-row[data-dirty="true"]') || []),
-            ...(form?.querySelectorAll('.setting-row[data-candidate-operation]') || [])
-        ];
-        const uniqueRows = [...new Set(affectedRows)];
+        const uniqueRows = [...browserWorkRows()];
         if (!uniqueRows.length) return;
         pending = { explicitDiscard: true, focusTarget: uniqueRows[0] };
         unsavedDialog._trigger = event.currentTarget;
@@ -857,7 +878,7 @@
         unsavedDialog.querySelector("[data-dialog-cancel]").focus();
     });
     window.addEventListener?.("beforeunload", (event) => {
-        if (!submitting && (dirtyCount() || hasCandidate())) { event.preventDefault(); event.returnValue = ""; }
+        if (!submitting && (dirtyCount() || hasCandidate() || hasImageUpload())) { event.preventDefault(); event.returnValue = ""; }
     });
 
     async function copyPreviewUrl(clipboard, value, status) {
@@ -871,7 +892,7 @@
         }
     }
     globalThis.SettingsWorkflow = {
-        continuePipeline, lifecycleSubmit, needsLiveConfirmation, disableDirtyMutations, discardPendingChanges, clearEditSessionStatus,
+        continuePipeline, lifecycleSubmit, needsLiveConfirmation, disableDirtyMutations, discardPendingChanges, clearEditSessionStatus, hasImageUpload,
         restoreContextControl, applyFilters, reviewDraftChanges, copyPreviewUrl, unsavedMessage, setUnsavedDialogMode, cancelWorkflowDialog, bindDialogCancellation,
         workflowState: () => ({ pending, submitting, approved }),
         setWorkflowState: (state) => { pending = state.pending; submitting = state.submitting; approved = state.approved; }

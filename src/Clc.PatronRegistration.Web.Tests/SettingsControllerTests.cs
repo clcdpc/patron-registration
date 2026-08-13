@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using Clc.PatronRegistration.Administration;
+using Clc.PatronRegistration.Configuration;
 using Clc.PatronRegistration.Helpers;
 using Clc.PatronRegistration.Web.Controllers;
 using Clc.PatronRegistration.Web.Models;
@@ -1116,6 +1117,68 @@ public class SettingsControllerTests
     }
 
     [TestMethod]
+    public void Index_HeaderImageRemoveOverridePresentsValidInheritedAsset()
+    {
+        var repository = ImagePresentationRepository(new SettingDraft(5, 3, string.Empty, 0, DraftStatus.Active,
+            [new SettingMutation("header_image_asset_id", DraftOperation.RemoveOverride, null)]));
+        var assets = new Mock<IRegistrationFormAssetAuthorization>();
+        assets.Setup(service => service.GetAuthorizedMetadata(11, 3, string.Empty)).Returns(ImageMetadata(11, "branch.png"));
+        assets.Setup(service => service.GetAuthorizedMetadata(10, 3, string.Empty)).Returns(ImageMetadata(10, "system.png"));
+        var cache = ImagePresentationCache(includeInherited: true);
+
+        var result = (ViewResult)CreateController(repository, LibraryAuthorization(), cache,
+            suppliedAssetAuthorization: assets.Object).Index(3);
+        var row = ((SettingsIndexViewModel)result.Model!).Settings.Single(setting => setting.Definition.Key == "header_image_asset_id");
+
+        Assert.AreEqual(DraftOperation.RemoveOverride, row.DraftOperation);
+        Assert.IsTrue(row.HasInheritedValue);
+        Assert.IsFalse(row.InheritedAssetMissing);
+        Assert.AreEqual("system.png", row.InheritedAsset!.FileName);
+        Assert.AreEqual("system.png", row.StagedAsset!.FileName);
+    }
+
+    [TestMethod]
+    public void Index_HeaderImageRemoveOverridePresentsNoImageWhenNoInheritedSettingExists()
+    {
+        var repository = ImagePresentationRepository(new SettingDraft(5, 3, string.Empty, 0, DraftStatus.Active,
+            [new SettingMutation("header_image_asset_id", DraftOperation.RemoveOverride, null)]));
+        var assets = new Mock<IRegistrationFormAssetAuthorization>();
+        assets.Setup(service => service.GetAuthorizedMetadata(11, 3, string.Empty)).Returns(ImageMetadata(11, "branch.png"));
+        var cache = ImagePresentationCache(includeInherited: false);
+
+        var result = (ViewResult)CreateController(repository, LibraryAuthorization(), cache,
+            suppliedAssetAuthorization: assets.Object).Index(3);
+        var row = ((SettingsIndexViewModel)result.Model!).Settings.Single(setting => setting.Definition.Key == "header_image_asset_id");
+
+        Assert.IsFalse(row.HasInheritedValue);
+        Assert.IsFalse(row.InheritedAssetMissing);
+        Assert.IsNull(row.InheritedAsset);
+        Assert.IsNull(row.StagedAsset);
+    }
+
+    [TestMethod]
+    public void Index_HeaderImageRemoveOverrideReportsMissingInheritedAsset()
+    {
+        var repository = ImagePresentationRepository(new SettingDraft(5, 3, string.Empty, 0, DraftStatus.Active,
+            [new SettingMutation("header_image_asset_id", DraftOperation.RemoveOverride, null)]));
+        var assets = new Mock<IRegistrationFormAssetAuthorization>();
+        assets.Setup(service => service.GetAuthorizedMetadata(11, 3, string.Empty)).Returns(ImageMetadata(11, "branch.png"));
+        assets.Setup(service => service.GetAuthorizedMetadata(10, 3, string.Empty))
+            .Returns((RegistrationFormAssetMetadata?)null);
+        var cache = ImagePresentationCache(includeInherited: true);
+
+        var result = (ViewResult)CreateController(repository, LibraryAuthorization(), cache,
+            suppliedAssetAuthorization: assets.Object).Index(3);
+        var row = ((SettingsIndexViewModel)result.Model!).Settings.Single(setting => setting.Definition.Key == "header_image_asset_id");
+
+        Assert.IsTrue(row.HasInheritedValue);
+        Assert.IsTrue(row.InheritedAssetMissing);
+        Assert.IsTrue(row.StagedAssetMissing);
+        Assert.IsNull(row.InheritedAsset);
+        Assert.IsNull(row.StagedAsset);
+    }
+
+    [TestMethod]
     public void UploadHeaderImageAsset_RequiresPostAndAntiforgeryAndDoesNotAcceptDraftParameters()
     {
         var method = typeof(SettingsController).GetMethod(nameof(SettingsController.UploadHeaderImageAsset))!;
@@ -1681,6 +1744,31 @@ public class SettingsControllerTests
         Assert.AreEqual(formCode, redirect.RouteValues["formCode"]);
         StringAssert.Contains((string)controller.TempData["SettingsError"]!, "changed while you were working");
     }
+
+    private static Mock<ISettingsAdministrationRepository> ImagePresentationRepository(SettingDraft draft)
+    {
+        var repository = new Mock<ISettingsAdministrationRepository>();
+        repository.Setup(service => service.GetActiveDraft(3, string.Empty)).Returns(draft);
+        repository.Setup(service => service.GetPreviewLinks(draft.DraftId)).Returns([]);
+        repository.Setup(service => service.GetFormCodes(It.IsAny<int>(), It.IsAny<int>())).Returns([]);
+        repository.Setup(service => service.GetLegacyFormCodes()).Returns([]);
+        return repository;
+    }
+
+    private static TestCache ImagePresentationCache(bool includeInherited) => new()
+    {
+        SettingsCache =
+        [
+            new() { OrganizationID = 3, FormCode = string.Empty, Setting = "header_image_asset_id", Value = "11" },
+            ..(includeInherited
+                ? new[] { new RegistrationFormSetting { OrganizationID = 1, FormCode = string.Empty, Setting = "header_image_asset_id", Value = "10" } }
+                : Array.Empty<RegistrationFormSetting>())
+        ]
+    };
+
+    private static RegistrationFormAssetMetadata ImageMetadata(int assetId, string fileName) =>
+        new(assetId, fileName, "image/png", $"hash-{assetId}", DateTime.UtcNow, DateTime.UtcNow,
+            assetId == 10 ? 1 : 3, string.Empty);
 
     private static Mock<ISettingsAdministrationRepository> RaceRepository()
     {

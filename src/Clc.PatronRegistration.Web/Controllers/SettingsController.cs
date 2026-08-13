@@ -132,8 +132,9 @@ public sealed class SettingsController(
             var stagedAsset = definition.ValueType == SettingValueType.Image
                 ? ResolveAsset(stagedAssetValue, target, formCode, out stagedAssetMissing)
                 : null;
+            var inheritedAssetMissing = false;
             var inheritedAsset = definition.ValueType == SettingValueType.Image && inheritedResolution is not null
-                ? ResolveAsset(inheritedResolution.EffectiveValue, target, formCode, out _)
+                ? ResolveAsset(inheritedResolution.EffectiveValue, target, formCode, out inheritedAssetMissing)
                 : null;
             rows.Add(new SettingRowViewModel(
                 $"setting-{index}",
@@ -149,7 +150,8 @@ public sealed class SettingsController(
                 effectiveAssetMissing,
                 stagedAsset,
                 stagedAssetMissing,
-                inheritedAsset));
+                inheritedAsset,
+                inheritedAssetMissing));
         }
 
         var model = new SettingsIndexViewModel
