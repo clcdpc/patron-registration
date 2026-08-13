@@ -38,6 +38,7 @@ public sealed class SettingsAdministrationRepositoryIntegrationTests
     private static readonly SettingDefinition First = new("test.first", "First", "Test value", SettingValueType.ShortString);
     private static readonly SettingDefinition Second = new("test.second", "Second", "Test value", SettingValueType.ShortString);
     private static readonly SettingDefinition Secret = new("test.secret", "Secret", "Test secret", SettingValueType.ShortString, IsSensitive: true);
+    private static readonly SettingDefinition RetiredHeaderImageUrl = new("header_image_url", "Retired header image URL", "Retired setting", SettingValueType.Uri);
     private static readonly IReadOnlyDictionary<string, SettingDefinition> Catalog =
         new[] { First, Second, Secret }.ToDictionary(item => item.Key, StringComparer.OrdinalIgnoreCase);
 
@@ -205,8 +206,7 @@ update dbo.RegistrationSettingsCacheGeneration set Generation=0,ModifiedAtUtc=SY
         var migration = File.ReadAllText(Path.Combine(RepositoryRoot(), "database", "007-remove-legacy-header-image-url.sql"));
         using (var connection = Open())
         {
-            Execute(connection, "insert dbo.RegistrationFormSettingTypes(Setting) values('header_image_url');");
-            Execute(connection, "insert dbo.RegistrationFormSettings(OrganizationID,Setting,FormCode,Value) values(101,'header_image_url','form','https://example.test/legacy.png');");
+            SeedLegacyHeaderImageSetting(connection);
             Execute(connection, migration, 30);
             Execute(connection, migration, 30);
         }
@@ -215,6 +215,78 @@ update dbo.RegistrationSettingsCacheGeneration set Generation=0,ModifiedAtUtc=SY
         Assert.AreEqual(0, Scalar<int>("select count(*) from dbo.RegistrationFormSettings where Setting='header_image_url'"));
         Assert.AreEqual(1, Scalar<int>("select count(*) from dbo.RegistrationFormSettingTypes where Setting='header_image_asset_id'"));
         Assert.AreEqual(1, Scalar<int>("select count(*) from sys.foreign_keys where parent_object_id=object_id('dbo.RegistrationFormSettings') and name='FK_Registration_Form_Settings_Registration_Form_Setting_Types' and is_disabled=0"));
+    }
+
+    [TestMethod]
+    public void Migration007_RemovesRetiredKeyFromActiveDraftButPreservesValidAndHistoricalChanges()
+    {
+        var migration = File.ReadAllText(Path.Combine(RepositoryRoot(), "database", "007-remove-legacy-header-image-url.sql"));
+        var catalog = new SettingCatalog().All.ToDictionary(setting => setting.Key, StringComparer.OrdinalIgnoreCase);
+        var ordinary = catalog["registration_text"];
+
+        using (var connection = Open())
+            SeedLegacyHeaderImageSetting(connection);
+
+        SeedVersion(0);
+        var activeDraft = repository.SaveToSharedDraft(101, "form", 0, null,
+            [Upsert(ordinary, "ordinary draft value")], catalog, Audit());
+        SeedRawDraftChange(activeDraft.DraftId, RetiredHeaderImageUrl.Key, "https://example.test/draft-only.png");
+        var committedDraft = SeedDraft(0, "Committed", RetiredHeaderImageUrl, "https://example.test/committed.png");
+        var discardedDraft = SeedDraft(0, "Discarded", RetiredHeaderImageUrl, "https://example.test/discarded.png");
+        var invalidatedDraft = SeedDraft(0, "Invalidated", RetiredHeaderImageUrl, "https://example.test/invalidated.png");
+
+        using (var connection = Open())
+        {
+            Execute(connection, migration, 30);
+            Execute(connection, migration, 30);
+        }
+
+        var remainingActiveDraft = repository.GetDraft(activeDraft.DraftId);
+        Assert.IsNotNull(remainingActiveDraft);
+        Assert.AreEqual(DraftStatus.Active, remainingActiveDraft!.Status);
+        Assert.AreEqual(1, remainingActiveDraft.Changes.Count);
+        CollectionAssert.AreEquivalent(new[] { "registration_text|Upsert|ordinary draft value" }, ReadChanges(activeDraft.DraftId).ToArray());
+        CollectionAssert.AreEquivalent(new[] { "header_image_url|Upsert|https://example.test/committed.png" }, ReadChanges(committedDraft).ToArray());
+        CollectionAssert.AreEquivalent(new[] { "header_image_url|Upsert|https://example.test/discarded.png" }, ReadChanges(discardedDraft).ToArray());
+        CollectionAssert.AreEquivalent(new[] { "header_image_url|Upsert|https://example.test/invalidated.png" }, ReadChanges(invalidatedDraft).ToArray());
+
+        repository.CommitDraft(activeDraft.DraftId, catalog, true, Audit());
+
+        Assert.AreEqual(DraftStatus.Committed, repository.GetDraft(activeDraft.DraftId)!.Status);
+        var persisted = QuerySingle("select Value from dbo.RegistrationFormSettings where OrganizationID=101 and FormCode='form' and Setting='registration_text'",
+            null, reader => reader.GetString(0));
+        Assert.AreEqual("ordinary draft value", persisted);
+        Assert.AreEqual(0, Scalar<int>("select count(*) from dbo.RegistrationSettingDraftChanges where SettingKey='header_image_url' and DraftId in (select DraftId from dbo.RegistrationSettingDrafts where Status='Active')"));
+    }
+
+    [TestMethod]
+    public void Migration007_RemovesOnlyRetiredKeyFromHeaderOnlyActiveDraftAndEmptyDraftCanCommit()
+    {
+        var migration = File.ReadAllText(Path.Combine(RepositoryRoot(), "database", "007-remove-legacy-header-image-url.sql"));
+        var catalog = new SettingCatalog().All.ToDictionary(setting => setting.Key, StringComparer.OrdinalIgnoreCase);
+
+        using (var connection = Open())
+            SeedLegacyHeaderImageSetting(connection);
+
+        var activeDraft = SeedDraft(0, "Active", RetiredHeaderImageUrl, "https://example.test/only-draft.png");
+
+        using (var connection = Open())
+        {
+            Execute(connection, migration, 30);
+            Execute(connection, migration, 30);
+        }
+
+        var remainingActiveDraft = repository.GetDraft(activeDraft);
+        Assert.IsNotNull(remainingActiveDraft);
+        Assert.AreEqual(DraftStatus.Active, remainingActiveDraft!.Status);
+        Assert.AreEqual(0, remainingActiveDraft.Changes.Count);
+        Assert.AreEqual(0, ReadChanges(activeDraft).Count);
+
+        repository.CommitDraft(activeDraft, catalog, true, Audit());
+
+        Assert.AreEqual(DraftStatus.Committed, repository.GetDraft(activeDraft)!.Status);
+        Assert.AreEqual(1L, repository.GetVersion(101, "form"));
+        Assert.AreEqual(0, Scalar<int>("select count(*) from dbo.RegistrationFormSettings where Setting='header_image_url'"));
     }
 
     [TestMethod]
@@ -770,6 +842,25 @@ values(@draftId,@hash,0,101,'legacy','legacy',null)", parameters: command =>
             "insert dbo.RegistrationSettingScopeVersions(OrganizationId,FormCode,Version) values(101,'form',@version)",
             parameters: command => command.Parameters.AddWithValue("@version", version));
     }
+
+    private static void SeedLegacyHeaderImageSetting(SqlConnection connection)
+    {
+        Execute(connection, "insert dbo.RegistrationFormSettingTypes(Setting) values('header_image_url');");
+        Execute(connection, "insert dbo.RegistrationFormSettings(OrganizationID,Setting,FormCode,Value) values(101,'header_image_url','form','https://example.test/legacy.png');");
+    }
+
+    private void SeedRawDraftChange(long draftId, string settingKey, string value)
+    {
+        using var connection = Open();
+        Execute(connection, @"insert dbo.RegistrationSettingDraftChanges(DraftId,SettingKey,Operation,Value,ModifiedBy)
+values(@draftId,@settingKey,'Upsert',@value,'migration-test')", parameters: command =>
+        {
+            command.Parameters.AddWithValue("@draftId", draftId);
+            command.Parameters.AddWithValue("@settingKey", settingKey);
+            command.Parameters.AddWithValue("@value", value);
+        });
+    }
+
     private long SeedActiveDraft(long baselineVersion, SettingDefinition definition, string value)
         => SeedDraft(baselineVersion, "Active", definition, value);
 
