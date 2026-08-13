@@ -309,9 +309,9 @@ public class PreviewRequestContextTests
         {
             SettingsCache =
             [
-                new() { OrganizationID = organizationId, FormCode = string.Empty, Setting = "header_image_url", Value = "branding-header" },
+                new() { OrganizationID = organizationId, FormCode = string.Empty, Setting = "header_image_asset_id", Value = "42" },
                 new() { OrganizationID = organizationId, FormCode = string.Empty, Setting = "css_file", Value = "branding-css" },
-                new() { OrganizationID = 3, FormCode = "kids", Setting = "header_image_url", Value = "editing-header" }
+                new() { OrganizationID = 3, FormCode = "kids", Setting = "header_image_asset_id", Value = "43" }
             ]
         };
         var resolver = new RequestSettingProviderResolver(new PreviewRequestContextAccessor(), branding, cache,
@@ -325,7 +325,7 @@ public class PreviewRequestContextTests
         Assert.AreEqual(organizationId, settings.OrganizationId);
         Assert.AreEqual(libraryId, ((DbSettingProvider)settings).LibraryId);
         Assert.AreEqual(string.Empty, settings.FormCode);
-        Assert.AreEqual("branding-header", settings.HeaderImageUrl);
+        Assert.AreEqual(42, settings.HeaderImageAssetId);
         Assert.AreEqual("branding-css", settings.CssFile);
     }
 

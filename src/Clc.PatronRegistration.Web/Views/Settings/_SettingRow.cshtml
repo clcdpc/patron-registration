@@ -81,11 +81,7 @@
                     }
                     else if (Model.EffectiveAssetMissing)
                     {
-                        <p class="setting-missing-asset" role="status">The configured uploaded image is missing. The legacy URL, if configured, is used on the public page.</p>
-                    }
-                    else if (!string.IsNullOrWhiteSpace(Model.LegacyImageUrl))
-                    {
-                        <p>A legacy external header image is currently active. Upload an image to replace it with database-backed storage.</p>
+                        <p class="setting-missing-asset" role="status">The configured uploaded image is missing.</p>
                     }
                     else
                     {
@@ -103,7 +99,7 @@
                         }
                         else if (Model.StagedAssetMissing)
                         {
-                            <p class="setting-missing-asset" role="status">The staged uploaded image is missing. The public page will use the legacy URL fallback, if any.</p>
+                            <p class="setting-missing-asset" role="status">The staged uploaded image is missing.</p>
                         }
                         else
                         {

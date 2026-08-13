@@ -11,8 +11,6 @@ namespace Clc.PatronRegistration.Configuration
         int LibraryId { get; }
         string FormCode { get; }
 
-        [JsonIgnore]
-        string HeaderImageUrl { get; }
         [AdminSetting(SettingCategory.PageAppearanceAndInstructions, "Header image", "Displays the uploaded image above the public registration page.", ValueType = SettingValueType.Image)]
         [JsonIgnore]
         int? HeaderImageAssetId { get; }

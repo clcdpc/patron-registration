@@ -124,7 +124,6 @@ namespace Clc.PatronRegistration.Configuration
                 .Select(key => key["require.".Length..])
                 .ToList();
         }
-        public string HeaderImageUrl => GetPropertySetting<string>();
         public int? HeaderImageAssetId => GetPropertySetting<int?>();
         public string CssFile => GetPropertySetting<string>();
         public string WarningText => GetPropertySetting<string>();

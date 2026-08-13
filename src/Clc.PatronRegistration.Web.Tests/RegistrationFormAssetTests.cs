@@ -329,64 +329,17 @@ public sealed class RegistrationFormAssetTests
     }
 
     [TestMethod]
-    public void HeaderImageResolver_PrefersValidAssetThenFallsBackToLegacyUrl()
-    {
-        var repository = new Mock<IRegistrationFormAssetRepository>();
-        repository.Setup(item => item.GetMetadata(42)).Returns(new RegistrationFormAssetMetadata(
-            42, "header.png", "image/png", "hash", DateTime.UtcNow, DateTime.UtcNow));
-        using var metadataCache = new RegistrationHeaderImageMetadataCache();
-        var resolver = new RegistrationHeaderImageResolver(repository.Object, metadataCache);
-
-        var asset = resolver.Resolve(42, "https://example.test/legacy.png");
-        Assert.IsNotNull(asset);
-        Assert.IsTrue(asset.UsesAsset);
-        Assert.AreEqual(42, asset.AssetId);
-        Assert.IsNull(asset.LegacyUrl);
-
-        var legacy = resolver.Resolve(99, "https://example.test/legacy.png");
-        Assert.IsNotNull(legacy);
-        Assert.IsFalse(legacy.UsesAsset);
-        Assert.AreEqual("https://example.test/legacy.png", legacy.LegacyUrl);
-
-        Assert.IsNull(resolver.Resolve(99, " "));
-    }
-
-    [TestMethod]
-    public void HeaderImageResolver_CachesAssetMetadataForTheCacheLifetime()
-    {
-        var repository = new Mock<IRegistrationFormAssetRepository>();
-        repository.Setup(item => item.GetMetadata(42)).Returns(new RegistrationFormAssetMetadata(
-            42, "header.png", "image/png", "hash", DateTime.UtcNow, DateTime.UtcNow));
-        using var metadataCache = new RegistrationHeaderImageMetadataCache();
-        var resolver = new RegistrationHeaderImageResolver(repository.Object, metadataCache);
-
-        Assert.IsTrue(resolver.Resolve(42, null)?.UsesAsset);
-        Assert.IsTrue(resolver.Resolve(42, null)?.UsesAsset);
-        Assert.IsNotNull(resolver.Resolve(99, "https://example.test/legacy.png"));
-        Assert.IsNotNull(resolver.Resolve(99, "https://example.test/legacy.png"));
-
-        repository.Verify(item => item.GetMetadata(42), Times.Once);
-        repository.Verify(item => item.GetMetadata(99), Times.Once);
-    }
-
-    [TestMethod]
-    public void ProductionConfiguration_UsesDedicatedHeaderMetadataCacheWithoutGlobalSizeLimit()
+    public void SharedLayoutUsesAssetRouteWithoutEmbeddingContent()
     {
         var root = FindRepositoryRoot();
-        var program = File.ReadAllText(Path.Combine(root, "src/Clc.PatronRegistration.Web/Program.cs"));
+        var layout = File.ReadAllText(Path.Combine(root, "src/Clc.PatronRegistration.Web/Views/Shared/_Layout.cshtml"));
 
-        StringAssert.Contains(program, "AddSingleton<RegistrationHeaderImageMetadataCache>();");
-        Assert.IsFalse(program.Contains("AddMemoryCache", StringComparison.Ordinal));
-        Assert.IsFalse(program.Contains("IMemoryCache", StringComparison.Ordinal));
-    }
-
-    [TestMethod]
-    public void SettingsImageRow_ExplainsLegacyMigrationPath()
-    {
-        var root = FindRepositoryRoot();
-        var row = File.ReadAllText(Path.Combine(root, "src/Clc.PatronRegistration.Web/Views/Settings/_SettingRow.cshtml"));
-
-        StringAssert.Contains(row, "A legacy external header image is currently active. Upload an image to replace it with database-backed storage.");
+        StringAssert.Contains(layout, "Settings?.HeaderImageAssetId");
+        StringAssert.Contains(layout, "RegistrationFormAsset");
+        StringAssert.Contains(layout, "PreviewRegistrationFormAsset");
+        Assert.IsFalse(layout.Contains("Convert.ToBase64String", StringComparison.Ordinal));
+        Assert.IsFalse(layout.Contains("HeaderImageUrl", StringComparison.Ordinal));
+        Assert.IsFalse(layout.Contains("LegacyUrl", StringComparison.Ordinal));
     }
 
     [TestMethod]
@@ -400,16 +353,15 @@ public sealed class RegistrationFormAssetTests
     }
 
     [TestMethod]
-    public void SharedLayoutUsesAssetRouteBeforeLegacyUrlWithoutEmbeddingContent()
+    public void SettingsImageRow_ReportsMissingDatabaseAssetWithoutLegacyFallback()
     {
         var root = FindRepositoryRoot();
-        var layout = File.ReadAllText(Path.Combine(root, "src/Clc.PatronRegistration.Web/Views/Shared/_Layout.cshtml"));
+        var row = File.ReadAllText(Path.Combine(root, "src/Clc.PatronRegistration.Web/Views/Settings/_SettingRow.cshtml"));
 
-        StringAssert.Contains(layout, "HeaderImages.Resolve(Settings?.HeaderImageAssetId, Settings?.HeaderImageUrl)");
-        StringAssert.Contains(layout, "RegistrationFormAsset");
-        StringAssert.Contains(layout, "PreviewRegistrationFormAsset");
-        StringAssert.Contains(layout, "headerImage?.LegacyUrl");
-        Assert.IsFalse(layout.Contains("Convert.ToBase64String", StringComparison.Ordinal));
+        StringAssert.Contains(row, "The configured uploaded image is missing.");
+        StringAssert.Contains(row, "The staged uploaded image is missing.");
+        Assert.IsFalse(row.Contains("legacy", StringComparison.OrdinalIgnoreCase));
+        Assert.IsFalse(row.Contains("LegacyImageUrl", StringComparison.Ordinal));
     }
 
     [TestMethod]

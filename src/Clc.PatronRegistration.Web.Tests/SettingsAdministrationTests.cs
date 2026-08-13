@@ -1503,19 +1503,11 @@ public class SettingsAdministrationTests
         Assert.IsNotNull(interfaceProperties.Single(property => property.Name == nameof(ISettingProvider.EnableAgeBlock))
             .GetCustomAttribute<AdminSettingAttribute>());
 
-        var legacyHeaderUrl = interfaceProperties.Single(property => property.Name == nameof(ISettingProvider.HeaderImageUrl));
-        Assert.IsNull(legacyHeaderUrl.GetCustomAttribute<AdminSettingAttribute>());
+        Assert.IsFalse(interfaceProperties.Any(property => property.Name == "HeaderImageUrl"));
         Assert.IsFalse(new SettingCatalog().TryGet("header_image_url", out _));
-        Assert.AreEqual("header_image_url", SettingPropertyMetadataCache.Get(nameof(ISettingProvider.HeaderImageUrl)).DatabaseKey);
-    }
-
-    [TestMethod]
-    public void HeaderImageUrl_RemainsReadableThroughLegacyRuntimeResolution()
-    {
-        var provider = new DbSettingProvider(3, CacheWith(Setting(3, "header_image_url", "https://example.test/legacy.png")));
-
-        Assert.AreEqual("https://example.test/legacy.png", provider.HeaderImageUrl);
-        Assert.IsFalse(new SettingCatalog().TryGet("header_image_url", out _));
+        Assert.IsFalse(SettingPropertyMetadataCache.GetAll().Any(metadata => metadata.Property.Name == "HeaderImageUrl"));
+        Assert.AreEqual("header_image_asset_id", SettingPropertyMetadataCache.Get(nameof(ISettingProvider.HeaderImageAssetId)).DatabaseKey);
+        Assert.AreEqual(SettingValueType.Image, new SettingCatalog().All.Single(setting => setting.Key == "header_image_asset_id").ValueType);
     }
 
     [TestMethod]
