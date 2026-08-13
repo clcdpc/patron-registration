@@ -279,7 +279,7 @@ test("Cancel restores already-applied Upsert and RemoveOverride states", () => {
     assert.equal(removal.controls.inherit.hidden, true);
 });
 
-function imageEditorFixture({ value = "", operation = "Upsert", dirty = false, ownsOverride = true, hasInherited = true } = {}) {
+function imageEditorFixture({ value = "", operation = "Upsert", dirty = false, ownsOverride = true, hasInherited = true, inheritedMissing = false } = {}) {
     const controls = {
         uploadTrigger: new Control(), chooseAnother: new Control(), undo: new Control(),
         inherit: ownsOverride ? new Control() : null, file: new Control(), pending: new Control(),
@@ -306,8 +306,9 @@ function imageEditorFixture({ value = "", operation = "Upsert", dirty = false, o
         dataset: {
             valueType: "image", appliedOperation: operation, dirty: dirty.toString(), displayName: "Header image",
             oldValue: value ? "current.png" : "No image configured", imageHasInherited: hasInherited.toString(),
-            imageInheritedPreviewUrl: hasInherited ? "/settings/assets/10" : "",
-            imageInheritedFileName: hasInherited ? "inherited.png" : ""
+            imageInheritedMissing: inheritedMissing.toString(),
+            imageInheritedPreviewUrl: hasInherited && !inheritedMissing ? "/settings/assets/10" : "",
+            imageInheritedFileName: hasInherited && !inheritedMissing ? "inherited.png" : ""
         },
         querySelector(selector) { return selectors[selector] || null; },
         querySelectorAll() { return [controls.index, controls.key, controls.operation]; },
@@ -571,6 +572,70 @@ test("beforeunload protects unresolved image uploads but not an approved submiss
     workflow.fixture.controls.undo.click();
 });
 
+test("a successful image upload clears the global upload-blocking status", async () => {
+    let resolveResponse;
+    const workflow = workflowUploadFixture(() => new Promise(resolve => { resolveResponse = resolve; }));
+    workflow.ordinaryRow.dataset.dirty = "false";
+    startUnresolvedImageUpload(workflow.fixture);
+    workflow.contextOrganization.value = "branch-3";
+    workflow.contextOrganization.dispatchEvent(new Event("change"));
+
+    const status = workflow.sandbox.document.querySelector("#edit-session-status");
+    assert.equal(status.hidden, false);
+    assert.match(status.textContent, /Wait for the image upload/);
+
+    resolveResponse({ ok: true, async json() {
+        return { assetId: 91, fileName: "replacement.png", previewUrl: "/settings/assets/91" };
+    } });
+    await flush();
+
+    assert.equal(workflow.fixture.row.dataset.dirty, "true");
+    assert.equal(workflow.fixture.controls.uploadStatus.textContent, "replacement.png is ready to save.");
+    assert.equal(status.hidden, true);
+    assert.equal(status.textContent, "");
+});
+
+test("a failed image upload clears the global block but preserves the local error", async () => {
+    let resolveResponse;
+    const workflow = workflowUploadFixture(() => new Promise(resolve => { resolveResponse = resolve; }));
+    workflow.ordinaryRow.dataset.dirty = "false";
+    startUnresolvedImageUpload(workflow.fixture);
+    workflow.contextOrganization.value = "branch-3";
+    workflow.contextOrganization.dispatchEvent(new Event("change"));
+
+    resolveResponse({ ok: false, async json() { return { error: "The image is invalid." }; } });
+    await flush();
+
+    const status = workflow.sandbox.document.querySelector("#edit-session-status");
+    assert.equal(status.hidden, true);
+    assert.equal(status.textContent, "");
+    assert.equal(workflow.fixture.controls.uploadStatus.classList.contains("image-upload-error"), true);
+    assert.match(workflow.fixture.controls.uploadStatus.textContent, /image is invalid/);
+});
+
+test("Undo clears the global upload block and ignores the late upload response", async () => {
+    let resolveResponse;
+    const workflow = workflowUploadFixture(() => new Promise(resolve => { resolveResponse = resolve; }));
+    workflow.ordinaryRow.dataset.dirty = "false";
+    startUnresolvedImageUpload(workflow.fixture);
+    workflow.contextOrganization.value = "branch-3";
+    workflow.contextOrganization.dispatchEvent(new Event("change"));
+    workflow.fixture.controls.undo.click();
+
+    const status = workflow.sandbox.document.querySelector("#edit-session-status");
+    assert.equal(status.hidden, true);
+    assert.equal(status.textContent, "");
+    assert.equal(workflow.fixture.row.dataset.imageUploading, undefined);
+
+    resolveResponse({ ok: true, async json() {
+        return { assetId: 91, fileName: "late.png", previewUrl: "/settings/assets/91" };
+    } });
+    await flush();
+    assert.equal(workflow.fixture.row.dataset.dirty, "false");
+    assert.equal(workflow.fixture.controls.value.value, "12");
+    assert.equal(workflow.fixture.controls.pending.hidden, true);
+});
+
 test("image upload focuses the chooser and immediately creates a browser-pending mutation", async () => {
     const fixture = imageEditorFixture({ value: "" });
     const requests = [];
@@ -756,6 +821,7 @@ test("image inheritance and removal create immediate RemoveOverride mutations wi
     inherited.controls.undo.click();
     assert.equal(inherited.controls.operation.value, "Upsert");
     assert.equal(inherited.row.dataset.dirty, "false");
+    assert.equal(inherited.controls.pending.hidden, true);
 
     const removal = imageEditorFixture({ value: "12", hasInherited: false });
     initializeRow(removal.row, removal.settingsForm);
@@ -764,6 +830,26 @@ test("image inheritance and removal create immediate RemoveOverride mutations wi
     const removalList = { children: [], replaceChildren() { this.children = []; }, append(item) { this.children.push(item); } };
     assert.equal(populateReviewList(removal.settingsForm, removalList), true);
     assert.match(removalList.children[0].textContent, /Header image: Remove image/);
+    removal.controls.undo.click();
+    assert.equal(removal.controls.operation.value, "Upsert");
+    assert.equal(removal.row.dataset.dirty, "false");
+    assert.equal(removal.controls.pending.hidden, true);
+
+    const missing = imageEditorFixture({ value: "12", hasInherited: true, inheritedMissing: true });
+    initializeRow(missing.row, missing.settingsForm);
+    missing.controls.inherit.click();
+    assert.equal(missing.controls.operation.value, "RemoveOverride");
+    assert.equal(missing.controls.pendingPreview.hidden, true);
+    assert.equal(missing.controls.pendingPreview.src, undefined);
+    assert.match(missing.controls.uploadStatus.textContent,
+        /The inherited uploaded image is missing\. Saving this change will use the inherited image setting\./);
+    const missingList = { children: [], replaceChildren() { this.children = []; }, append(item) { this.children.push(item); } };
+    assert.equal(populateReviewList(missing.settingsForm, missingList), true);
+    assert.match(missingList.children[0].textContent, /Header image: Use inherited image \(image currently missing\)/);
+    missing.controls.undo.click();
+    assert.equal(missing.controls.operation.value, "Upsert");
+    assert.equal(missing.row.dataset.dirty, "false");
+    assert.equal(missing.controls.pending.hidden, true);
 });
 
 test("image review describes filenames and blocks invalid AssetIds", () => {
@@ -793,6 +879,7 @@ test("image markup uses a dedicated upload interaction without a generic edit se
     assert.match(row, /class="image-choose-another">Choose another image<\/button>/);
     assert.match(row, /class="image-undo-pending">Undo replacement<\/button>/);
     assert.match(row, /class="image-inherit-action"/);
+    assert.match(row, /data-image-inherited-missing=/);
     assert.doesNotMatch(imageBranch, /image-value-editor|class="edit-setting"|class="apply-setting"|class="cancel-setting"/);
     assert.match(script, /imageFile\?\.addEventListener\("change"/);
     assert.match(script, /function initializeImageRow/);
@@ -1172,4 +1259,11 @@ test("clearEditSessionStatus removes a resolved active-edit warning", () => {
     assert.equal(row.dataset.candidateOperation, undefined);
     assert.equal(warning.hidden, true);
     assert.equal(warning.textContent, "");
+
+    warning.hidden = false;
+    warning.textContent = "Choose a valid uploaded image before saving.";
+    warning.dataset.statusKind = "validation";
+    sandbox.SettingsWorkflow.clearEditSessionStatus(form);
+    assert.equal(warning.hidden, false);
+    assert.equal(warning.textContent, "Choose a valid uploaded image before saving.");
 });

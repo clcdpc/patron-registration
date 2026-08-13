@@ -47,6 +47,7 @@
          data-value-type="@definition.ValueType.ToString().ToLowerInvariant()"
          data-presentation-state="@presentation.State.ToString().ToLowerInvariant()"
          data-image-has-inherited="@Model.HasInheritedValue.ToString().ToLowerInvariant()"
+         data-image-inherited-missing="@Model.InheritedAssetMissing.ToString().ToLowerInvariant()"
          data-image-inherited-preview-url="@(Model.InheritedAsset?.PreviewUrl ?? string.Empty)"
          data-image-inherited-file-name="@(Model.InheritedAsset?.FileName ?? string.Empty)">
     <input class="change-index" type="hidden" name="Changes.Index" value="@token" disabled />

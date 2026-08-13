@@ -1417,6 +1417,8 @@ public class SettingsAdministrationTests
         StringAssert.Contains(script, "row.dataset.sensitive === \"true\"");
         StringAssert.Contains(script, "row.dataset.valueType === \"image\"");
         StringAssert.Contains(script, "Replace with “${row.dataset.imagePendingFileName || \"uploaded image\"}”");
+        StringAssert.Contains(script, "Use inherited image (image currently missing)");
+        StringAssert.Contains(partial, "data-image-inherited-missing=");
         StringAssert.Contains(script, "operation.value === \"RemoveOverride\" ? \"Use inherited value\"");
     }
 

@@ -4,6 +4,8 @@
     const form = document.querySelector("#settings-form");
     const dialog = document.querySelector("#save-confirm");
     const editStatus = document.querySelector("#edit-session-status");
+    const candidateEditBlockedMessage = "Apply or Cancel the active setting edit before saving.";
+    const imageUploadBlockedMessage = "Wait for the image upload to finish or undo the image change before continuing.";
     let approved = false;
     let submitter = null;
 
@@ -42,8 +44,13 @@
     }
 
     function clearEditSessionStatus(settingsForm = form) {
-        if (settingsForm?.querySelector('.setting-row[data-candidate-operation]')) return;
+        if (settingsForm?.querySelector('.setting-row[data-candidate-operation]') || hasImageUpload(settingsForm)) return;
         if (!editStatus) return;
+        const isBlockingStatus = editStatus.dataset?.statusKind === "blocking"
+            || editStatus.textContent === candidateEditBlockedMessage
+            || editStatus.textContent === imageUploadBlockedMessage;
+        if (!isBlockingStatus) return;
+        delete editStatus.dataset.statusKind;
         editStatus.hidden = true;
         editStatus.textContent = "";
     }
@@ -199,6 +206,7 @@
             imageState.error = Boolean(errorMessage);
             updateImagePresentation();
             updatePendingActions(activeForm);
+            clearEditSessionStatus(activeForm);
         }
 
         function markUpsert(assetId, fileName, previewUrl) {
@@ -262,6 +270,7 @@
                     imageState.uploadFallback = null;
                     delete row.dataset.imageUploading;
                     markUpsert(assetId, safeFileName, previewUrl);
+                    clearEditSessionStatus(activeForm);
                     return true;
                 })
                 .catch((error) => {
@@ -290,6 +299,7 @@
                     imageState.uploadFallback = null;
                     updateImagePresentation();
                     updatePendingActions(activeForm);
+                    clearEditSessionStatus(activeForm);
                     return false;
                 })
                 .finally(() => {
@@ -306,13 +316,16 @@
         function selectInheritedOrRemove() {
             cancelUpload();
             const hasInherited = row.dataset.imageHasInherited === "true";
-            const previewUrl = row.dataset.imageInheritedPreviewUrl || "";
-            const fileName = row.dataset.imageInheritedFileName || (hasInherited ? "Inherited image" : "");
+            const inheritedMissing = row.dataset.imageInheritedMissing === "true";
+            const previewUrl = inheritedMissing ? "" : row.dataset.imageInheritedPreviewUrl || "";
+            const fileName = inheritedMissing ? "" : row.dataset.imageInheritedFileName || (hasInherited ? "Inherited image" : "");
             imageState.pendingOperation = "RemoveOverride";
             imageState.assetId = null;
             imageState.fileName = fileName;
             imageState.previewUrl = previewUrl;
-            imageState.status = hasInherited ? "Use inherited image." : "No image will be configured.";
+            imageState.status = inheritedMissing
+                ? "The inherited uploaded image is missing. Saving this change will use the inherited image setting."
+                : hasInherited ? "Use inherited image." : "No image will be configured.";
             imageState.error = false;
             if (operation) operation.value = "RemoveOverride";
             row.dataset.appliedOperation = "RemoveOverride";
@@ -322,6 +335,7 @@
             setBindingEnabled(true, "RemoveOverride");
             updateImagePresentation();
             updatePendingActions(activeForm);
+            clearEditSessionStatus(activeForm);
         }
 
         function undoImageChange() {
@@ -520,7 +534,8 @@
         if (activeRow) {
             activeRow.setAttribute("open", "");
             activeRow.closest(".setting-category, .dynamic-settings")?.setAttribute("open", "");
-            status.textContent = "Apply or Cancel the active setting edit before saving.";
+            status.textContent = candidateEditBlockedMessage;
+            status.dataset.statusKind = "blocking";
             status.hidden = false;
             status.focus();
             activeRow.querySelector(".apply-setting").focus();
@@ -529,7 +544,8 @@
         const uploadingRow = hasImageUpload(settingsForm) ? imageUploadRow(settingsForm) : null;
         if (!uploadingRow) return false;
         uploadingRow.setAttribute("open", "");
-        status.textContent = "Wait for the image upload to finish or undo the image change before continuing.";
+        status.textContent = imageUploadBlockedMessage;
+        status.dataset.statusKind = "blocking";
         status.hidden = false;
         const undo = uploadingRow.querySelector(".image-undo-pending");
         (undo || uploadingRow.querySelector(".image-upload-trigger"))?.focus();
@@ -550,7 +566,9 @@
                 }
                 const item = document.createElement("li");
                 const description = operation?.value === "RemoveOverride"
-                    ? row.dataset.imageHasInherited === "true" ? "Use inherited image" : "Remove image"
+                    ? row.dataset.imageHasInherited === "true"
+                        ? row.dataset.imageInheritedMissing === "true" ? "Use inherited image (image currently missing)" : "Use inherited image"
+                        : "Remove image"
                     : `Replace with “${row.dataset.imagePendingFileName || "uploaded image"}”`;
                 item.textContent = `${row.dataset.displayName}: ${description}`;
                 list.append(item);
@@ -578,6 +596,7 @@
         const list = reviewDialog.querySelector("ul");
         if (!populateReviewList(settingsForm, list)) {
             status.textContent = "Choose a valid uploaded image before saving.";
+            status.dataset.statusKind = "validation";
             status.hidden = false;
             status.focus();
             return "invalid";
