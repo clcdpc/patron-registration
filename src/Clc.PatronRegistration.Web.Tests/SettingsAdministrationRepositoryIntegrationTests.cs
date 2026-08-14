@@ -32,13 +32,43 @@ public sealed class SettingsAdministrationRepositoryIntegrationTests
     private static bool schemaReady;
     private static TestContext? classContext;
     private SettingsAdministrationRepository repository = null!;
+    private RegistrationFormAssetRepository assetRepository = null!;
     private MutableTimeProvider clock = null!;
 
     private static readonly SettingDefinition First = new("test.first", "First", "Test value", SettingValueType.ShortString);
     private static readonly SettingDefinition Second = new("test.second", "Second", "Test value", SettingValueType.ShortString);
     private static readonly SettingDefinition Secret = new("test.secret", "Secret", "Test secret", SettingValueType.ShortString, IsSensitive: true);
+    private static readonly SettingDefinition RetiredHeaderImageUrl = new("header_image_url", "Retired header image URL", "Retired setting", SettingValueType.Uri);
     private static readonly IReadOnlyDictionary<string, SettingDefinition> Catalog =
         new[] { First, Second, Secret }.ToDictionary(item => item.Key, StringComparer.OrdinalIgnoreCase);
+
+    // Represents the setting-type rows from the old database state before the
+    // header-image migrations. This is an intentionally explicit fixture
+    // contract, not a projection of SettingCatalog: migration 007 must remove
+    // header_image_url, and the compatibility test below must detect a newly
+    // administrable ordinary key omitted from the database allowlist.
+    private static readonly string[] ExistingSettingTypeKeys =
+    [
+        "header_image_url", "css_file", "warning_text", "custom_form_footer_html", "registration_text", "registration_form_header",
+        "show_dl", "hide_gender", "enable_age_warning", "age_warning_text", "enable_age_block", "age_block_text", "hide_ereceipt", "na_gender_text",
+        "normalize_to_uppercase", "dl_format", "enable_legal_name_checkbox", "drivers_license_button_text",
+        "drivers_license_prompt_text", "agreement_confirm_button_text", "agreement_cancel_button_text", "school_info_field_legend",
+        "school_info_format", "responsible_person_disclaimer", "display_responsible_person_field", "phone_number_format",
+        "enable_patron_branch_select_option", "display_preferred_pickup_location", "teacher_patron_code_id", "student_patron_code_id",
+        "patron_code_id", "expiration_date", "expiration_date_years", "hide_branch_select_if_only_one_option", "disable_branch",
+        "display_ecard_checkbox", "ecard_patron_code_id", "ecard_registration_text", "ecard_barcode_prefix", "force_ecard_remotely",
+        "display_mailing_list_checkbox", "mailing_list_description_html", "mailing_list_record_set_id", "display_sms_notice_information",
+        "sms_notice_information_html", "use_legal_name_on_notices", "ecard_welcome_email_template_text",
+        "ecard_welcome_email_template_html", "welcome_email_template_text", "welcome_email_template_html", "welcome_email_from_name",
+        "welcome_email_subject", "welcome_email_from_address", "ecard_welcome_email_subject", "postmark_api_key",
+        "bypass_dupe_check", "duplicate_patron_message_html", "perform_papi_duplicate_bypass", "use_first_name_for_duplicate_workaround",
+        "block_out_of_state_registrations", "update_patron_record_with_melissa_address", "melissa_data_api_key",
+        "valid_address_registration_text", "valid_address_plus_name_registration_text", "out_of_state_block_message",
+        "valid_address_patron_code_id", "valid_address_plus_name_patron_code_id", "valid_address_record_set_id",
+        "valid_address_plus_name_record_set_id", "invalid_address_record_set_id", "registration_logon_user_id",
+        "add_to_record_set_id", "post_registration_note_text", "show_dl_ips", "reset_form", "kiosk_registration_text",
+        "kiosk_registration_header", "reset_seconds"
+    ];
 
     [ClassInitialize]
     public static void CreateDatabase(TestContext context)
@@ -74,10 +104,14 @@ public sealed class SettingsAdministrationRepositoryIntegrationTests
             var candidateConnectionString = databaseBuilder.ConnectionString;
             using var database = new SqlConnection(candidateConnectionString);
             database.Open();
-            foreach (var file in new[] { "001-settings-administration.sql", "002-preview-operational-branch.sql", "003-expand-audit-setting-values.sql" })
+            DeployExistingRegistrationSettingsSchema(database);
+            foreach (var file in new[] { "001-settings-administration.sql", "002-preview-operational-branch.sql", "003-expand-audit-setting-values.sql", "004-registration-form-assets.sql", "005-registration-form-asset-scope.sql", "006-register-header-image-asset-setting.sql", "007-remove-legacy-header-image-url.sql" })
             {
                 Execute(database, File.ReadAllText(Path.Combine(RepositoryRoot(), "database", file)), 30);
             }
+            // Exercise both header-image migrations' repeatability during fixture deployment.
+            Execute(database, File.ReadAllText(Path.Combine(RepositoryRoot(), "database", "006-register-header-image-asset-setting.sql")), 30);
+            Execute(database, File.ReadAllText(Path.Combine(RepositoryRoot(), "database", "007-remove-legacy-header-image-url.sql")), 30);
             databaseConnectionString = candidateConnectionString;
             schemaReady = true;
         }
@@ -115,12 +149,16 @@ public sealed class SettingsAdministrationRepositoryIntegrationTests
             "The SQL integration fixture attempted setup but did not finish deploying the schema.");
         clock = new MutableTimeProvider(new DateTimeOffset(2030, 4, 5, 6, 7, 8, TimeSpan.Zero));
         repository = new SettingsAdministrationRepository(databaseConnectionString!, clock);
+        assetRepository = new RegistrationFormAssetRepository(databaseConnectionString!);
         using var connection = Open();
-        Execute(connection, @"delete dbo.RegistrationSettingAuditEvents;
+        Execute(connection, @"delete dbo.RegistrationFormSettings;
+delete dbo.RegistrationFormAssets;
+delete dbo.RegistrationSettingAuditEvents;
 delete dbo.RegistrationSettingPreviewLinks;
 delete dbo.RegistrationSettingDraftChanges;
 delete dbo.RegistrationSettingDrafts;
-delete dbo.RegistrationSettingScopeVersions;");
+delete dbo.RegistrationSettingScopeVersions;
+update dbo.RegistrationSettingsCacheGeneration set Generation=0,ModifiedAtUtc=SYSUTCDATETIME() where Id=1;");
     }
 
     [TestMethod]
@@ -131,7 +169,10 @@ delete dbo.RegistrationSettingScopeVersions;");
             "dbo.RegistrationSettingScopeVersions",
             "dbo.RegistrationSettingDrafts",
             "dbo.RegistrationSettingDraftChanges",
-            "dbo.RegistrationSettingAuditEvents"
+            "dbo.RegistrationSettingAuditEvents",
+            "dbo.RegistrationFormAssets",
+            "dbo.RegistrationFormSettingTypes",
+            "dbo.RegistrationFormSettings"
         };
         foreach (var requiredObject in requiredObjects)
         {
@@ -139,6 +180,209 @@ delete dbo.RegistrationSettingScopeVersions;");
                 $"Required schema object {requiredObject} was not deployed.");
         }
         Assert.AreEqual(1, Scalar<int>("select count(*) from sys.indexes where object_id=object_id('dbo.RegistrationSettingDrafts') and name='UX_RSD_ActiveScope' and is_unique=1 and has_filter=1"));
+        Assert.AreEqual(2, Scalar<int>("select count(*) from sys.columns where object_id=object_id('dbo.RegistrationFormAssets') and name in ('UploadOrganizationId', 'UploadFormCode')"));
+        Assert.AreEqual(1, Scalar<int>("select count(*) from sys.indexes where object_id=object_id('dbo.RegistrationFormAssets') and name='IX_RegistrationFormAssets_UploadScope'"));
+        Assert.AreEqual(1, Scalar<int>("select count(*) from dbo.RegistrationFormSettingTypes where Setting='header_image_asset_id'"));
+        Assert.AreEqual(0, Scalar<int>("select count(*) from dbo.RegistrationFormSettingTypes where Setting='header_image_url'"));
+        Assert.AreEqual(0, Scalar<int>("select count(*) from dbo.RegistrationFormSettings where Setting='header_image_url'"));
+        Assert.AreEqual(1, Scalar<int>("select count(*) from sys.foreign_keys where parent_object_id=object_id('dbo.RegistrationFormSettings') and name='FK_Registration_Form_Settings_Registration_Form_Setting_Types' and is_disabled=0"));
+    }
+
+    [TestMethod]
+    public void Migration006_IsIdempotentAndRegistersExactlyOneHeaderImageSettingType()
+    {
+        var migration = File.ReadAllText(Path.Combine(RepositoryRoot(), "database", "006-register-header-image-asset-setting.sql"));
+        using (var connection = Open())
+        {
+            Execute(connection, migration, 30);
+        }
+
+        Assert.AreEqual(1, Scalar<int>("select count(*) from dbo.RegistrationFormSettingTypes where Setting='header_image_asset_id'"));
+    }
+
+    [TestMethod]
+    public void Migration007_RemovesLegacyHeaderImageUrlRowsAndIsIdempotent()
+    {
+        var migration = File.ReadAllText(Path.Combine(RepositoryRoot(), "database", "007-remove-legacy-header-image-url.sql"));
+        using (var connection = Open())
+        {
+            SeedLegacyHeaderImageSetting(connection);
+            Execute(connection, migration, 30);
+            Execute(connection, migration, 30);
+        }
+
+        Assert.AreEqual(0, Scalar<int>("select count(*) from dbo.RegistrationFormSettingTypes where Setting='header_image_url'"));
+        Assert.AreEqual(0, Scalar<int>("select count(*) from dbo.RegistrationFormSettings where Setting='header_image_url'"));
+        Assert.AreEqual(1, Scalar<int>("select count(*) from dbo.RegistrationFormSettingTypes where Setting='header_image_asset_id'"));
+        Assert.AreEqual(1, Scalar<int>("select count(*) from sys.foreign_keys where parent_object_id=object_id('dbo.RegistrationFormSettings') and name='FK_Registration_Form_Settings_Registration_Form_Setting_Types' and is_disabled=0"));
+    }
+
+    [TestMethod]
+    public void Migration007_RemovesRetiredKeyFromActiveDraftButPreservesValidAndHistoricalChanges()
+    {
+        var migration = File.ReadAllText(Path.Combine(RepositoryRoot(), "database", "007-remove-legacy-header-image-url.sql"));
+        var catalog = new SettingCatalog().All.ToDictionary(setting => setting.Key, StringComparer.OrdinalIgnoreCase);
+        var ordinary = catalog["registration_text"];
+
+        using (var connection = Open())
+            SeedLegacyHeaderImageSetting(connection);
+
+        SeedVersion(0);
+        var activeDraft = repository.SaveToSharedDraft(101, "form", 0, null,
+            [Upsert(ordinary, "ordinary draft value")], catalog, Audit());
+        SeedRawDraftChange(activeDraft.DraftId, RetiredHeaderImageUrl.Key, "https://example.test/draft-only.png");
+        var committedDraft = SeedDraft(0, "Committed", RetiredHeaderImageUrl, "https://example.test/committed.png");
+        var discardedDraft = SeedDraft(0, "Discarded", RetiredHeaderImageUrl, "https://example.test/discarded.png");
+        var invalidatedDraft = SeedDraft(0, "Invalidated", RetiredHeaderImageUrl, "https://example.test/invalidated.png");
+
+        using (var connection = Open())
+        {
+            Execute(connection, migration, 30);
+            Execute(connection, migration, 30);
+        }
+
+        var remainingActiveDraft = repository.GetDraft(activeDraft.DraftId);
+        Assert.IsNotNull(remainingActiveDraft);
+        Assert.AreEqual(DraftStatus.Active, remainingActiveDraft!.Status);
+        Assert.AreEqual(1, remainingActiveDraft.Changes.Count);
+        CollectionAssert.AreEquivalent(new[] { "registration_text|Upsert|ordinary draft value" }, ReadChanges(activeDraft.DraftId).ToArray());
+        CollectionAssert.AreEquivalent(new[] { "header_image_url|Upsert|https://example.test/committed.png" }, ReadChanges(committedDraft).ToArray());
+        CollectionAssert.AreEquivalent(new[] { "header_image_url|Upsert|https://example.test/discarded.png" }, ReadChanges(discardedDraft).ToArray());
+        CollectionAssert.AreEquivalent(new[] { "header_image_url|Upsert|https://example.test/invalidated.png" }, ReadChanges(invalidatedDraft).ToArray());
+
+        repository.CommitDraft(activeDraft.DraftId, catalog, true, Audit());
+
+        Assert.AreEqual(DraftStatus.Committed, repository.GetDraft(activeDraft.DraftId)!.Status);
+        var persisted = QuerySingle("select Value from dbo.RegistrationFormSettings where OrganizationID=101 and FormCode='form' and Setting='registration_text'",
+            null, reader => reader.GetString(0));
+        Assert.AreEqual("ordinary draft value", persisted);
+        Assert.AreEqual(0, Scalar<int>("select count(*) from dbo.RegistrationSettingDraftChanges where SettingKey='header_image_url' and DraftId in (select DraftId from dbo.RegistrationSettingDrafts where Status='Active')"));
+    }
+
+    [TestMethod]
+    public void Migration007_RemovesOnlyRetiredKeyFromHeaderOnlyActiveDraftAndEmptyDraftCanCommit()
+    {
+        var migration = File.ReadAllText(Path.Combine(RepositoryRoot(), "database", "007-remove-legacy-header-image-url.sql"));
+        var catalog = new SettingCatalog().All.ToDictionary(setting => setting.Key, StringComparer.OrdinalIgnoreCase);
+
+        using (var connection = Open())
+            SeedLegacyHeaderImageSetting(connection);
+
+        var activeDraft = SeedDraft(0, "Active", RetiredHeaderImageUrl, "https://example.test/only-draft.png");
+
+        using (var connection = Open())
+        {
+            Execute(connection, migration, 30);
+            Execute(connection, migration, 30);
+        }
+
+        var remainingActiveDraft = repository.GetDraft(activeDraft);
+        Assert.IsNotNull(remainingActiveDraft);
+        Assert.AreEqual(DraftStatus.Active, remainingActiveDraft!.Status);
+        Assert.AreEqual(0, remainingActiveDraft.Changes.Count);
+        Assert.AreEqual(0, ReadChanges(activeDraft).Count);
+
+        repository.CommitDraft(activeDraft, catalog, true, Audit());
+
+        Assert.AreEqual(DraftStatus.Committed, repository.GetDraft(activeDraft)!.Status);
+        Assert.AreEqual(1L, repository.GetVersion(101, "form"));
+        Assert.AreEqual(0, Scalar<int>("select count(*) from dbo.RegistrationFormSettings where Setting='header_image_url'"));
+    }
+
+    [TestMethod]
+    public void DeployedSettingTypesContainEveryOrdinaryCatalogKeyExactlyOnce()
+    {
+        var expected = new SettingCatalog().All
+            .Where(setting => setting.Group == SettingGroup.Ordinary)
+            .Select(setting => setting.Key)
+            .ToArray();
+        var actual = Query("select Setting from dbo.RegistrationFormSettingTypes", null,
+            reader => reader.GetString(0));
+
+        Assert.AreEqual(expected.Length, expected.Distinct(StringComparer.OrdinalIgnoreCase).Count(), "The ordinary catalog contains duplicate keys.");
+        foreach (var key in expected)
+        {
+            Assert.AreEqual(1, actual.Count(actualKey => actualKey.Equals(key, StringComparison.OrdinalIgnoreCase)),
+                $"Setting-type registration is missing or duplicated for {key}.");
+        }
+    }
+
+    [TestMethod]
+    public void DirectSave_PersistsHeaderImageAssetIdWithForeignKeyAndAuditIntact()
+    {
+        var catalog = new SettingCatalog().All.ToDictionary(setting => setting.Key, StringComparer.OrdinalIgnoreCase);
+        var content = TestImageData.Create("image/png");
+        var asset = assetRepository.Create("header.png", "image/png", content, 101, "form");
+        SeedVersion(0);
+
+        repository.DirectSave(101, "form", 0,
+            [new SettingMutation("header_image_asset_id", DraftOperation.Upsert, asset.AssetId.ToString())], catalog, Audit());
+
+        var row = QuerySingle("select Setting,Value,OrganizationID,FormCode from dbo.RegistrationFormSettings where Setting='header_image_asset_id'",
+            null, reader => new { Setting = reader.GetString(0), Value = reader.GetString(1), OrganizationId = reader.GetInt32(2), FormCode = reader.GetString(3) });
+        Assert.AreEqual("header_image_asset_id", row.Setting);
+        Assert.AreEqual(asset.AssetId.ToString(), row.Value);
+        Assert.AreEqual(101, row.OrganizationId);
+        Assert.AreEqual("form", row.FormCode);
+        Assert.AreEqual(1L, repository.GetVersion(101, "form"));
+        Assert.AreEqual(1L, repository.GetCacheGeneration());
+        AssertAuditCount("OverrideCreated", 1);
+        AssertAuditCount("DirectSave", 1);
+    }
+
+    [TestMethod]
+    public void CommitDraft_PublishesHeaderImageAssetIdWithForeignKeyEnabled()
+    {
+        var catalog = new SettingCatalog().All.ToDictionary(setting => setting.Key, StringComparer.OrdinalIgnoreCase);
+        var content = TestImageData.Create("image/jpeg");
+        var asset = assetRepository.Create("header.jpg", "image/jpeg", content, 101, "form");
+        SeedVersion(0);
+
+        var draft = repository.SaveToSharedDraft(101, "form", 0, null,
+            [new SettingMutation("header_image_asset_id", DraftOperation.Upsert, asset.AssetId.ToString())], catalog, Audit());
+        repository.CommitDraft(draft.DraftId, catalog, true, Audit());
+
+        var row = QuerySingle("select Value,OrganizationID,FormCode from dbo.RegistrationFormSettings where Setting='header_image_asset_id'",
+            null, reader => new { Value = reader.GetString(0), OrganizationId = reader.GetInt32(1), FormCode = reader.GetString(2) });
+        Assert.AreEqual(asset.AssetId.ToString(), row.Value);
+        Assert.AreEqual(101, row.OrganizationId);
+        Assert.AreEqual("form", row.FormCode);
+        Assert.AreEqual(1L, repository.GetVersion(101, "form"));
+        Assert.AreEqual(DraftStatus.Committed, repository.GetDraft(draft.DraftId)!.Status);
+        AssertAuditCount("DraftCommitted", 1);
+    }
+
+    [TestMethod]
+    public void AssetRepository_StoresAndRetrievesContentMetadataAndSha256Hash()
+    {
+        var content = TestImageData.Create("image/png");
+        var created = assetRepository.Create("..\\uploads\\header.png", "IMAGE/PNG", content, 101, "form");
+
+        Assert.AreEqual("header.png", created.FileName);
+        Assert.AreEqual("image/png", created.ContentType);
+        CollectionAssert.AreEqual(content, created.Content);
+        Assert.AreEqual(RegistrationFormAssetUploadValidation.ComputeContentHash(content), created.ContentHash);
+
+        var metadata = assetRepository.GetMetadata(created.AssetId);
+        Assert.IsNotNull(metadata);
+        Assert.AreEqual(created.AssetId, metadata.AssetId);
+        Assert.AreEqual(created.ContentHash, metadata.ContentHash);
+        Assert.AreEqual(101, metadata.UploadOrganizationId);
+        Assert.AreEqual("form", metadata.UploadFormCode);
+        Assert.IsTrue(assetRepository.Exists(created.AssetId));
+
+        var loaded = assetRepository.Get(created.AssetId);
+        Assert.IsNotNull(loaded);
+        CollectionAssert.AreEqual(content, loaded.Content);
+        Assert.AreEqual(created.ContentType, loaded.ContentType);
+    }
+
+    [TestMethod]
+    public void AssetRepository_ReturnsNoResultForMissingAsset()
+    {
+        Assert.IsFalse(assetRepository.Exists(987654321));
+        Assert.IsNull(assetRepository.Get(987654321));
+        Assert.IsNull(assetRepository.GetMetadata(987654321));
     }
 
     [TestMethod]
@@ -598,6 +842,25 @@ values(@draftId,@hash,0,101,'legacy','legacy',null)", parameters: command =>
             "insert dbo.RegistrationSettingScopeVersions(OrganizationId,FormCode,Version) values(101,'form',@version)",
             parameters: command => command.Parameters.AddWithValue("@version", version));
     }
+
+    private static void SeedLegacyHeaderImageSetting(SqlConnection connection)
+    {
+        Execute(connection, "insert dbo.RegistrationFormSettingTypes(Setting) values('header_image_url');");
+        Execute(connection, "insert dbo.RegistrationFormSettings(OrganizationID,Setting,FormCode,Value) values(101,'header_image_url','form','https://example.test/legacy.png');");
+    }
+
+    private void SeedRawDraftChange(long draftId, string settingKey, string value)
+    {
+        using var connection = Open();
+        Execute(connection, @"insert dbo.RegistrationSettingDraftChanges(DraftId,SettingKey,Operation,Value,ModifiedBy)
+values(@draftId,@settingKey,'Upsert',@value,'migration-test')", parameters: command =>
+        {
+            command.Parameters.AddWithValue("@draftId", draftId);
+            command.Parameters.AddWithValue("@settingKey", settingKey);
+            command.Parameters.AddWithValue("@value", value);
+        });
+    }
+
     private long SeedActiveDraft(long baselineVersion, SettingDefinition definition, string value)
         => SeedDraft(baselineVersion, "Active", definition, value);
 
@@ -651,6 +914,44 @@ output inserted.PreviewLinkId values(@draftId,@hash,0,101,'other','other',@expir
 
     private static SettingMutation Upsert(SettingDefinition definition, string value) => new(definition.Key, DraftOperation.Upsert, value);
     private static AuditContext Audit() => new("integration", "integration-admin", 101, 101, 101, "form", "integration-test", "127.0.0.1");
+
+    private static void DeployExistingRegistrationSettingsSchema(SqlConnection connection)
+    {
+        // These tables belong to the pre-existing clcdb schema. The test fixture
+        // creates the smallest faithful version so the migration and repository
+        // exercise the production FK rather than a mocked write path.
+        Execute(connection, @"
+if object_id('dbo.RegistrationFormSettingTypes','U') is null
+begin
+    create table dbo.RegistrationFormSettingTypes
+    (
+        Setting nvarchar(200) not null
+            constraint PK_Registration_Form_Setting_Types primary key
+    );
+end;
+if object_id('dbo.RegistrationFormSettings','U') is null
+begin
+    create table dbo.RegistrationFormSettings
+    (
+        OrganizationID int not null,
+        Setting nvarchar(200) not null,
+        FormCode nvarchar(64) not null
+            constraint DF_RegistrationFormSettings_FormCode default '',
+        Value nvarchar(max) null,
+        constraint PK_RegistrationFormSettings primary key (OrganizationID,Setting,FormCode),
+        constraint FK_Registration_Form_Settings_Registration_Form_Setting_Types
+            foreign key (Setting) references dbo.RegistrationFormSettingTypes(Setting)
+    );
+end;");
+
+        foreach (var key in ExistingSettingTypeKeys)
+        {
+            Execute(connection,
+                "if not exists (select 1 from dbo.RegistrationFormSettingTypes where Setting=@key) insert dbo.RegistrationFormSettingTypes(Setting) values(@key);",
+                parameters: command => command.Parameters.AddWithValue("@key", key));
+        }
+    }
+
     private SqlConnection Open() { var connection = new SqlConnection(databaseConnectionString!); connection.Open(); return connection; }
     private T Scalar<T>(string sql) { using var connection = Open(); using var command = Command(connection, sql); return (T)Convert.ChangeType(command.ExecuteScalar()!, typeof(T)); }
     private T QuerySingle<T>(string sql, Action<SqlCommand>? parameters, Func<SqlDataReader, T> map) => Query(sql, parameters, map).Single();

@@ -1,8 +1,14 @@
 @inject ISettingProvider Settings
+@inject Clc.PatronRegistration.Web.Settings.IPreviewRequestContextAccessor PreviewContext
 
 @{
     var bodyClass = ViewData["BodyClass"] as string;
     var pageStylesheet = ViewData["PageStylesheet"] as string;
+    var headerImageRoute = Settings?.HeaderImageAssetId is int selectedAssetId
+        ? PreviewContext.IsPreviewRequest && !string.IsNullOrWhiteSpace(PreviewContext.PlaintextToken)
+            ? Url?.RouteUrl("PreviewRegistrationFormAsset", new { token = PreviewContext.PlaintextToken, id = selectedAssetId })
+            : Url?.RouteUrl("RegistrationFormAsset", new { id = selectedAssetId })
+        : null;
 }
 
 <!DOCTYPE html>
@@ -22,9 +28,9 @@
         {
             <link rel="stylesheet" href="@this.BuildUrl(Settings.CssFile)" />
             
-            if (!string.IsNullOrWhiteSpace(Settings?.HeaderImageUrl))
+            if (headerImageRoute is not null)
             {
-                <img alt="header image containing the library's logo" src="@Settings.HeaderImageUrl" role="banner" />
+                <img alt="header image containing the library's logo" src="@headerImageRoute" role="banner" />
             }
         }
         @if (!string.IsNullOrWhiteSpace(pageStylesheet))

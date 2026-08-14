@@ -4,6 +4,8 @@ using Clc.PatronRegistration.Web.Settings;
 using Clc.PatronRegistration.Web.Models;
 using Clc.PatronRegistration.Validators;
 using System.ComponentModel.DataAnnotations;
+using System.Reflection;
+using System.Text.Json;
 using Moq;
 
 namespace Clc.PatronRegistration.Tests;
@@ -11,6 +13,67 @@ namespace Clc.PatronRegistration.Tests;
 [TestClass]
 public class SettingsAdministrationTests
 {
+    // Compatibility contract: this list intentionally remains independent of provider attributes and catalog construction.
+    private static readonly string[] ExpectedOrdinaryKeys =
+    [
+        "header_image_asset_id", "css_file", "warning_text", "custom_form_footer_html", "registration_text", "registration_form_header",
+        "show_dl", "hide_gender", "enable_age_warning", "age_warning_text", "enable_age_block", "age_block_text", "hide_ereceipt", "na_gender_text",
+        "normalize_to_uppercase", "dl_format", "enable_legal_name_checkbox", "drivers_license_button_text",
+        "drivers_license_prompt_text", "agreement_confirm_button_text", "agreement_cancel_button_text", "school_info_field_legend",
+        "school_info_format", "responsible_person_disclaimer", "display_responsible_person_field", "phone_number_format",
+        "enable_patron_branch_select_option", "display_preferred_pickup_location", "teacher_patron_code_id", "student_patron_code_id",
+        "patron_code_id", "expiration_date", "expiration_date_years", "hide_branch_select_if_only_one_option", "disable_branch",
+        "display_ecard_checkbox", "ecard_patron_code_id", "ecard_registration_text", "ecard_barcode_prefix", "force_ecard_remotely",
+        "display_mailing_list_checkbox", "mailing_list_description_html", "mailing_list_record_set_id", "display_sms_notice_information",
+        "sms_notice_information_html", "use_legal_name_on_notices", "ecard_welcome_email_template_text",
+        "ecard_welcome_email_template_html", "welcome_email_template_text", "welcome_email_template_html", "welcome_email_from_name",
+        "welcome_email_subject", "welcome_email_from_address", "ecard_welcome_email_subject", "postmark_api_key",
+        "bypass_dupe_check", "duplicate_patron_message_html", "perform_papi_duplicate_bypass", "use_first_name_for_duplicate_workaround",
+        "block_out_of_state_registrations", "update_patron_record_with_melissa_address", "melissa_data_api_key",
+        "valid_address_registration_text", "valid_address_plus_name_registration_text", "out_of_state_block_message",
+        "valid_address_patron_code_id", "valid_address_plus_name_patron_code_id", "valid_address_record_set_id",
+        "valid_address_plus_name_record_set_id", "invalid_address_record_set_id", "registration_logon_user_id",
+        "add_to_record_set_id", "post_registration_note_text", "show_dl_ips", "reset_form", "kiosk_registration_text",
+        "kiosk_registration_header", "reset_seconds"
+    ];
+
+    // Compatibility contract for editor semantics that cannot be safely inferred from a string CLR type.
+    private static readonly IReadOnlyDictionary<string, SettingValueType> ExpectedSemanticValueTypes =
+        new Dictionary<string, SettingValueType>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["header_image_asset_id"] = SettingValueType.Image,
+            ["warning_text"] = SettingValueType.LongString,
+            ["custom_form_footer_html"] = SettingValueType.Html,
+            ["age_warning_text"] = SettingValueType.LongString,
+            ["age_block_text"] = SettingValueType.Html,
+            ["na_gender_text"] = SettingValueType.LongString,
+            ["drivers_license_button_text"] = SettingValueType.LongString,
+            ["drivers_license_prompt_text"] = SettingValueType.LongString,
+            ["agreement_confirm_button_text"] = SettingValueType.LongString,
+            ["agreement_cancel_button_text"] = SettingValueType.LongString,
+            ["registration_text"] = SettingValueType.LongString,
+            ["duplicate_patron_message_html"] = SettingValueType.Html,
+            ["responsible_person_disclaimer"] = SettingValueType.LongString,
+            ["ecard_registration_text"] = SettingValueType.LongString,
+            ["mailing_list_description_html"] = SettingValueType.Html,
+            ["sms_notice_information_html"] = SettingValueType.Html,
+            ["ecard_welcome_email_template_text"] = SettingValueType.EmailTemplate,
+            ["ecard_welcome_email_template_html"] = SettingValueType.EmailTemplate,
+            ["welcome_email_template_text"] = SettingValueType.EmailTemplate,
+            ["welcome_email_template_html"] = SettingValueType.EmailTemplate,
+            ["welcome_email_from_address"] = SettingValueType.EmailAddress,
+            ["valid_address_registration_text"] = SettingValueType.LongString,
+            ["valid_address_plus_name_registration_text"] = SettingValueType.LongString,
+            ["out_of_state_block_message"] = SettingValueType.LongString,
+            ["post_registration_note_text"] = SettingValueType.LongString,
+            ["kiosk_registration_text"] = SettingValueType.LongString
+        };
+
+    private static readonly string[] ExpectedSensitiveKeys =
+    [
+        "postmark_api_key", "melissa_data_api_key"
+    ];
+
     [TestMethod]
     public void PreviewLinkView_OffersRestoreAndRemovalWithAntiforgeryForms()
     {
@@ -65,97 +128,73 @@ public class SettingsAdministrationTests
         Assert.AreEqual(valid, definition.Validate(value ?? string.Empty) is null);
     }
 
-    private static readonly string[] SupportedOrdinaryKeys =
-    [
-        "header_image_url", "css_file", "warning_text", "custom_form_footer_html", "registration_text", "registration_form_header",
-        "show_dl", "hide_gender", "enable_age_warning", "age_warning_text", "hide_ereceipt", "na_gender_text",
-        "normalize_to_uppercase", "dl_format", "enable_legal_name_checkbox", "drivers_license_button_text",
-        "drivers_license_prompt_text", "agreement_confirm_button_text", "agreement_cancel_button_text", "school_info_field_legend",
-        "school_info_format", "responsible_person_disclaimer", "display_responsible_person_field", "phone_number_format",
-        "enable_patron_branch_select_option", "display_preferred_pickup_location", "teacher_patron_code_id", "student_patron_code_id",
-        "patron_code_id", "expiration_date", "expiration_date_years", "hide_branch_select_if_only_one_option", "disable_branch",
-        "display_ecard_checkbox", "ecard_patron_code_id", "ecard_registration_text", "ecard_barcode_prefix", "force_ecard_remotely",
-        "display_mailing_list_checkbox", "mailing_list_description_html", "mailing_list_record_set_id", "display_sms_notice_information",
-        "sms_notice_information_html", "use_legal_name_on_notices", "ecard_welcome_email_template_text",
-        "ecard_welcome_email_template_html", "welcome_email_template_text", "welcome_email_template_html", "welcome_email_from_name",
-        "welcome_email_subject", "welcome_email_from_address", "ecard_welcome_email_subject", "postmark_api_key",
-        "bypass_dupe_check", "duplicate_patron_message_html", "perform_papi_duplicate_bypass", "use_first_name_for_duplicate_workaround",
-        "block_out_of_state_registrations", "update_patron_record_with_melissa_address", "melissa_data_api_key",
-        "valid_address_registration_text", "valid_address_plus_name_registration_text", "out_of_state_block_message",
-        "valid_address_patron_code_id", "valid_address_plus_name_patron_code_id", "valid_address_record_set_id",
-        "valid_address_plus_name_record_set_id", "invalid_address_record_set_id", "registration_logon_user_id",
-        "add_to_record_set_id", "post_registration_note_text", "show_dl_ips", "reset_form", "kiosk_registration_text",
-        "kiosk_registration_header", "reset_seconds"
-    ];
-
     [TestMethod]
-    public void OrdinaryCatalog_ExactlyMatchesIndependentSupportedKeyContract()
+    public void OrdinaryCatalog_ExactlyMatchesExplicitlyAttributedProviderProperties()
     {
-        var actual = new SettingCatalog().All.Where(x => x.Group == SettingGroup.Ordinary).Select(x => x.Key).ToArray();
+        var catalog = new SettingCatalog();
+        var attributed = AdministrationProperties();
+        var expected = attributed.Select(SettingKey).ToArray();
+        var actual = catalog.All.Where(x => x.Group == SettingGroup.Ordinary).Select(x => x.Key).ToArray();
 
         Assert.AreEqual(actual.Length, actual.Distinct(StringComparer.OrdinalIgnoreCase).Count(), "Duplicate ordinary key.");
-        CollectionAssert.AreEquivalent(SupportedOrdinaryKeys, actual);
+        CollectionAssert.AreEquivalent(expected, actual);
+        foreach (var key in expected)
+        {
+            Assert.AreEqual(1, actual.Count(actualKey => actualKey.Equals(key, StringComparison.OrdinalIgnoreCase)), key);
+        }
     }
 
     [TestMethod]
-    public void OrdinaryCatalog_PreservesValueSensitivityAndEmptyValueContracts()
+    public void OrdinaryCatalog_PreservesIndependentCompatibilityKeyContract()
     {
-        var booleans = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-        {
-            "reset_form", "show_dl", "hide_gender", "enable_age_warning", "hide_ereceipt", "normalize_to_uppercase",
-            "bypass_dupe_check", "enable_patron_branch_select_option", "block_out_of_state_registrations",
-            "enable_legal_name_checkbox", "use_legal_name_on_notices", "display_ecard_checkbox",
-            "display_mailing_list_checkbox", "display_sms_notice_information", "display_preferred_pickup_location",
-            "display_responsible_person_field", "perform_papi_duplicate_bypass", "use_first_name_for_duplicate_workaround",
-            "update_patron_record_with_melissa_address", "hide_branch_select_if_only_one_option", "disable_branch", "force_ecard_remotely"
-        };
-        var integers = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-        {
-            "mailing_list_record_set_id", "registration_logon_user_id", "ecard_patron_code_id", "teacher_patron_code_id",
-            "student_patron_code_id", "valid_address_patron_code_id", "valid_address_plus_name_patron_code_id",
-            "valid_address_record_set_id", "valid_address_plus_name_record_set_id", "invalid_address_record_set_id", "reset_seconds"
-        };
-        var nullableIntegers = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-            { "add_to_record_set_id", "expiration_date_years", "patron_code_id" };
-        var html = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-            { "custom_form_footer_html", "duplicate_patron_message_html", "mailing_list_description_html", "sms_notice_information_html" };
-        var templates = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-            { "ecard_welcome_email_template_text", "ecard_welcome_email_template_html", "welcome_email_template_text", "welcome_email_template_html" };
-        var longStrings = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-        {
-            "warning_text", "age_warning_text", "na_gender_text", "drivers_license_button_text", "drivers_license_prompt_text",
-            "agreement_confirm_button_text", "agreement_cancel_button_text", "responsible_person_disclaimer", "registration_text",
-            "ecard_registration_text", "valid_address_registration_text", "valid_address_plus_name_registration_text",
-            "out_of_state_block_message", "post_registration_note_text", "kiosk_registration_text"
-        };
-        var shortStrings = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-        {
-            "css_file", "registration_form_header", "dl_format", "school_info_field_legend", "school_info_format",
-            "phone_number_format", "ecard_barcode_prefix", "welcome_email_from_name", "welcome_email_subject",
-            "ecard_welcome_email_subject", "postmark_api_key", "melissa_data_api_key", "show_dl_ips", "kiosk_registration_header"
-        };
-        var expectedTypes = new Dictionary<string, SettingValueType>(StringComparer.OrdinalIgnoreCase);
-        void Add(IEnumerable<string> keys, SettingValueType type)
-        {
-            foreach (var key in keys) expectedTypes.Add(key, type);
-        }
-        Add(booleans, SettingValueType.Boolean);
-        Add(integers, SettingValueType.Integer);
-        Add(nullableIntegers, SettingValueType.NullableInteger);
-        Add(html, SettingValueType.Html);
-        Add(templates, SettingValueType.EmailTemplate);
-        Add(longStrings, SettingValueType.LongString);
-        Add(shortStrings, SettingValueType.ShortString);
-        expectedTypes.Add("expiration_date", SettingValueType.NullableDate);
-        expectedTypes.Add("welcome_email_from_address", SettingValueType.EmailAddress);
-        expectedTypes.Add("header_image_url", SettingValueType.Uri);
-        CollectionAssert.AreEquivalent(SupportedOrdinaryKeys, expectedTypes.Keys.ToArray(), "The type contract must cover every supported key exactly once.");
+        var actual = new SettingCatalog().All
+            .Where(setting => setting.Group == SettingGroup.Ordinary)
+            .Select(setting => setting.Key)
+            .ToArray();
 
-        foreach (var definition in new SettingCatalog().All.Where(x => x.Group == SettingGroup.Ordinary))
+        Assert.AreEqual(ExpectedOrdinaryKeys.Length, actual.Length, "The ordinary catalog size changed.");
+        Assert.AreEqual(actual.Length, actual.Distinct(StringComparer.OrdinalIgnoreCase).Count(), "Duplicate ordinary key.");
+        CollectionAssert.AreEquivalent(ExpectedOrdinaryKeys, actual);
+        foreach (var key in ExpectedOrdinaryKeys)
         {
-            var expectedType = expectedTypes[definition.Key];
+            Assert.AreEqual(1, actual.Count(actualKey => actualKey.Equals(key, StringComparison.OrdinalIgnoreCase)), key);
+        }
+    }
+
+    [TestMethod]
+    public void OrdinaryCatalog_PreservesIndependentSemanticValueTypesAndSensitiveKeys()
+    {
+        var ordinary = new SettingCatalog().All
+            .Where(setting => setting.Group == SettingGroup.Ordinary)
+            .ToList();
+
+        foreach (var expected in ExpectedSemanticValueTypes)
+        {
+            var definitions = ordinary.Where(setting => setting.Key.Equals(expected.Key, StringComparison.OrdinalIgnoreCase)).ToArray();
+            Assert.AreEqual(1, definitions.Length, expected.Key);
+            Assert.AreEqual(expected.Value, definitions[0].ValueType, expected.Key);
+        }
+
+        var actualSensitiveKeys = ordinary
+            .Where(setting => setting.IsSensitive)
+            .Select(setting => setting.Key)
+            .ToArray();
+        CollectionAssert.AreEquivalent(ExpectedSensitiveKeys, actualSensitiveKeys);
+    }
+
+    [TestMethod]
+    public void OrdinaryCatalog_UsesAttributedMetadataAndConservativeClrInference()
+    {
+        var catalog = new SettingCatalog().All.Where(x => x.Group == SettingGroup.Ordinary).ToDictionary(x => x.Key, StringComparer.OrdinalIgnoreCase);
+        foreach (var property in AdministrationProperties())
+        {
+            var attribute = property.GetCustomAttribute<AdminSettingAttribute>()!;
+            var definition = catalog[SettingKey(property)];
+            var expectedType = (int)attribute.ValueType >= 0
+                ? attribute.ValueType
+                : InferValueType(property.PropertyType);
             Assert.AreEqual(expectedType, definition.ValueType, definition.Key);
-            Assert.AreEqual(definition.Key is "postmark_api_key" or "melissa_data_api_key", definition.IsSensitive, definition.Key);
+            Assert.AreEqual(attribute.IsSensitive, definition.IsSensitive, definition.Key);
             Assert.AreEqual(expectedType is SettingValueType.ShortString or SettingValueType.LongString or SettingValueType.Html
                 or SettingValueType.EmailTemplate or SettingValueType.EmailAddress or SettingValueType.Uri
                 or SettingValueType.NullableInteger or SettingValueType.NullableDate, definition.AllowEmpty, definition.Key);
@@ -163,6 +202,46 @@ public class SettingsAdministrationTests
             Assert.IsFalse(string.IsNullOrWhiteSpace(definition.DisplayName), definition.Key);
             Assert.IsFalse(string.IsNullOrWhiteSpace(definition.Description), definition.Key);
         }
+    }
+
+    [TestMethod]
+    public void AdministrationMetadata_InfersKeysAndPreservesLegacyKeyOverrides()
+    {
+        var properties = AdministrationProperties().ToDictionary(property => property.Name);
+        Assert.AreEqual("enable_age_block", SettingKey(properties[nameof(ISettingProvider.EnableAgeBlock)]));
+        Assert.AreEqual("age_block_text", SettingKey(properties[nameof(ISettingProvider.AgeBlockText)]));
+        Assert.AreEqual("expiration_date_years", SettingKey(properties[nameof(ISettingProvider.ExpirationDateYears)]));
+        Assert.AreEqual("postmark_api_key", SettingKey(properties[nameof(ISettingProvider.PostmarkApiKey)]));
+        Assert.AreEqual("show_dl", SettingKey(properties[nameof(ISettingProvider.EnableDriversLicenseSwipe)]));
+        Assert.AreEqual("dl_format", SettingKey(properties[nameof(ISettingProvider.DriversLicenseFormat)]));
+        Assert.AreEqual("display_ecard_checkbox", SettingKey(properties[nameof(ISettingProvider.DisplayECardCheckbox)]));
+        Assert.AreEqual("registration_form_header", SettingKey(properties[nameof(ISettingProvider.RegistrationHeader)]));
+        Assert.AreEqual("hide_branch_select_if_only_one_option", SettingKey(properties[nameof(ISettingProvider.HideBranchSelectIfOnlyOneBranch)]));
+        Assert.AreEqual("perform_papi_duplicate_bypass", SettingKey(properties[nameof(ISettingProvider.PerformPapiDupeBypass)]));
+    }
+
+    [TestMethod]
+    public void AdministrationMetadata_UsesExplicitSemanticStringEditorsAndSensitiveMetadata()
+    {
+        var properties = AdministrationProperties().ToDictionary(property => property.Name);
+        var expected = new Dictionary<string, SettingValueType>
+        {
+            [nameof(ISettingProvider.WarningText)] = SettingValueType.LongString,
+            [nameof(ISettingProvider.CustomFormFooterHtml)] = SettingValueType.Html,
+            [nameof(ISettingProvider.EcardWelcomeEmailTemplateText)] = SettingValueType.EmailTemplate,
+            [nameof(ISettingProvider.WelcomeEmailFromAddress)] = SettingValueType.EmailAddress,
+            [nameof(ISettingProvider.AgeBlockText)] = SettingValueType.Html
+        };
+        foreach (var pair in expected)
+        {
+            var attribute = properties[pair.Key].GetCustomAttribute<AdminSettingAttribute>()!;
+            Assert.AreEqual(pair.Value, attribute.ValueType, pair.Key);
+        }
+
+        Assert.IsTrue(properties[nameof(ISettingProvider.PostmarkApiKey)].GetCustomAttribute<AdminSettingAttribute>()!.IsSensitive);
+        Assert.IsTrue(properties[nameof(ISettingProvider.MelissaDataApiKey)].GetCustomAttribute<AdminSettingAttribute>()!.IsSensitive);
+        Assert.AreEqual(SettingValueType.Html, new SettingCatalog().All.Single(x => x.Key == "age_block_text").ValueType);
+        Assert.AreEqual(SettingValueType.Boolean, new SettingCatalog().All.Single(x => x.Key == "enable_age_block").ValueType);
     }
 
     [TestMethod]
@@ -242,7 +321,7 @@ public class SettingsAdministrationTests
     public void Catalog_UsesStaffFriendlyAcronymsAndAlphabetizesDynamicGroups()
     {
         var catalog = new SettingCatalog().All;
-        foreach (var expected in new[] { "CSS file", "Header image URL", "Custom form footer HTML", "Additional post-registration record set", "Attempt PAPI duplicate workaround", "E-card patron code" })
+        foreach (var expected in new[] { "CSS file", "Header image", "Custom form footer HTML", "Additional post-registration record set", "Attempt PAPI duplicate workaround", "E-card patron code" })
             Assert.IsTrue(catalog.Any(setting => setting.DisplayName == expected), expected);
         foreach (var group in new[] { SettingGroup.Alert, SettingGroup.Label, SettingGroup.Require })
         {
@@ -311,7 +390,9 @@ public class SettingsAdministrationTests
         StringAssert.Contains(view, "(SettingGroup.Require, \"Required fields\")");
         StringAssert.Contains(view, "if (rows.Count == 0) { continue; }");
         Assert.AreEqual(2, Directory.GetFiles(Path.Combine(root, "src"), "*.cs", SearchOption.AllDirectories)
-            .Where(path => !path.Contains(".Web.Tests", StringComparison.Ordinal))
+            .Where(path => !path.Contains(".Web.Tests", StringComparison.Ordinal)
+                && !path.Contains("\\obj\\", StringComparison.OrdinalIgnoreCase)
+                && !path.Contains("\\bin\\", StringComparison.OrdinalIgnoreCase))
             .SelectMany(File.ReadLines).Count(line => line.Contains("ShowValidationMessageSettings", StringComparison.Ordinal)) +
             view.Split('\n').Count(line => line.Contains("ShowValidationMessageSettings", StringComparison.Ordinal)),
             "The toggle must remain local to the Razor presentation and occur only in its declaration and conditional.");
@@ -452,7 +533,7 @@ public class SettingsAdministrationTests
         Assert.IsFalse(index.Contains("No shared draft", StringComparison.Ordinal));
         StringAssert.Contains(css, ".settings-search input[type=\"search\"]");
         Assert.IsFalse(css.Contains(".settings-search input {", StringComparison.Ordinal));
-        StringAssert.Contains(row, "$\"Draft: {presentation.Value}\"");
+        StringAssert.Contains(row, "$\"Draft: {imageSummary}\"");
         StringAssert.Contains(row, "definition.IsSensitive ? string.Empty");
         Assert.IsFalse(row.Contains("<details class=\"setting-row\" open=", StringComparison.Ordinal));
         Assert.IsFalse(row.Contains("tabindex=\"-1\"", StringComparison.Ordinal));
@@ -1132,7 +1213,7 @@ public class SettingsAdministrationTests
         var cache = CacheWith(
             Setting(1, "postmark_api_key", postmarkSecret),
             Setting(1, "melissa_data_api_key", melissaSecret),
-            Setting(1, "registration_text", "Useful public text"));
+            Setting(1, "dl_format", "Useful public text"));
         var provider = new DbSettingProvider(3, cache, string.Empty, 1);
 
         var snapshot = SettingsSnapshotSerializer.Serialize(provider);
@@ -1295,7 +1376,12 @@ public class SettingsAdministrationTests
 
         Assert.IsFalse(partial.Contains("<select id=\"@operationId\"", StringComparison.Ordinal));
         StringAssert.Contains(partial, "class=\"operation\" type=\"hidden\"");
-        StringAssert.Contains(partial, "class=\"edit-setting\">Change</button>");
+        StringAssert.Contains(partial, "class=\"image-setting\"");
+        StringAssert.Contains(partial, "class=\"image-upload-trigger\"");
+        StringAssert.Contains(partial, "class=\"image-choose-another\"");
+        StringAssert.Contains(partial, "class=\"image-undo-pending\"");
+        StringAssert.Contains(partial, "class=\"edit-setting\"");
+        StringAssert.Contains(partial, ">Change</button>");
         StringAssert.Contains(partial, "class=\"apply-setting\">Apply</button>");
         StringAssert.Contains(partial, "class=\"cancel-setting\">Cancel</button>");
         StringAssert.Contains(partial, "class=\"edit-actions\" hidden");
@@ -1303,7 +1389,11 @@ public class SettingsAdministrationTests
         StringAssert.Contains(partial, "canRemoveOverride = resolution.OwnsOverride");
 
         StringAssert.Contains(script, "function beginEdit(candidateOperation)");
-        StringAssert.Contains(script, "function applyEdit()");
+        StringAssert.Contains(script, "function initializeImageRow(row, settingsForm)");
+        StringAssert.Contains(script, "function initializeStandardRow(row, settingsForm)");
+        StringAssert.Contains(script, "function markUpsert(assetId, fileName, previewUrl)");
+        StringAssert.Contains(script, "imageState.status = `${fileName} is ready to save.`");
+        StringAssert.Contains(script, "async function applyEdit()");
         StringAssert.Contains(script, "function cancelEdit()");
         StringAssert.Contains(script, "change?.addEventListener(\"click\", () => beginEdit(\"Upsert\"))");
         StringAssert.Contains(script, "inherit?.addEventListener(\"click\", () => beginEdit(\"RemoveOverride\"))");
@@ -1324,7 +1414,11 @@ public class SettingsAdministrationTests
         var script = File.ReadAllText(Path.Combine(root, "src/Clc.PatronRegistration.Web/wwwroot/js/settings.js"));
 
         StringAssert.Contains(partial, "SettingInheritancePresentation.MessageFor(Model)");
-        StringAssert.Contains(script, "row.dataset.sensitive === \"true\" ? \"••••••••\" : value.value");
+        StringAssert.Contains(script, "row.dataset.sensitive === \"true\"");
+        StringAssert.Contains(script, "row.dataset.valueType === \"image\"");
+        StringAssert.Contains(script, "Replace with “${row.dataset.imagePendingFileName || \"uploaded image\"}”");
+        StringAssert.Contains(script, "Use inherited image (image currently missing)");
+        StringAssert.Contains(partial, "data-image-inherited-missing=");
         StringAssert.Contains(script, "operation.value === \"RemoveOverride\" ? \"Use inherited value\"");
     }
 
@@ -1347,6 +1441,249 @@ public class SettingsAdministrationTests
         var message = SettingInheritancePresentation.MessageFor(sensitive);
         Assert.IsFalse(message.Contains("recognizable secret", StringComparison.Ordinal));
         Assert.AreEqual("Applying this action will remove the override at this scope and use the inherited value.", message);
+    }
+
+    [TestMethod]
+    public void Catalog_ExplicitAllowEmptyOverrideIsHonored()
+    {
+        var definition = TestCatalog<MetadataInferenceContract>(nameof(MetadataInferenceContract.RequiredString))
+            .All.Single(x => x.Key == "required_string");
+
+        Assert.IsFalse(definition.AllowEmpty);
+        Assert.IsNotNull(definition.Validate(string.Empty));
+    }
+
+    [TestMethod]
+    public void Catalog_DoesNotExposeUnattributedProviderProperties()
+    {
+        var catalog = new SettingCatalog();
+
+        Assert.IsFalse(catalog.TryGet("require_preferred_pickup_location", out _));
+        Assert.IsFalse(catalog.TryGet("welcome_email_address", out _));
+        Assert.IsTrue(typeof(FutureProviderImplementation).GetProperty(nameof(FutureProviderImplementation.ImplementationOnly))!
+            .IsDefined(typeof(AdminSettingAttribute), inherit: false));
+        Assert.IsFalse(catalog.TryGet("implementation_only", out _));
+    }
+
+    [TestMethod]
+    public void Catalog_InfersDecimalDateAndNullableTypesFromProviderClrTypes()
+    {
+        var catalog = TestCatalog<MetadataInferenceContract>(
+            nameof(MetadataInferenceContract.DecimalSetting),
+            nameof(MetadataInferenceContract.DateSetting),
+            nameof(MetadataInferenceContract.NullableIntegerSetting),
+            nameof(MetadataInferenceContract.LegacyProperty));
+
+        Assert.AreEqual(SettingValueType.Decimal, catalog.All.Single(x => x.Key == "decimal_setting").ValueType);
+        Assert.AreEqual(SettingValueType.Date, catalog.All.Single(x => x.Key == "date_setting").ValueType);
+        Assert.AreEqual(SettingValueType.NullableInteger, catalog.All.Single(x => x.Key == "nullable_integer_setting").ValueType);
+        Assert.AreEqual("legacy_setting", catalog.All.Single(x => x.Key == "legacy_setting").Key);
+    }
+
+    [TestMethod]
+    public void Catalog_RejectsDuplicateAttributedDatabaseKeysClearly()
+    {
+        var exception = Assert.ThrowsException<InvalidOperationException>(() => TestCatalog<DuplicateKeyContract>(
+            nameof(DuplicateKeyContract.SameKey), nameof(DuplicateKeyContract.ExplicitSameKey)));
+
+        StringAssert.Contains(exception.Message, "Duplicate administration setting database key 'same_key'");
+        StringAssert.Contains(exception.Message, nameof(DuplicateKeyContract.SameKey));
+        StringAssert.Contains(exception.Message, nameof(DuplicateKeyContract.ExplicitSameKey));
+    }
+
+    [TestMethod]
+    public void Catalog_RejectsUnsupportedAttributedClrTypesClearly()
+    {
+        var exception = Assert.ThrowsException<InvalidOperationException>(() => TestCatalog<UnsupportedTypeContract>(
+            nameof(UnsupportedTypeContract.Unsupported)));
+
+        StringAssert.Contains(exception.Message, nameof(UnsupportedTypeContract.Unsupported));
+        StringAssert.Contains(exception.Message, typeof(Guid).FullName!);
+    }
+
+    [TestMethod]
+    public void AdministrationMetadata_IsDeclaredOnISettingProviderAndCachedFromThatContract()
+    {
+        var interfaceProperties = typeof(ISettingProvider).GetProperties(BindingFlags.Instance | BindingFlags.Public);
+        var providerProperties = typeof(DbSettingProvider).GetProperties(BindingFlags.Instance | BindingFlags.Public);
+
+        Assert.AreEqual(78, AdministrationProperties().Length);
+        Assert.IsFalse(providerProperties.Any(property => property.GetCustomAttribute<AdminSettingAttribute>() is not null));
+        Assert.IsTrue(SettingPropertyMetadataCache.GetAll().Where(metadata => metadata.Administration is not null)
+            .All(metadata => metadata.Property.DeclaringType == typeof(ISettingProvider)));
+        Assert.IsNotNull(interfaceProperties.Single(property => property.Name == nameof(ISettingProvider.EnableAgeBlock))
+            .GetCustomAttribute<AdminSettingAttribute>());
+
+        Assert.IsFalse(interfaceProperties.Any(property => property.Name == "HeaderImageUrl"));
+        Assert.IsFalse(new SettingCatalog().TryGet("header_image_url", out _));
+        Assert.IsFalse(SettingPropertyMetadataCache.GetAll().Any(metadata => metadata.Property.Name == "HeaderImageUrl"));
+        Assert.AreEqual("header_image_asset_id", SettingPropertyMetadataCache.Get(nameof(ISettingProvider.HeaderImageAssetId)).DatabaseKey);
+        Assert.AreEqual(SettingValueType.Image, new SettingCatalog().All.Single(setting => setting.Key == "header_image_asset_id").ValueType);
+    }
+
+    [TestMethod]
+    public void SettingsPage_VersionsSettingsJavaScript()
+    {
+        var root = FindRepositoryRoot();
+        var index = File.ReadAllText(Path.Combine(root, "src/Clc.PatronRegistration.Web/Views/Settings/Index.cshtml"));
+        var previewLink = File.ReadAllText(Path.Combine(root, "src/Clc.PatronRegistration.Web/Views/Settings/PreviewLinkCreated.cshtml"));
+
+        StringAssert.Contains(index, "<script src=\"~/js/settings.js\" asp-append-version=\"true\"></script>");
+        StringAssert.Contains(previewLink, "<script src=\"~/js/settings.js\" asp-append-version=\"true\"></script>");
+    }
+
+    [TestMethod]
+    public void SettingPropertyMetadataCache_ResolvesInferredAndExceptionalInterfaceKeys()
+    {
+        var expected = new Dictionary<string, string>
+        {
+            [nameof(ISettingProvider.EnableAgeBlock)] = "enable_age_block",
+            [nameof(ISettingProvider.AgeBlockText)] = "age_block_text",
+            [nameof(ISettingProvider.HeaderImageAssetId)] = "header_image_asset_id",
+            [nameof(ISettingProvider.ExpirationDateYears)] = "expiration_date_years",
+            [nameof(ISettingProvider.EnableDriversLicenseSwipe)] = "show_dl",
+            [nameof(ISettingProvider.DriversLicenseFormat)] = "dl_format",
+            [nameof(ISettingProvider.DisplayECardCheckbox)] = "display_ecard_checkbox",
+            [nameof(ISettingProvider.RegistrationHeader)] = "registration_form_header",
+            [nameof(ISettingProvider.PerformPapiDupeBypass)] = "perform_papi_duplicate_bypass",
+            [nameof(ISettingProvider.HideBranchSelectIfOnlyOneBranch)] = "hide_branch_select_if_only_one_option"
+        };
+
+        foreach (var pair in expected)
+        {
+            var metadata = SettingPropertyMetadataCache.Get(pair.Key);
+            Assert.AreEqual(pair.Value, metadata.DatabaseKey, pair.Key);
+            Assert.AreEqual(typeof(ISettingProvider), metadata.Property.DeclaringType, pair.Key);
+        }
+    }
+
+    [TestMethod]
+    public void Catalog_IsIdenticalForConcreteProvidersAndIgnoresImplementationAttributes()
+    {
+        var expected = new SettingCatalog().All.Select(setting => $"{setting.Key}:{setting.ValueType}:{setting.IsSensitive}").ToArray();
+        _ = new DbSettingProvider(3, new TestCache());
+        _ = new PreviewSettingProvider(Draft(3), 3, new TestCache(), 1);
+        _ = new ForcedKioskModeDbSettingProvider(3, new TestCache());
+
+        var actual = new SettingCatalog().All.Select(setting => $"{setting.Key}:{setting.ValueType}:{setting.IsSensitive}").ToArray();
+        CollectionAssert.AreEqual(expected, actual);
+        Assert.IsFalse(new SettingCatalog().TryGet("implementation_only", out _));
+    }
+
+    [TestMethod]
+    public void PreviewSettingProvider_UsesGetSettingOverrideForPropertyMetadataReads()
+    {
+        var draft = Draft(3,
+            new SettingMutation("enable_age_block", DraftOperation.Upsert, "true"),
+            new SettingMutation("header_image_asset_id", DraftOperation.Upsert, "42"),
+            new SettingMutation("display_ecard_checkbox", DraftOperation.Upsert, "true"));
+        var preview = new PreviewSettingProvider(draft, 3, new TestCache(), 1);
+
+        Assert.IsTrue(preview.EnableAgeBlock);
+        Assert.AreEqual(42, preview.HeaderImageAssetId);
+        Assert.IsTrue(preview.DisplayECardCheckbox);
+        Assert.IsTrue(new SettingCatalog().TryGet("display_ecard_checkbox", out _));
+    }
+
+    [TestMethod]
+    public void ForcedKioskProvider_UsesInterfaceMetadataDespiteHiddenResetImplementation()
+    {
+        var catalog = new SettingCatalog();
+        Assert.IsTrue(catalog.TryGet("reset_form", out var resetForm));
+        Assert.AreEqual(SettingValueType.Boolean, resetForm.ValueType);
+        Assert.IsTrue(catalog.TryGet("show_dl", out _));
+        Assert.AreEqual(typeof(ISettingProvider), SettingPropertyMetadataCache.Get(nameof(ISettingProvider.ResetForm)).Property.DeclaringType);
+
+        var provider = new ForcedKioskModeDbSettingProvider(3, CacheWith(
+            Setting(1, "enable_age_block", "true"),
+            Setting(1, "display_ecard_checkbox", "true")));
+
+        Assert.IsTrue(provider.ResetForm);
+        Assert.IsTrue(provider.EnableAgeBlock);
+        Assert.IsTrue(provider.DisplayECardCheckbox);
+    }
+
+    private static PropertyInfo[] AdministrationProperties() =>
+        typeof(ISettingProvider).GetProperties(BindingFlags.Instance | BindingFlags.Public)
+            .Where(property => property.GetCustomAttribute<AdminSettingAttribute>() is not null)
+            .OrderBy(property => property.MetadataToken)
+            .ToArray();
+
+    private static string SettingKey(PropertyInfo property) =>
+        property.GetCustomAttribute<AdminSettingAttribute>()!.Key
+        ?? JsonNamingPolicy.SnakeCaseLower.ConvertName(property.Name);
+
+    private static SettingValueType InferValueType(Type propertyType) => propertyType switch
+    {
+        _ when propertyType == typeof(bool) => SettingValueType.Boolean,
+        _ when propertyType == typeof(int) => SettingValueType.Integer,
+        _ when propertyType == typeof(int?) => SettingValueType.NullableInteger,
+        _ when propertyType == typeof(decimal) => SettingValueType.Decimal,
+        _ when propertyType == typeof(DateTime) => SettingValueType.Date,
+        _ when propertyType == typeof(DateTime?) => SettingValueType.NullableDate,
+        _ when propertyType == typeof(string) => SettingValueType.ShortString,
+        _ => throw new InvalidOperationException($"Unsupported test type {propertyType.FullName}.")
+    };
+
+    private static SettingCatalog TestCatalog<T>(params string[] propertyNames) =>
+        new(propertyNames.Select(propertyName =>
+        {
+            var property = typeof(T).GetProperty(propertyName, BindingFlags.Instance | BindingFlags.Public)
+                ?? throw new InvalidOperationException($"Test metadata property '{propertyName}' was not found.");
+            var administration = property.GetCustomAttribute<AdminSettingAttribute>()
+                ?? throw new InvalidOperationException($"Test metadata property '{propertyName}' is not attributed.");
+            var databaseKey = administration.Key ?? JsonNamingPolicy.SnakeCaseLower.ConvertName(property.Name);
+            return new SettingPropertyMetadata(property, administration, databaseKey);
+        }).ToArray());
+
+    private interface MetadataInferenceContract
+    {
+        [AdminSetting(SettingCategory.FormBehaviorAndFields, "Decimal setting", "Decimal setting.")]
+        decimal DecimalSetting { get; }
+
+        [AdminSetting(SettingCategory.FormBehaviorAndFields, "Date setting", "Date setting.")]
+        DateTime DateSetting { get; }
+
+        [AdminSetting(SettingCategory.FormBehaviorAndFields, "Nullable integer setting", "Nullable integer setting.")]
+        int? NullableIntegerSetting { get; }
+
+        [AdminSetting(SettingCategory.FormBehaviorAndFields, "HTML setting", "HTML setting.", ValueType = SettingValueType.Html)]
+        string HtmlSetting { get; }
+
+        [AdminSetting(SettingCategory.FormBehaviorAndFields, "Email template setting", "Email template setting.", ValueType = SettingValueType.EmailTemplate)]
+        string TemplateSetting { get; }
+
+        [AdminSetting(SettingCategory.FormBehaviorAndFields, "Email address setting", "Email address setting.", ValueType = SettingValueType.EmailAddress)]
+        string EmailSetting { get; }
+
+        [AdminSetting(SettingCategory.FormBehaviorAndFields, "Required string", "Required string.", AllowEmpty = false)]
+        string RequiredString { get; }
+
+        [AdminSetting(SettingCategory.FormBehaviorAndFields, "Legacy setting", "Legacy setting.", Key = "legacy_setting")]
+        bool LegacyProperty { get; }
+    }
+
+    private sealed class FutureProviderImplementation : DbSettingProvider
+    {
+        private FutureProviderImplementation() : base(0, null!) { }
+
+        [AdminSetting(SettingCategory.FormBehaviorAndFields, "Implementation only", "Implementation-only metadata must not change the catalog.")]
+        public bool ImplementationOnly => true;
+    }
+
+    private interface DuplicateKeyContract
+    {
+        [AdminSetting(SettingCategory.FormBehaviorAndFields, "Same key", "Same key.")]
+        bool SameKey { get; }
+
+        [AdminSetting(SettingCategory.FormBehaviorAndFields, "Explicit same key", "Explicit same key.", Key = "same_key")]
+        bool ExplicitSameKey { get; }
+    }
+
+    private interface UnsupportedTypeContract
+    {
+        [AdminSetting(SettingCategory.FormBehaviorAndFields, "Unsupported", "Unsupported.")]
+        Guid Unsupported { get; }
     }
 
     private static string FindRepositoryRoot()

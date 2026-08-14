@@ -33,6 +33,10 @@ public static class SettingValuePresentation
         {
             return "Hidden";
         }
+        if (definition.ValueType == SettingValueType.Image)
+        {
+            return string.IsNullOrWhiteSpace(value) ? "No image" : "Uploaded image";
+        }
         if (value is null)
         {
             return "Not configured";
@@ -88,6 +92,8 @@ public enum SettingPresentationState { DraftChange, Customized, Inherited, NotSe
 public sealed record SettingRowPresentation(SettingPresentationState State, string Value, string Status,
     string CurrentValue);
 
+public sealed record SettingAssetPresentation(int AssetId, string FileName, string PreviewUrl);
+
 public sealed class SettingsIndexViewModel
 {
     public int OrganizationId { get; set; }
@@ -117,7 +123,13 @@ public sealed record SettingRowViewModel(
     long? DraftId,
     string SourceDescription = "No value is configured",
     string? InheritedValue = null,
-    bool HasInheritedValue = false);
+    bool HasInheritedValue = false,
+    SettingAssetPresentation? EffectiveAsset = null,
+    bool EffectiveAssetMissing = false,
+    SettingAssetPresentation? StagedAsset = null,
+    bool StagedAssetMissing = false,
+    SettingAssetPresentation? InheritedAsset = null,
+    bool InheritedAssetMissing = false);
 
 public static class SettingInheritancePresentation
 {

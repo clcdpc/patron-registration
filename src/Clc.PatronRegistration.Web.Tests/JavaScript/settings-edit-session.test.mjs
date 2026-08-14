@@ -42,7 +42,7 @@ const documentStub = {
 const context = { document: documentStub, window: {}, globalThis: {}, Event };
 context.globalThis = context;
 vm.runInNewContext(readFileSync(new URL("../../Clc.PatronRegistration.Web/wwwroot/js/settings.js", import.meta.url), "utf8"), context);
-const { initializeSettingsContext, initializeRow, updatePendingActions, blockActiveEdit, populateReviewList, handleSaveAttempt } = context.SettingsEditSessions;
+const { initializeSettingsContext, initializeRow, updatePendingActions, hasImageUpload, blockActiveEdit, populateReviewList, handleSaveAttempt } = context.SettingsEditSessions;
 
 function settingsContextFixture() {
     const organization = new Control("branch-2");
@@ -153,6 +153,7 @@ test("pending actions follow applied dirty rows rather than edit sessions or ser
 
     first.controls.change.click();
     assert.equal(fixture.actions.hidden, true, "entering edit mode is not a pending change");
+    assert.equal(focused, first.controls.value, "ordinary settings continue to focus their value editor");
     first.controls.cancel.click();
     assert.equal(fixture.actions.hidden, true, "cancelling a clean candidate remains clean");
 
@@ -278,6 +279,701 @@ test("Cancel restores already-applied Upsert and RemoveOverride states", () => {
     assert.equal(removal.controls.inherit.hidden, true);
 });
 
+function imageEditorFixture({ value = "", operation = "Upsert", dirty = false, ownsOverride = true, hasInherited = true, inheritedMissing = false } = {}) {
+    const controls = {
+        uploadTrigger: new Control(), chooseAnother: new Control(), undo: new Control(),
+        inherit: ownsOverride ? new Control() : null, file: new Control(), pending: new Control(),
+        pendingHeading: new Control(), pendingPreview: new Control(), pendingFileName: new Control(), uploadStatus: new Control(),
+        operation: new Control(operation), value: new Control(value), index: new Control(), key: new Control(),
+        summary: new Control(value ? "current.png" : "No image configured"), settingStatus: new Control("Customized")
+    };
+    controls.file.files = [];
+    controls.file.dataset.uploadUrl = "/settings/assets/upload";
+    controls.pending.hidden = true;
+    controls.pending.querySelector = (selector) => selector === ".image-pending-heading" ? controls.pendingHeading
+        : selector === ".image-pending-preview" || selector === "img" ? controls.pendingPreview
+            : selector === ".image-pending-file-name" ? controls.pendingFileName
+                : selector === ".image-upload-status" ? controls.uploadStatus : null;
+    const selectors = {
+        ".image-upload-trigger": controls.uploadTrigger, ".image-choose-another": controls.chooseAnother,
+        ".image-undo-pending": controls.undo, ".image-inherit-action": controls.inherit,
+        ".image-file": controls.file, ".image-pending": controls.pending,
+        ".operation": controls.operation, ".setting-value": controls.value,
+        ".change-index": controls.index, ".change-key": controls.key,
+        ".summary-value": controls.summary, ".setting-status": controls.settingStatus
+    };
+    const row = {
+        dataset: {
+            valueType: "image", appliedOperation: operation, dirty: dirty.toString(), displayName: "Header image",
+            oldValue: value ? "current.png" : "No image configured", imageHasInherited: hasInherited.toString(),
+            imageInheritedMissing: inheritedMissing.toString(),
+            imageInheritedPreviewUrl: hasInherited && !inheritedMissing ? "/settings/assets/10" : "",
+            imageInheritedFileName: hasInherited && !inheritedMissing ? "inherited.png" : ""
+        },
+        querySelector(selector) { return selectors[selector] || null; },
+        querySelectorAll() { return [controls.index, controls.key, controls.operation]; },
+        closest() { return { setAttribute() {} }; },
+        setAttribute(name, value) { this[name] = value; }
+    };
+    controls.summary.textContent = value ? "current.png" : "No image configured";
+    controls.settingStatus.textContent = "Customized";
+    const status = new Control();
+    const actions = new Control();
+    actions.querySelector = (selector) => selector === ".pending-changes-status" ? status : null;
+    const token = new Control("csrf");
+    const organization = new Control("3");
+    const formCode = new Control("");
+    const ordinaryRow = { dataset: { dirty: "false" } };
+    const settingsForm = {
+        querySelector(selector) {
+            if (selector === ".settings-actions") return actions;
+            if (selector === 'input[name="__RequestVerificationToken"]') return token;
+            if (selector === 'input[name="OrganizationId"]') return organization;
+            if (selector === 'input[name="FormCode"]') return formCode;
+            return null;
+        },
+        querySelectorAll(selector) {
+            if (selector === '.setting-row[data-image-uploading="true"]') {
+                return row.dataset.imageUploading === "true" ? [row] : [];
+            }
+            return selector.includes('data-dirty="true"')
+                ? [row, ordinaryRow].filter(candidate => candidate.dataset.dirty === "true")
+                : [];
+        }
+    };
+    return { row, controls, settingsForm, ordinaryRow };
+}
+
+function imageUploadSandbox(fixture, fetchImplementation) {
+    class FormDataStub { constructor() { this.values = []; } append(...value) { this.values.push(value); } }
+    const sandbox = {
+        document: { querySelector() { return null; }, querySelectorAll() { return []; }, createElement() { return new Control(); } },
+        window: {}, globalThis: {}, Event, FormData: FormDataStub,
+        URL: { createObjectURL: () => "blob:pending", revokeObjectURL() {} },
+        fetch: fetchImplementation
+    };
+    sandbox.globalThis = sandbox;
+    vm.runInNewContext(readFileSync(new URL("../../Clc.PatronRegistration.Web/wwwroot/js/settings.js", import.meta.url), "utf8"), sandbox);
+    sandbox.SettingsEditSessions.initializeRow(fixture.row, fixture.settingsForm);
+    return sandbox;
+}
+
+function workflowDialog(selectors = {}) {
+    const dialog = new Control();
+    dialog.showModal = () => { dialog.open = true; };
+    dialog.querySelector = (selector) => selectors[selector] || null;
+    return dialog;
+}
+
+function workflowUploadFixture(fetchImplementation) {
+    const fixture = imageEditorFixture({ value: "12" });
+    const ordinaryRow = {
+        dataset: { dirty: "true" },
+        discarded: false,
+        _discardPendingChange() {
+            this.discarded = true;
+            this.dataset.dirty = "false";
+        }
+    };
+    const allRows = [fixture.row, ordinaryRow];
+    const actions = new Control();
+    const pendingStatus = new Control();
+    actions.querySelector = (selector) => selector === ".pending-changes-status" ? pendingStatus : null;
+    const editStatus = new Control();
+    const token = new Control("csrf");
+    const organization = new Control("3");
+    const formCode = new Control("");
+    const settingsForm = new Control();
+    let formSubmissions = 0;
+    settingsForm.requestSubmit = () => { formSubmissions++; };
+    settingsForm.querySelector = (selector) => {
+        if (selector === ".settings-actions") return actions;
+        if (selector === 'input[name="__RequestVerificationToken"]') return token;
+        if (selector === 'input[name="OrganizationId"]') return organization;
+        if (selector === 'input[name="FormCode"]') return formCode;
+        if (selector === '.setting-row[data-image-uploading="true"]') return fixture.row.dataset.imageUploading === "true" ? fixture.row : null;
+        if (selector === '.setting-row[data-candidate-operation]') return fixture.row.dataset.candidateOperation ? fixture.row : null;
+        return null;
+    };
+    settingsForm.querySelectorAll = (selector) => {
+        if (selector === '.setting-row[data-image-uploading="true"]') {
+            return fixture.row.dataset.imageUploading === "true" ? [fixture.row] : [];
+        }
+        if (selector === '.setting-row[data-candidate-operation]') {
+            return fixture.row.dataset.candidateOperation ? [fixture.row] : [];
+        }
+        if (selector === '.setting-row[data-dirty="true"]') {
+            return allRows.filter((row) => row.dataset.dirty === "true");
+        }
+        return [];
+    };
+    fixture.settingsForm = settingsForm;
+
+    const contextForm = new Control();
+    const contextOrganization = new Control("branch-2");
+    const contextFormCode = new Control("default");
+    contextOrganization.disabled = false;
+    contextFormCode.disabled = false;
+    contextForm.querySelector = (selector) => selector === "#organization-scope" ? contextOrganization : contextFormCode;
+    let navigationSubmissions = 0;
+    contextForm.requestSubmit = () => { navigationSubmissions++; };
+
+    const discardCancel = new Control();
+    const guardDiscard = new Control();
+    const unsavedDialog = workflowDialog({
+        "#unsaved-title": new Control(),
+        "[data-unsaved-message]": new Control(),
+        "[data-unsaved-explanation]": new Control(),
+        "[data-guard-discard]": guardDiscard,
+        "[data-dialog-cancel]": discardCancel
+    });
+    const liveConfirm = new Control();
+    const liveDialog = workflowDialog({ "[data-confirm-live-preview]": liveConfirm });
+    const reviewList = { children: [], replaceChildren() { this.children = []; }, append(item) { this.children.push(item); } };
+    const saveConfirm = new Control();
+    const saveCancel = new Control();
+    const saveDialog = workflowDialog({ "ul": reviewList, "#confirm-save": saveConfirm });
+    const discardButton = new Control();
+    const guardedForm = new Control();
+    guardedForm.dataset = { guardAction: "true" };
+    guardedForm.matches = () => false;
+    let guardedSubmissions = 0;
+    guardedForm.requestSubmit = () => { guardedSubmissions++; };
+    let beforeUnload;
+    const documentForWorkflow = {
+        querySelector(selector) {
+            return {
+                "#setting-search": null,
+                "#search-status": null,
+                "#settings-form": settingsForm,
+                "#save-confirm": saveDialog,
+                "#unsaved-changes-dialog": unsavedDialog,
+                "#live-preview-confirm": liveDialog,
+                "#edit-session-status": editStatus,
+                ".settings-context": contextForm,
+                "#draft-only-filter": null,
+                ".settings-search": null,
+                "[data-review-draft]": null,
+                "#confirm-save": saveConfirm,
+                "#cancel-save": saveCancel,
+                "[data-guard-discard]": guardDiscard,
+                "[data-confirm-live-preview]": liveConfirm,
+                "[data-discard-pending]": discardButton
+            }[selector] || null;
+        },
+        querySelectorAll(selector) {
+            if (selector === ".setting-row") return [fixture.row];
+            if (selector === "form[data-guard-action]") return [guardedForm];
+            if (selector === "dialog") return [unsavedDialog, liveDialog, saveDialog];
+            return [];
+        },
+        createElement() { return new Control(); }
+    };
+    const sandbox = {
+        document: documentForWorkflow,
+        window: { addEventListener(name, callback) { if (name === "beforeunload") beforeUnload = callback; } },
+        globalThis: {}, Event, Map, Set,
+        FormData: class { constructor() { this.values = []; } append(...value) { this.values.push(value); } },
+        URL: { createObjectURL: () => "blob:pending", revokeObjectURL() {} },
+        fetch: fetchImplementation
+    };
+    sandbox.globalThis = sandbox;
+    vm.runInNewContext(readFileSync(new URL("../../Clc.PatronRegistration.Web/wwwroot/js/settings.js", import.meta.url), "utf8"), sandbox);
+    return {
+        sandbox, fixture, ordinaryRow, settingsForm, contextForm, contextOrganization,
+        unsavedDialog, guardDiscard, discardButton, guardedForm,
+        get formSubmissions() { return formSubmissions; },
+        get navigationSubmissions() { return navigationSubmissions; },
+        get guardedSubmissions() { return guardedSubmissions; },
+        get beforeUnload() { return beforeUnload; }
+    };
+}
+
+function blockerStatusFixture() {
+    const status = new Control();
+    const candidateRow = { dataset: { candidateOperation: "Upsert" } };
+    const uploadRow = { dataset: { imageUploading: "true" } };
+    const state = { candidate: false, uploading: false };
+    const form = {
+        querySelector(selector) {
+            if (selector.includes("candidate-operation")) return state.candidate ? candidateRow : null;
+            if (selector.includes("image-uploading")) return state.uploading ? uploadRow : null;
+            return null;
+        },
+        querySelectorAll(selector) {
+            if (selector.includes("candidate-operation")) return state.candidate ? [candidateRow] : [];
+            if (selector.includes("image-uploading")) return state.uploading ? [uploadRow] : [];
+            return [];
+        }
+    };
+    const sandbox = {
+        document: {
+            querySelector(selector) { return selector === "#edit-session-status" ? status : null; },
+            querySelectorAll() { return []; },
+            createElement() { return new Control(); }
+        },
+        window: { addEventListener() {} },
+        globalThis: {}, Event, Map, Set
+    };
+    sandbox.globalThis = sandbox;
+    vm.runInNewContext(readFileSync(new URL("../../Clc.PatronRegistration.Web/wwwroot/js/settings.js", import.meta.url), "utf8"), sandbox);
+    return {
+        sandbox,
+        form,
+        status,
+        state,
+        synchronize() { return sandbox.SettingsWorkflow.clearEditSessionStatus(form); }
+    };
+}
+
+function startUnresolvedImageUpload(fixture) {
+    fixture.controls.uploadTrigger.click();
+    fixture.controls.file.files = [{ name: "replacement.png" }];
+    fixture.controls.file.dispatchEvent(new Event("change"));
+}
+
+const flush = () => new Promise(resolve => setImmediate(resolve));
+
+test("navigation is blocked during an image upload and focuses the pending undo control", () => {
+    const workflow = workflowUploadFixture(() => new Promise(() => {}));
+    workflow.ordinaryRow.dataset.dirty = "false";
+    startUnresolvedImageUpload(workflow.fixture);
+
+    assert.equal(workflow.sandbox.SettingsEditSessions.hasImageUpload(workflow.settingsForm), true);
+    workflow.contextOrganization.value = "branch-3";
+    workflow.contextOrganization.dispatchEvent(new Event("change"));
+
+    assert.equal(workflow.navigationSubmissions, 0);
+    assert.match(workflow.sandbox.document.querySelector("#edit-session-status").textContent,
+        /Wait for the image upload to finish or undo the image change/);
+    assert.equal(workflow.fixture.controls.undo.focused, true);
+    workflow.fixture.controls.undo.click();
+});
+
+test("guarded lifecycle actions are blocked while an image upload is unresolved", () => {
+    const workflow = workflowUploadFixture(() => new Promise(() => {}));
+    workflow.ordinaryRow.dataset.dirty = "false";
+    startUnresolvedImageUpload(workflow.fixture);
+    let prevented = false;
+    workflow.sandbox.SettingsWorkflow.lifecycleSubmit({
+        currentTarget: workflow.guardedForm,
+        submitter: new Control(),
+        preventDefault() { prevented = true; }
+    });
+
+    assert.equal(prevented, true);
+    assert.equal(workflow.guardedSubmissions, 0);
+    assert.match(workflow.sandbox.document.querySelector("#edit-session-status").textContent, /Wait for the image upload/);
+    workflow.fixture.controls.undo.click();
+});
+
+test("explicit browser discard includes an unresolved image upload and cancels its late response", async () => {
+    let resolveResponse;
+    const workflow = workflowUploadFixture(() => new Promise(resolve => { resolveResponse = resolve; }));
+    startUnresolvedImageUpload(workflow.fixture);
+
+    workflow.discardButton.click();
+    assert.equal(workflow.unsavedDialog.open, true);
+    assert.equal(workflow.guardDiscard.textContent, "Discard 2 browser changes");
+    workflow.guardDiscard.click();
+
+    assert.equal(workflow.ordinaryRow.discarded, true);
+    assert.equal(workflow.fixture.row.dataset.imageUploading, undefined);
+    assert.equal(workflow.fixture.row.dataset.dirty, "false");
+    assert.equal(workflow.fixture.controls.value.value, "12");
+    assert.equal(workflow.fixture.controls.pending.hidden, true);
+
+    resolveResponse({ ok: true, async json() { return { assetId: 91, fileName: "late.png", previewUrl: "/settings/assets/91" }; } });
+    await flush();
+    assert.equal(workflow.fixture.row.dataset.dirty, "false");
+    assert.equal(workflow.fixture.controls.value.value, "12");
+    assert.equal(workflow.fixture.controls.pending.hidden, true);
+});
+
+test("beforeunload protects unresolved image uploads but not an approved submission", () => {
+    const workflow = workflowUploadFixture(() => new Promise(() => {}));
+    workflow.ordinaryRow.dataset.dirty = "false";
+    startUnresolvedImageUpload(workflow.fixture);
+
+    let prevented = false;
+    const event = { preventDefault() { prevented = true; }, returnValue: undefined };
+    workflow.beforeUnload(event);
+    assert.equal(prevented, true);
+    assert.equal(event.returnValue, "");
+
+    workflow.sandbox.SettingsWorkflow.setWorkflowState({ pending: null, submitting: true, approved: false });
+    prevented = false;
+    const approvedEvent = { preventDefault() { prevented = true; }, returnValue: undefined };
+    workflow.beforeUnload(approvedEvent);
+    assert.equal(prevented, false);
+    workflow.fixture.controls.undo.click();
+});
+
+test("blocker status switches from upload to a remaining candidate edit", () => {
+    const fixture = blockerStatusFixture();
+    fixture.state.uploading = true;
+    fixture.synchronize();
+    assert.match(fixture.status.textContent, /Wait for the image upload/);
+
+    fixture.state.candidate = true;
+    fixture.synchronize();
+    assert.equal(fixture.status.textContent, "Apply or Cancel the active setting edit before saving.");
+
+    fixture.state.uploading = false;
+    fixture.synchronize();
+    assert.equal(fixture.status.textContent, "Apply or Cancel the active setting edit before saving.");
+
+    fixture.state.candidate = false;
+    fixture.synchronize();
+    assert.equal(fixture.status.hidden, true);
+    assert.equal(fixture.status.textContent, "");
+});
+
+test("blocker status switches from a resolved candidate edit to a remaining upload", () => {
+    const fixture = blockerStatusFixture();
+    fixture.state.candidate = true;
+    fixture.synchronize();
+    assert.equal(fixture.status.textContent, "Apply or Cancel the active setting edit before saving.");
+
+    fixture.state.uploading = true;
+    fixture.synchronize();
+    assert.equal(fixture.status.textContent, "Apply or Cancel the active setting edit before saving.");
+
+    fixture.state.candidate = false;
+    fixture.synchronize();
+    assert.match(fixture.status.textContent, /Wait for the image upload/);
+
+    fixture.state.uploading = false;
+    fixture.synchronize();
+    assert.equal(fixture.status.hidden, true);
+    assert.equal(fixture.status.textContent, "");
+});
+
+test("blocker status synchronization preserves unrelated validation messages", () => {
+    const fixture = blockerStatusFixture();
+    fixture.status.textContent = "Choose a valid uploaded image before saving.";
+    fixture.status.dataset.statusKind = "validation";
+    fixture.synchronize();
+    assert.equal(fixture.status.hidden, false);
+    assert.equal(fixture.status.textContent, "Choose a valid uploaded image before saving.");
+    assert.equal(fixture.status.dataset.statusKind, "validation");
+});
+
+test("a successful image upload clears the global upload-blocking status", async () => {
+    let resolveResponse;
+    const workflow = workflowUploadFixture(() => new Promise(resolve => { resolveResponse = resolve; }));
+    workflow.ordinaryRow.dataset.dirty = "false";
+    startUnresolvedImageUpload(workflow.fixture);
+    workflow.contextOrganization.value = "branch-3";
+    workflow.contextOrganization.dispatchEvent(new Event("change"));
+
+    const status = workflow.sandbox.document.querySelector("#edit-session-status");
+    assert.equal(status.hidden, false);
+    assert.match(status.textContent, /Wait for the image upload/);
+
+    resolveResponse({ ok: true, async json() {
+        return { assetId: 91, fileName: "replacement.png", previewUrl: "/settings/assets/91" };
+    } });
+    await flush();
+
+    assert.equal(workflow.fixture.row.dataset.dirty, "true");
+    assert.equal(workflow.fixture.controls.uploadStatus.textContent, "replacement.png is ready to save.");
+    assert.equal(status.hidden, true);
+    assert.equal(status.textContent, "");
+});
+
+test("a failed image upload clears the global block but preserves the local error", async () => {
+    let resolveResponse;
+    const workflow = workflowUploadFixture(() => new Promise(resolve => { resolveResponse = resolve; }));
+    workflow.ordinaryRow.dataset.dirty = "false";
+    startUnresolvedImageUpload(workflow.fixture);
+    workflow.contextOrganization.value = "branch-3";
+    workflow.contextOrganization.dispatchEvent(new Event("change"));
+
+    resolveResponse({ ok: false, async json() { return { error: "The image is invalid." }; } });
+    await flush();
+
+    const status = workflow.sandbox.document.querySelector("#edit-session-status");
+    assert.equal(status.hidden, true);
+    assert.equal(status.textContent, "");
+    assert.equal(workflow.fixture.controls.uploadStatus.classList.contains("image-upload-error"), true);
+    assert.match(workflow.fixture.controls.uploadStatus.textContent, /image is invalid/);
+});
+
+test("Undo clears the global upload block and ignores the late upload response", async () => {
+    let resolveResponse;
+    const workflow = workflowUploadFixture(() => new Promise(resolve => { resolveResponse = resolve; }));
+    workflow.ordinaryRow.dataset.dirty = "false";
+    startUnresolvedImageUpload(workflow.fixture);
+    workflow.contextOrganization.value = "branch-3";
+    workflow.contextOrganization.dispatchEvent(new Event("change"));
+    workflow.fixture.controls.undo.click();
+
+    const status = workflow.sandbox.document.querySelector("#edit-session-status");
+    assert.equal(status.hidden, true);
+    assert.equal(status.textContent, "");
+    assert.equal(workflow.fixture.row.dataset.imageUploading, undefined);
+
+    resolveResponse({ ok: true, async json() {
+        return { assetId: 91, fileName: "late.png", previewUrl: "/settings/assets/91" };
+    } });
+    await flush();
+    assert.equal(workflow.fixture.row.dataset.dirty, "false");
+    assert.equal(workflow.fixture.controls.value.value, "12");
+    assert.equal(workflow.fixture.controls.pending.hidden, true);
+});
+
+test("image upload focuses the chooser and immediately creates a browser-pending mutation", async () => {
+    const fixture = imageEditorFixture({ value: "" });
+    const requests = [];
+    const sandbox = imageUploadSandbox(fixture, async (url, options) => {
+        requests.push({ url, options });
+        return { ok: true, async json() { return { assetId: 91, fileName: "replacement.png", previewUrl: "/settings/assets/91" }; } };
+    });
+
+    assert.equal(fixture.controls.pending.hidden, true);
+    fixture.controls.uploadTrigger.click();
+    assert.equal(focused, fixture.controls.file, "image settings focus the file chooser");
+    fixture.controls.file.files = [{ name: "replacement.png" }];
+    fixture.controls.file.dispatchEvent(new Event("change"));
+    assert.equal(fixture.controls.uploadStatus.textContent, "Uploading image…");
+    assert.equal(fixture.row.dataset.dirty, "false", "asset-only upload does not mutate settings before success");
+    await flush();
+
+    assert.equal(requests.length, 1);
+    assert.equal(fixture.controls.value.value, "91");
+    assert.equal(fixture.controls.operation.value, "Upsert");
+    assert.equal(fixture.row.dataset.dirty, "true");
+    assert.equal(fixture.controls.index.disabled, false);
+    assert.equal(fixture.controls.key.disabled, false);
+    assert.equal(fixture.controls.operation.disabled, false);
+    assert.equal(fixture.controls.value.disabled, false);
+    assert.equal(fixture.controls.pending.hidden, false);
+    assert.equal(fixture.controls.pendingFileName.textContent, "replacement.png");
+    assert.equal(fixture.controls.pendingPreview.src, "/settings/assets/91");
+    assert.equal(fixture.controls.uploadStatus.textContent, "replacement.png is ready to save.");
+    assert.equal(fixture.controls.apply, undefined, "image rows do not expose a separate Apply control");
+
+    fixture.ordinaryRow.dataset.dirty = "true";
+    sandbox.SettingsEditSessions.updatePendingActions(fixture.settingsForm);
+    assert.equal(fixture.settingsForm.querySelector(".settings-actions").querySelector(".pending-changes-status").textContent,
+        "2 unsaved browser changes", "image and ordinary edits share the page Save workflow");
+});
+
+test("a first image upload failure is visibly styled and leaves the setting clean", async () => {
+    const fixture = imageEditorFixture({ value: "12" });
+    const sandbox = imageUploadSandbox(fixture, async () => ({
+        ok: false,
+        async json() { return { error: "The image is invalid." }; }
+    }));
+
+    fixture.controls.uploadTrigger.click();
+    fixture.controls.file.files = [{ name: "bad.png" }];
+    fixture.controls.file.dispatchEvent(new Event("change"));
+    await flush();
+
+    assert.equal(fixture.row.dataset.dirty, "false");
+    assert.equal(fixture.row.dataset.imageUploading, undefined);
+    assert.equal(fixture.controls.uploadStatus.classList.contains("image-upload-error"), true);
+    assert.match(fixture.controls.uploadStatus.textContent, /image is invalid/);
+    fixture.controls.undo.click();
+    assert.equal(fixture.controls.uploadStatus.classList.contains("image-upload-error"), false);
+    assert.equal(fixture.controls.value.value, "12");
+});
+
+test("image replacement can be replaced again and Undo restores the server-rendered state", async () => {
+    const fixture = imageEditorFixture({ value: "12" });
+    let requestCount = 0;
+    const sandbox = imageUploadSandbox(fixture, async () => {
+        requestCount++;
+        const assetId = requestCount === 1 ? 91 : 92;
+        const fileName = requestCount === 1 ? "replacement.png" : "replacement.webp";
+        return { ok: true, async json() { return { assetId, fileName, previewUrl: `/settings/assets/${assetId}` }; } };
+    });
+
+    fixture.controls.uploadTrigger.click();
+    fixture.controls.file.files = [{ name: "replacement.png" }];
+    fixture.controls.file.dispatchEvent(new Event("change"));
+    await flush();
+    assert.equal(fixture.controls.value.value, "91");
+
+    fixture.controls.chooseAnother.click();
+    fixture.controls.file.files = [{ name: "replacement.webp" }];
+    fixture.controls.file.dispatchEvent(new Event("change"));
+    await flush();
+    assert.equal(fixture.controls.value.value, "92");
+    assert.equal(fixture.controls.pendingFileName.textContent, "replacement.webp");
+    assert.equal(fixture.controls.pendingPreview.src, "/settings/assets/92");
+
+    fixture.controls.undo.click();
+    assert.equal(fixture.controls.value.value, "12");
+    assert.equal(fixture.controls.operation.value, "Upsert");
+    assert.equal(fixture.row.dataset.dirty, "false");
+    assert.equal(fixture.controls.index.disabled, true);
+    assert.equal(fixture.controls.pending.hidden, true);
+    assert.equal(fixture.controls.summary.textContent, "current.png");
+});
+
+test("a failed replacement leaves the earlier successful replacement intact", async () => {
+    const fixture = imageEditorFixture({ value: "12" });
+    let requestCount = 0;
+    const sandbox = imageUploadSandbox(fixture, async () => {
+        requestCount++;
+        if (requestCount === 1) return { ok: true, async json() { return { assetId: 91, fileName: "replacement.png", previewUrl: "/settings/assets/91" }; } };
+        if (requestCount === 2) return { ok: false, async json() { return { error: "The image is invalid." }; } };
+        return { ok: true, async json() { return { assetId: 92, fileName: "replacement.webp", previewUrl: "/settings/assets/92" }; } };
+    });
+
+    fixture.controls.uploadTrigger.click();
+    fixture.controls.file.files = [{ name: "replacement.png" }];
+    fixture.controls.file.dispatchEvent(new Event("change"));
+    await flush();
+    fixture.controls.chooseAnother.click();
+    fixture.controls.file.files = [{ name: "bad.webp" }];
+    fixture.controls.file.dispatchEvent(new Event("change"));
+    await flush();
+
+    assert.equal(fixture.controls.value.value, "91");
+    assert.equal(fixture.controls.pendingFileName.textContent, "replacement.png");
+    assert.match(fixture.controls.uploadStatus.textContent, /replacement.png remains selected/);
+    assert.equal(fixture.controls.uploadStatus.classList.contains("image-upload-error"), true);
+    assert.equal(fixture.row.dataset.dirty, "true");
+
+    fixture.controls.chooseAnother.click();
+    fixture.controls.file.files = [{ name: "replacement.webp" }];
+    fixture.controls.file.dispatchEvent(new Event("change"));
+    await flush();
+    assert.equal(fixture.controls.value.value, "92");
+    assert.equal(fixture.controls.uploadStatus.classList.contains("image-upload-error"), false);
+    fixture.controls.undo.click();
+    assert.equal(fixture.controls.uploadStatus.classList.contains("image-upload-error"), false);
+});
+
+test("Undo during an image upload prevents a late response from repopulating the row", async () => {
+    const fixture = imageEditorFixture({ value: "12" });
+    let resolveResponse;
+    const sandbox = imageUploadSandbox(fixture, () => new Promise(resolve => { resolveResponse = resolve; }));
+    fixture.controls.uploadTrigger.click();
+    fixture.controls.file.files = [{ name: "replacement.png" }];
+    fixture.controls.file.dispatchEvent(new Event("change"));
+    fixture.controls.undo.click();
+
+    resolveResponse({ ok: true, async json() { return { assetId: 91, fileName: "replacement.png", previewUrl: "/settings/assets/91" }; } });
+    await flush();
+    assert.equal(fixture.controls.value.value, "12");
+    assert.equal(fixture.row.dataset.dirty, "false");
+    assert.equal(fixture.controls.pending.hidden, true);
+});
+
+test("a replacement selected while an earlier upload is in flight does not leave an invalid pending AssetId after failure", async () => {
+    const fixture = imageEditorFixture({ value: "12" });
+    let firstResolve;
+    let requestCount = 0;
+    const sandbox = imageUploadSandbox(fixture, () => {
+        requestCount++;
+        if (requestCount === 1) return new Promise(resolve => { firstResolve = resolve; });
+        return Promise.resolve({ ok: false, async json() { return { error: "The image is invalid." }; } });
+    });
+
+    fixture.controls.uploadTrigger.click();
+    fixture.controls.file.files = [{ name: "first.png" }];
+    fixture.controls.file.dispatchEvent(new Event("change"));
+    fixture.controls.chooseAnother.click();
+    fixture.controls.file.files = [{ name: "second.png" }];
+    fixture.controls.file.dispatchEvent(new Event("change"));
+    await flush();
+
+    assert.equal(fixture.controls.value.value, "12");
+    assert.equal(fixture.row.dataset.dirty, "false");
+    assert.equal(fixture.controls.pending.hidden, false, "the retry error remains available");
+    firstResolve({ ok: true, async json() { return { assetId: 91, fileName: "first.png", previewUrl: "/settings/assets/91" }; } });
+    await flush();
+    assert.equal(fixture.controls.value.value, "12");
+    assert.equal(fixture.row.dataset.dirty, "false");
+});
+
+test("image inheritance and removal create immediate RemoveOverride mutations with review text", () => {
+    const inherited = imageEditorFixture({ value: "12", hasInherited: true });
+    initializeRow(inherited.row, inherited.settingsForm);
+    inherited.controls.inherit.click();
+    assert.equal(inherited.controls.operation.value, "RemoveOverride");
+    assert.equal(inherited.controls.value.disabled, true);
+    assert.equal(inherited.row.dataset.dirty, "true");
+    assert.equal(inherited.controls.uploadStatus.textContent, "Use inherited image.");
+    assert.equal(inherited.controls.pendingPreview.src, "/settings/assets/10");
+    assert.equal(inherited.controls.undo.textContent, "Undo image change");
+    const list = { children: [], replaceChildren() { this.children = []; }, append(item) { this.children.push(item); } };
+    assert.equal(populateReviewList(inherited.settingsForm, list), true);
+    assert.match(list.children[0].textContent, /Header image: Use inherited image/);
+    inherited.controls.undo.click();
+    assert.equal(inherited.controls.operation.value, "Upsert");
+    assert.equal(inherited.row.dataset.dirty, "false");
+    assert.equal(inherited.controls.pending.hidden, true);
+
+    const removal = imageEditorFixture({ value: "12", hasInherited: false });
+    initializeRow(removal.row, removal.settingsForm);
+    removal.controls.inherit.click();
+    assert.equal(removal.controls.uploadStatus.textContent, "No image will be configured.");
+    const removalList = { children: [], replaceChildren() { this.children = []; }, append(item) { this.children.push(item); } };
+    assert.equal(populateReviewList(removal.settingsForm, removalList), true);
+    assert.match(removalList.children[0].textContent, /Header image: Remove image/);
+    removal.controls.undo.click();
+    assert.equal(removal.controls.operation.value, "Upsert");
+    assert.equal(removal.row.dataset.dirty, "false");
+    assert.equal(removal.controls.pending.hidden, true);
+
+    const missing = imageEditorFixture({ value: "12", hasInherited: true, inheritedMissing: true });
+    initializeRow(missing.row, missing.settingsForm);
+    missing.controls.inherit.click();
+    assert.equal(missing.controls.operation.value, "RemoveOverride");
+    assert.equal(missing.controls.pendingPreview.hidden, true);
+    assert.equal(missing.controls.pendingPreview.src, undefined);
+    assert.match(missing.controls.uploadStatus.textContent,
+        /The inherited uploaded image is missing\. Saving this change will use the inherited image setting\./);
+    const missingList = { children: [], replaceChildren() { this.children = []; }, append(item) { this.children.push(item); } };
+    assert.equal(populateReviewList(missing.settingsForm, missingList), true);
+    assert.match(missingList.children[0].textContent, /Header image: Use inherited image \(image currently missing\)/);
+    missing.controls.undo.click();
+    assert.equal(missing.controls.operation.value, "Upsert");
+    assert.equal(missing.row.dataset.dirty, "false");
+    assert.equal(missing.controls.pending.hidden, true);
+});
+
+test("image review describes filenames and blocks invalid AssetIds", () => {
+    const fixture = imageEditorFixture({ value: "91" });
+    fixture.row.dataset.dirty = "true";
+    fixture.row.dataset.imagePendingFileName = "replacement.png";
+    initializeRow(fixture.row, fixture.settingsForm);
+    const list = { children: [], replaceChildren() { this.children = []; }, append(item) { this.children.push(item); } };
+    assert.equal(populateReviewList(fixture.settingsForm, list), true);
+    assert.match(list.children[0].textContent, /Header image: Replace with “replacement\.png”/);
+    assert.doesNotMatch(list.children[0].textContent, /91/);
+
+    fixture.controls.value.value = "not-an-asset";
+    assert.equal(populateReviewList(fixture.settingsForm, list), false);
+    assert.equal(list.children.length, 0);
+});
+
+test("image markup uses a dedicated upload interaction without a generic edit session", () => {
+    const markup = readFileSync(new URL("../../Clc.PatronRegistration.Web/Views/Settings/Index.cshtml", import.meta.url), "utf8");
+    const row = readFileSync(new URL("../../Clc.PatronRegistration.Web/Views/Settings/_SettingRow.cshtml", import.meta.url), "utf8");
+    const script = readFileSync(new URL("../../Clc.PatronRegistration.Web/wwwroot/js/settings.js", import.meta.url), "utf8");
+    const imageBranch = row.match(/@if \(isImage\)[\s\S]*?\n    \}\n    else\n    \{/)?.[0] ?? "";
+    assert.doesNotMatch(markup, /header-image-upload-form/);
+    assert.doesNotMatch(row, /header-image-upload-form|data-guard-action/);
+    assert.match(row, /class="image-upload-trigger">@imageActionLabel<\/button>/);
+    assert.match(row, /class="image-card image-pending image-browser-pending"[^>]*hidden/);
+    assert.match(row, /class="image-choose-another">Choose another image<\/button>/);
+    assert.match(row, /class="image-undo-pending">Undo replacement<\/button>/);
+    assert.match(row, /class="image-inherit-action"/);
+    assert.match(row, /data-image-inherited-missing=/);
+    assert.doesNotMatch(imageBranch, /image-value-editor|class="edit-setting"|class="apply-setting"|class="cancel-setting"/);
+    assert.match(script, /imageFile\?\.addEventListener\("change"/);
+    assert.match(script, /function initializeImageRow/);
+    assert.match(script, /function markUpsert/);
+    assert.doesNotMatch(script, /change\.hidden = isImage/);
+});
+
 test("server RemoveOverride can be replaced by Upsert and Apply restores focus", () => {
     const fixture = rowFixture({ operation: "RemoveOverride" });
     assert.equal(fixture.controls.inherit.hidden, true);
@@ -391,7 +1087,7 @@ test("clipboard copy reports accessible success and failure", async () => {
 test("beforeunload remains conditional on submission state after dialog cancellation", () => {
     const script = readFileSync(new URL("../../Clc.PatronRegistration.Web/wwwroot/js/settings.js", import.meta.url), "utf8");
     assert.match(script, /beforeunload/);
-    assert.match(script, /if \(!submitting && \(dirtyCount\(\) \|\| hasCandidate\(\)\)\)/);
+    assert.match(script, /if \(!submitting && \(dirtyCount\(\) \|\| hasCandidate\(\) \|\| hasImageUpload\(\)\)\)/);
     assert.match(script, /pending = null;\s*submitting = false/);
 });
 
@@ -505,7 +1201,7 @@ test("shared draft filter markup and CSS keep the checkbox intrinsic", () => {
 
 test("draft summaries identify proposed values without automatically opening rows", () => {
     const row = readFileSync(new URL("../../Clc.PatronRegistration.Web/Views/Settings/_SettingRow.cshtml", import.meta.url), "utf8");
-    assert.match(row, /hasDraftOperation \? \$"Draft: \{presentation\.Value\}"/);
+    assert.match(row, /hasDraftOperation && !isImage \? \$"Draft: \{imageSummary\}"/);
     assert.match(row, /definition\.IsSensitive/);
     assert.doesNotMatch(row, /<details class="setting-row"[^>]*open=/);
 });
@@ -650,4 +1346,11 @@ test("clearEditSessionStatus removes a resolved active-edit warning", () => {
     assert.equal(row.dataset.candidateOperation, undefined);
     assert.equal(warning.hidden, true);
     assert.equal(warning.textContent, "");
+
+    warning.hidden = false;
+    warning.textContent = "Choose a valid uploaded image before saving.";
+    warning.dataset.statusKind = "validation";
+    sandbox.SettingsWorkflow.clearEditSessionStatus(form);
+    assert.equal(warning.hidden, false);
+    assert.equal(warning.textContent, "Choose a valid uploaded image before saving.");
 });

@@ -9,7 +9,6 @@ using System.Text.Encodings.Web;
 namespace Clc.PatronRegistration.TagHelpers
 {
     [HtmlTargetElement("img", Attributes = "src", TagStructure = TagStructure.WithoutEndTag)]
-    [HtmlTargetElement("script", Attributes = "src", TagStructure = TagStructure.NormalOrSelfClosing)]
     public class ImageTagHelper : Microsoft.AspNetCore.Mvc.TagHelpers.ImageTagHelper
     {
 

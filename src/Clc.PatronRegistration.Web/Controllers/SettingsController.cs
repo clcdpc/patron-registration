@@ -11,6 +11,8 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Filters;
 using Microsoft.Extensions.Options;
 using Microsoft.Data.SqlClient;
+using System.Globalization;
+using Microsoft.AspNetCore.Http.Features;
 
 namespace Clc.PatronRegistration.Web.Controllers;
 
@@ -27,6 +29,8 @@ public sealed class SettingsController(
     IFormCodeAvailabilityService formCodeAvailability,
     ISettingsCacheInvalidator cacheInvalidator,
     ISettingsPageBrandingContextAccessor settingsPageBrandingContext,
+    IRegistrationFormAssetRepository assetRepository,
+    IRegistrationFormAssetAuthorization assetAuthorization,
     IOptions<SettingsAdministrationOptions> options) : Controller
 {
     private readonly SettingsAdministrationOptions settingsOptions = options.Value;
@@ -112,6 +116,26 @@ public sealed class SettingsController(
                         (target, formCode, definition.Key)
                     })
                 : null;
+            var effectiveAssetMissing = false;
+            var effectiveAsset = definition.ValueType == SettingValueType.Image
+                ? ResolveAsset(resolution.EffectiveValue, target, formCode, out effectiveAssetMissing)
+                : null;
+            var stagedAssetValue = definition.ValueType == SettingValueType.Image
+                ? draftChange?.Operation switch
+                {
+                    DraftOperation.Upsert => draftChange.Value,
+                    DraftOperation.RemoveOverride => inheritedResolution?.EffectiveValue,
+                    _ => resolution.EffectiveValue
+                }
+                : null;
+            var stagedAssetMissing = false;
+            var stagedAsset = definition.ValueType == SettingValueType.Image
+                ? ResolveAsset(stagedAssetValue, target, formCode, out stagedAssetMissing)
+                : null;
+            var inheritedAssetMissing = false;
+            var inheritedAsset = definition.ValueType == SettingValueType.Image && inheritedResolution is not null
+                ? ResolveAsset(inheritedResolution.EffectiveValue, target, formCode, out inheritedAssetMissing)
+                : null;
             rows.Add(new SettingRowViewModel(
                 $"setting-{index}",
                 definition,
@@ -121,7 +145,13 @@ public sealed class SettingsController(
                 draft?.DraftId,
                 DescribeSource(resolution),
                 inheritedResolution?.EffectiveValue,
-                inheritedResolution?.SourceOrganizationId.HasValue == true));
+                inheritedResolution?.SourceOrganizationId.HasValue == true,
+                effectiveAsset,
+                effectiveAssetMissing,
+                stagedAsset,
+                stagedAssetMissing,
+                inheritedAsset,
+                inheritedAssetMissing));
         }
 
         var model = new SettingsIndexViewModel
@@ -142,6 +172,30 @@ public sealed class SettingsController(
             Settings = rows
         };
         return View(model);
+    }
+
+    private SettingAssetPresentation? ResolveAsset(string? value, int organizationId, string formCode, out bool missing)
+    {
+        missing = false;
+        if (!int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var assetId) || assetId <= 0)
+        {
+            missing = !string.IsNullOrWhiteSpace(value);
+            return null;
+        }
+
+        var metadata = assetAuthorization.GetAuthorizedMetadata(assetId, organizationId, formCode);
+        if (metadata is null)
+        {
+            missing = true;
+            return null;
+        }
+        var previewUrl = Url?.RouteUrl("SettingsRegistrationFormAsset", new
+        {
+            id = metadata.AssetId,
+            organizationId,
+            formCode
+        }) ?? $"/settings/assets/{metadata.AssetId}?organizationId={organizationId}&formCode={Uri.EscapeDataString(formCode)}";
+        return new SettingAssetPresentation(metadata.AssetId, metadata.FileName, previewUrl);
     }
 
     private string DescribeSource(ResolvedSetting resolution)
@@ -210,7 +264,7 @@ public sealed class SettingsController(
             return Forbid();
         }
 
-        var mutations = ValidateMutations(request.Changes, request.OrganizationId);
+        var mutations = ValidateMutations(request.Changes, request.OrganizationId, request.FormCode);
         if (!ModelState.IsValid)
         {
             repository.WriteAudit("ValidationFailed", false, CreateAudit(request.OrganizationId, request.FormCode), "One or more setting values were invalid.");
@@ -250,7 +304,7 @@ public sealed class SettingsController(
             AuditRejected(request.OrganizationId, request.FormCode, "Save-to-draft scope tampering rejected.");
             return Forbid();
         }
-        var mutations = ValidateMutations(request.Changes, request.OrganizationId);
+        var mutations = ValidateMutations(request.Changes, request.OrganizationId, request.FormCode);
         if (!ModelState.IsValid)
         {
             repository.WriteAudit("ValidationFailed", false, CreateAudit(request.OrganizationId, request.FormCode), "Draft changes were invalid.", request.ExpectedDraftId);
@@ -282,6 +336,89 @@ public sealed class SettingsController(
             return RedirectToAction(nameof(Index), new { organizationId = request.OrganizationId, formCode = request.FormCode });
         }
         return RedirectToAction(nameof(Index), new { organizationId = request.OrganizationId, formCode = request.FormCode });
+    }
+
+    [HttpPost("assets/upload")]
+    [ValidateAntiForgeryToken]
+    [RequestSizeLimit(2_200_000)]
+    [RequestFormLimits(MultipartBodyLengthLimit = 2_200_000)]
+    public async Task<IActionResult> UploadHeaderImageAsset(
+        IFormFile? file,
+        int organizationId,
+        string formCode)
+    {
+        formCode = FormCodeNormalizer.Normalize(formCode);
+        const string settingKey = "header_image_asset_id";
+        if (!ValidateScope(organizationId, formCode) || !catalog.TryGet(settingKey, out var definition) ||
+            !authorization.CanManage(User, organizationId, definition.IsSensitive))
+        {
+            AuditRejected(organizationId, formCode, "Header-image upload scope or authorization was rejected.");
+            return Forbid();
+        }
+
+        if (file is null)
+        {
+            return BadRequest(new { error = "Choose a PNG, JPEG, or WebP image to upload." });
+        }
+
+        if (file.Length == 0)
+        {
+            return BadRequest(new { error = "Choose a non-empty image file." });
+        }
+
+        if (file.Length > RegistrationFormAssetUploadValidation.MaximumUploadBytes)
+        {
+            return BadRequest(new { error = $"Image files must be {RegistrationFormAssetUploadValidation.MaximumUploadBytes / 1024 / 1024} MB or smaller." });
+        }
+
+        byte[] content;
+        await using (var stream = file.OpenReadStream())
+        await using (var buffer = new MemoryStream())
+        {
+            var chunk = new byte[64 * 1024];
+            while (true)
+            {
+                var read = await stream.ReadAsync(chunk.AsMemory());
+                if (read == 0)
+                {
+                    break;
+                }
+                if (buffer.Length + read > RegistrationFormAssetUploadValidation.MaximumUploadBytes)
+                {
+                    return BadRequest(new { error = $"Image files must be {RegistrationFormAssetUploadValidation.MaximumUploadBytes / 1024 / 1024} MB or smaller." });
+                }
+                await buffer.WriteAsync(chunk.AsMemory(0, read));
+            }
+            content = buffer.ToArray();
+        }
+
+        if (!RegistrationFormAssetUploadValidation.TryValidateUploadEnvelope(file.ContentType, content, file.FileName,
+                out var sanitizedFileName, out var validationError))
+        {
+            return BadRequest(new { error = validationError });
+        }
+
+        // Asset creation is deliberately independent from setting mutation. The browser places this
+        // returned ID into the normal row edit session, and Save/Save-to-draft persists it with peers.
+        RegistrationFormAsset asset;
+        try
+        {
+            // The repository repeats the complete image validation, including the
+            // animation and decoded-pixel checks, before storing the bytes.
+            asset = assetRepository.Create(sanitizedFileName, file.ContentType, content, organizationId, formCode);
+        }
+        catch (ArgumentException exception)
+        {
+            return BadRequest(new { error = exception.Message });
+        }
+        var previewUrl = Url?.RouteUrl("SettingsRegistrationFormAsset", new { id = asset.AssetId, organizationId, formCode })
+            ?? $"/settings/assets/{asset.AssetId}?organizationId={organizationId}&formCode={Uri.EscapeDataString(formCode)}";
+        return Ok(new
+        {
+            assetId = asset.AssetId,
+            fileName = asset.FileName,
+            previewUrl
+        });
     }
 
     [HttpPost("drafts/{draftId:long}/changes/remove")]
@@ -866,7 +1003,7 @@ public sealed class SettingsController(
         }
     }
 
-    private List<SettingMutation> ValidateMutations(IEnumerable<SettingMutationInput> inputs, int organizationId)
+    private List<SettingMutation> ValidateMutations(IEnumerable<SettingMutationInput> inputs, int organizationId, string formCode)
     {
         var result = new List<SettingMutation>();
         foreach (var input in inputs)
@@ -886,6 +1023,15 @@ public sealed class SettingsController(
             {
                 ModelState.AddModelError(input.Key, error);
                 continue;
+            }
+            if (operation == DraftOperation.Upsert && definition.ValueType == SettingValueType.Image)
+            {
+                if (!int.TryParse(input.Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var assetId) ||
+                    assetAuthorization.GetAuthorizedMetadata(assetId, organizationId, formCode) is null)
+                {
+                    ModelState.AddModelError(input.Key, "The uploaded image is missing or is not available in this settings scope.");
+                    continue;
+                }
             }
             result.Add(new SettingMutation(input.Key, operation, operation == DraftOperation.RemoveOverride ? null : input.Value));
         }

@@ -42,6 +42,83 @@ public class PreviewRequestContextTests
     }
 
     [TestMethod]
+    public void PreviewAssetRouteAllowsAnAssetStagedAtTheDraftScope()
+    {
+        var draft = new SettingDraft(7, 2, string.Empty, 0, DraftStatus.Active,
+            [new SettingMutation("header_image_asset_id", DraftOperation.Upsert, "42")]);
+        var context = new PreviewRequestContext(
+            Link("Active"),
+            draft,
+            new PreviewSettingProvider(draft, 3, new TestCache(), 1));
+        var accessor = new PreviewRequestContextAccessor { IsPreviewRequest = true, PlaintextToken = "preview-token", Current = context };
+        var assets = new Mock<IRegistrationFormAssetRepository>();
+        assets.Setup(service => service.GetMetadata(42)).Returns(new RegistrationFormAssetMetadata(
+            42, "draft.png", "image/png", "hash", DateTime.UtcNow, DateTime.UtcNow));
+        assets.Setup(service => service.Get(42)).Returns(new RegistrationFormAsset(
+            42, "draft.png", "image/png", [1, 2], "hash", DateTime.UtcNow, DateTime.UtcNow));
+        var assetAuthorization = new Mock<IRegistrationFormAssetAuthorization>();
+        assetAuthorization.Setup(service => service.GetAuthorizedMetadata(42, 2, string.Empty))
+            .Returns(assets.Object.GetMetadata(42));
+        var controller = new PreviewController(
+            Mock.Of<ISettingsAdministrationRepository>(), accessor, new TestCache(), Mock.Of<IDbHelper>(),
+            Mock.Of<IPapiClient>(), Mock.Of<IMelissaRestClient>(), Mock.Of<IEmailSender>())
+        {
+            ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() }
+        };
+
+        var result = (FileContentResult)controller.Asset("preview-token", 42, assets.Object, assetAuthorization.Object);
+
+        CollectionAssert.AreEqual(new byte[] { 1, 2 }, result.FileContents);
+        Assert.IsInstanceOfType(controller.Asset("preview-token", 99, assets.Object, assetAuthorization.Object), typeof(NotFoundResult));
+        assetAuthorization.Verify(service => service.GetAuthorizedMetadata(42, 3, string.Empty), Times.Once);
+        assetAuthorization.Verify(service => service.GetAuthorizedMetadata(42, 2, string.Empty), Times.Once);
+        assets.Verify(service => service.Get(99), Times.Never);
+    }
+
+    [TestMethod]
+    public void PreviewAssetRouteAuthorizesEffectiveAssetAtOperationalBranch()
+    {
+        var cache = new TestCache
+        {
+            SettingsCache =
+            [
+                new RegistrationFormSetting
+                {
+                    OrganizationID = 3,
+                    FormCode = string.Empty,
+                    Setting = "header_image_asset_id",
+                    Value = "42"
+                }
+            ]
+        };
+        var draft = new SettingDraft(7, 2, string.Empty, 0, DraftStatus.Active, []);
+        var settings = new PreviewSettingProvider(draft, 3, cache, 1);
+        Assert.AreEqual(42, settings.HeaderImageAssetId);
+        var context = new PreviewRequestContext(Link("Active"), draft, settings);
+        var accessor = new PreviewRequestContextAccessor { IsPreviewRequest = true, PlaintextToken = "preview-token", Current = context };
+        var assets = new Mock<IRegistrationFormAssetRepository>();
+        var metadata = new RegistrationFormAssetMetadata(
+            42, "branch.png", "image/png", "hash", DateTime.UtcNow, DateTime.UtcNow, 3, string.Empty);
+        assets.Setup(service => service.GetMetadata(42)).Returns(metadata);
+        assets.Setup(service => service.Get(42)).Returns(new RegistrationFormAsset(
+            42, "branch.png", "image/png", [1, 2], "hash", DateTime.UtcNow, DateTime.UtcNow, 3, string.Empty));
+        var assetAuthorization = new Mock<IRegistrationFormAssetAuthorization>();
+        assetAuthorization.Setup(service => service.GetAuthorizedMetadata(42, 3, string.Empty)).Returns(metadata);
+        var controller = new PreviewController(
+            Mock.Of<ISettingsAdministrationRepository>(), accessor, new TestCache(), Mock.Of<IDbHelper>(),
+            Mock.Of<IPapiClient>(), Mock.Of<IMelissaRestClient>(), Mock.Of<IEmailSender>())
+        {
+            ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() }
+        };
+
+        var result = (FileContentResult)controller.Asset("preview-token", 42, assets.Object, assetAuthorization.Object);
+
+        CollectionAssert.AreEqual(new byte[] { 1, 2 }, result.FileContents);
+        assetAuthorization.Verify(service => service.GetAuthorizedMetadata(42, 3, string.Empty), Times.Once);
+        assetAuthorization.Verify(service => service.GetAuthorizedMetadata(42, 2, string.Empty), Times.Never);
+    }
+
+    [TestMethod]
     public async Task InvalidPreviewMiddlewareResponseSetsPortableSecurityHeaders()
     {
         var nextCalled = false;
@@ -278,9 +355,9 @@ public class PreviewRequestContextTests
         {
             SettingsCache =
             [
-                new() { OrganizationID = organizationId, FormCode = string.Empty, Setting = "header_image_url", Value = "branding-header" },
+                new() { OrganizationID = organizationId, FormCode = string.Empty, Setting = "header_image_asset_id", Value = "42" },
                 new() { OrganizationID = organizationId, FormCode = string.Empty, Setting = "css_file", Value = "branding-css" },
-                new() { OrganizationID = 3, FormCode = "kids", Setting = "header_image_url", Value = "editing-header" }
+                new() { OrganizationID = 3, FormCode = "kids", Setting = "header_image_asset_id", Value = "43" }
             ]
         };
         var resolver = new RequestSettingProviderResolver(new PreviewRequestContextAccessor(), branding, cache,
@@ -294,7 +371,7 @@ public class PreviewRequestContextTests
         Assert.AreEqual(organizationId, settings.OrganizationId);
         Assert.AreEqual(libraryId, ((DbSettingProvider)settings).LibraryId);
         Assert.AreEqual(string.Empty, settings.FormCode);
-        Assert.AreEqual("branding-header", settings.HeaderImageUrl);
+        Assert.AreEqual(42, settings.HeaderImageAssetId);
         Assert.AreEqual("branding-css", settings.CssFile);
     }
 
@@ -327,6 +404,7 @@ public class PreviewRequestContextTests
     {
         var context = CreateResolver(draft: ActiveDraft(
             new("label.NameFirst", DraftOperation.Upsert, "Preview first name"),
+            new("label.PhoneVoice1", DraftOperation.Upsert, "Preview first name"),
             new("require.PhoneVoice1", DraftOperation.Upsert, "true"),
             new("alert.NameFirst", DraftOperation.Upsert, "Preview alert"))).Resolve("token")!;
         var services = new ServiceCollection().AddSingleton<ISettingProvider>(context.Settings).BuildServiceProvider();
@@ -360,8 +438,11 @@ public class PreviewRequestContextTests
             .Returns(validSnapshot && link.DraftStatus == DraftStatus.Active.ToString() && draft.Status == DraftStatus.Active
                 ? new PreviewContextSnapshot(link, draft)
                 : null);
-        eligibility ??= new Mock<IPreviewBranchEligibilityService>();
-        eligibility.Setup(service => service.IsEligible(draft.OrganizationId, link.OperationalBranchId, 1)).Returns(true);
+        if (eligibility is null)
+        {
+            eligibility = new Mock<IPreviewBranchEligibilityService>();
+            eligibility.Setup(service => service.IsEligible(draft.OrganizationId, link.OperationalBranchId, 1)).Returns(true);
+        }
         return new PreviewContextResolver(repository.Object, new PreviewTokenService(), eligibility.Object, new TestCache(), Options.Create(new SettingsAdministrationOptions()));
     }
 

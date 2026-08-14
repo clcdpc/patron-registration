@@ -1,3 +1,4 @@
+using System.Globalization;
 using Clc.Melissa;
 using Clc.PatronRegistration.Administration;
 using Clc.PatronRegistration.Configuration;
@@ -48,6 +49,54 @@ public sealed class PreviewController(
         ViewData["PreviewOperationalBranchName"] = branch.DisplayName;
         repository.WriteAudit("PreviewAccess", true, AnonymousAudit(context));
         return View("~/Views/Registration/Create.cshtml", model);
+    }
+
+    [HttpGet("{token}/assets/{id:int}", Name = "PreviewRegistrationFormAsset")]
+    public IActionResult Asset(
+        string token,
+        int id,
+        [FromServices] IRegistrationFormAssetRepository assets,
+        [FromServices] IRegistrationFormAssetAuthorization assetAuthorization)
+    {
+        // PreviewRequestContextMiddleware has already authenticated the bearer token
+        // and populated the draft overlay before this action can run.
+        var current = previewRequestContext.Current;
+        if (current is null || id <= 0 || current.Settings.HeaderImageAssetId != id)
+        {
+            return NotFound();
+        }
+
+        SetSecurityHeaders();
+        var metadata = assetAuthorization.GetAuthorizedMetadata(
+            id, current.Link.OperationalBranchId, current.Draft.FormCode);
+        // The effective preview settings run at the operational branch, while a
+        // newly uploaded asset staged by the draft may only be authorized at the
+        // draft's own scope. Try that scope only after the effective operational
+        // scope has rejected the selected asset.
+        var stagedAtDraftScope = current.Draft.Changes.Any(change =>
+            change.Operation == DraftOperation.Upsert &&
+            string.Equals(change.Key, "header_image_asset_id", StringComparison.OrdinalIgnoreCase) &&
+            int.TryParse(change.Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var stagedAssetId) &&
+            stagedAssetId == id);
+        if (metadata is null && current.Draft.OrganizationId != current.Link.OperationalBranchId && stagedAtDraftScope)
+        {
+            metadata = assetAuthorization.GetAuthorizedMetadata(
+                id, current.Draft.OrganizationId, current.Draft.FormCode);
+        }
+        if (metadata is null)
+        {
+            return NotFound();
+        }
+
+        Response.Headers.ETag = $"\"{metadata.ContentHash}\"";
+        Response.Headers["X-Content-Type-Options"] = "nosniff";
+        if (MatchesIfNoneMatch(Response.Headers.ETag.ToString()))
+        {
+            return StatusCode(StatusCodes.Status304NotModified);
+        }
+
+        var asset = assets.Get(id);
+        return asset is null ? NotFound() : File(asset.Content, asset.ContentType);
     }
 
     [HttpPost("{token}")]
@@ -170,5 +219,15 @@ public sealed class PreviewController(
         Response.Headers.CacheControl = "no-store, no-cache, max-age=0";
         Response.Headers.Pragma = "no-cache";
     }
+
+    private bool MatchesIfNoneMatch(string etag)
+    {
+        var header = Request.Headers.IfNoneMatch.ToString();
+        return header.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Any(candidate => candidate == "*" || NormalizeEntityTag(candidate).Equals(etag, StringComparison.Ordinal));
+    }
+
+    private static string NormalizeEntityTag(string value) =>
+        value.StartsWith("W/", StringComparison.OrdinalIgnoreCase) ? value[2..] : value;
 
 }
