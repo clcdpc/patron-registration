@@ -6,4 +6,5 @@ cd "$repo_root"
 
 node --check src/Clc.PatronRegistration.Web/wwwroot/js/settings.js
 node --test src/Clc.PatronRegistration.Web.Tests/JavaScript/settings-edit-session.test.mjs
+node --test src/Clc.PatronRegistration.Web.Tests/JavaScript/age-block.test.mjs
 dotnet test src/Clc.PatronRegistration.sln "$@"

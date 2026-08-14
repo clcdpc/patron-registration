@@ -165,6 +165,29 @@ namespace Clc.PatronRegistration
                     Errors = ModelErrors
                 };
             }
+
+            if (IsFutureBirthdate(Birthdate))
+            {
+                modelState.AddModelError(nameof(Birthdate), "Please enter a valid birth date.");
+                ModelErrors = RegistrationAttempt.ErrorsFromModelState(modelState);
+                return new RegistrationAttempt
+                {
+                    Status = RegistrationStatus.Error,
+                    Message = "Please correct the validation errors and try again.",
+                    Errors = ModelErrors
+                };
+            }
+
+            var ageBlockResult = AgeBlockPolicy.Evaluate(settings, Birthdate);
+            if (ageBlockResult.IsBlocked)
+            {
+                return new RegistrationAttempt
+                {
+                    Status = RegistrationStatus.Error,
+                    Message = ageBlockResult.Message
+                };
+            }
+
             HandleSmsSettings(); // might need to go back above ValidateRegistration
 
             ApplyForceEcardSetting(ip);
@@ -243,6 +266,12 @@ namespace Clc.PatronRegistration
                 ModelErrors.Add(new("", "Please enter a valid birth date."));
             }
 
+            if (IsFutureBirthdate(Birthdate))
+            {
+                ModelErrors.Add(new(nameof(Birthdate), "Please enter a valid birth date."));
+                return false;
+            }
+
             var dupeCheckResult = DupeCheck(db, papi);
             if (dupeCheckResult.IsDupe)
             {
@@ -294,6 +323,9 @@ namespace Clc.PatronRegistration
 
             return ModelErrors.Count == 0;
         }
+
+        private static bool IsFutureBirthdate(DateTime? birthdate) =>
+            birthdate.HasValue && DateOnly.FromDateTime(birthdate.Value) > DateOnly.FromDateTime(DateTime.Today);
 
         public void HandleLibrarySettings()
         {
