@@ -8,15 +8,16 @@ public static class AgeBlockPolicy
 {
     public const int MinimumAge = 18;
 
-    public static AgeBlockResult Evaluate(
-        ISettingProvider settings,
-        DateTime? birthdate,
-        DateOnly asOf) =>
-        !settings.EnableAgeBlock || !birthdate.HasValue
-            ? new(false, string.Empty)
-            : DateOnly.FromDateTime(birthdate.Value) > asOf.AddYears(-MinimumAge)
-                ? new(true, settings.AgeBlockText)
-                : new(false, string.Empty);
+    public static AgeBlockResult Evaluate(ISettingProvider settings, DateTime? birthdate, DateOnly asOf)
+    {
+        if (!settings.EnableAgeBlock || !birthdate.HasValue)
+        {
+            return new(false, string.Empty);
+        }
+
+        var isBlocked = DateOnly.FromDateTime(birthdate.Value) > asOf.AddYears(-MinimumAge);
+        return new(isBlocked, isBlocked ? settings.AgeBlockText : string.Empty);
+    }
 
     public static AgeBlockResult Evaluate(ISettingProvider settings, DateTime? birthdate) =>
         Evaluate(settings, birthdate, DateOnly.FromDateTime(DateTime.Today));
