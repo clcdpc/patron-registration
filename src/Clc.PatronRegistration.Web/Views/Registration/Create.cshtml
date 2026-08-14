@@ -420,34 +420,31 @@
         formData.append("Birthdate", birthdateValue);
         formData.append("__RequestVerificationToken", antiforgeryToken.value);
 
+        let result = null;
+
         try {
             const response = await fetch("@ageBlockCheckUrl", {
                 method: "POST",
                 credentials: "same-origin",
                 body: formData
             });
-            const result = response.ok ? await response.json() : null;
 
-            if (requestId !== ageBlockRequestId || birthdate.value !== birthdateValue) {
-                return "stale";
+            if (response.ok) {
+                result = await response.json();
             }
+        } catch { }
 
-            if (!result) {
-                return "unavailable";
-            }
-
-            if (result.isBlocked) {
-                wrapperDiv.innerHTML = result.message;
-                window.scrollTo(0, 0);
-                return "blocked";
-            }
-
-            return "allowed";
-        } catch {
-            return requestId !== ageBlockRequestId || birthdate.value !== birthdateValue
-                ? "stale"
-                : "unavailable";
+        if (requestId !== ageBlockRequestId || birthdate.value !== birthdateValue) {
+            return "stale";
         }
+
+        if (result?.isBlocked) {
+            wrapperDiv.innerHTML = result.message;
+            window.scrollTo(0, 0);
+            return "blocked";
+        }
+
+        return "allowed";
     }
 
     async function handleBirthdateChanged() {
@@ -460,7 +457,7 @@
             ageCheck();
         }
 
-        await dupecheck();
+        dupecheck();
     }
 
     function show(e) {
@@ -706,33 +703,33 @@
             return;
         }
 
-        var formData = new FormData(document.forms.regform);
+        const formData = new FormData(document.forms.regform);
+        const data = await postData("@submitUrl", formData);
 
-        postData("@submitUrl", formData).then((data) => {
-            if (data.isSuccess) {
-                theform.reset();
-                theform.remove();
-                hide(wrapperDiv);
-                showInfoMessage(data.message);
-                if (@Model.ShouldAutoReset(ViewContext.HttpContext!.GetTrueClientIp()).ToJavascriptBool()) {
-                    setTimeout(function() { location = '@this.BuildAction("Create")'; }, @(Settings.ResetSeconds * 1000));
-                }
-            } else {
-                showWarningMessage(data.message);
-
-                if (data.errors.length > 0) {
-                    var ul = document.createElement('ul');
-                    messageDiv.appendChild(ul);
-                    data.errors.forEach((element) => {
-                        var li = document.createElement('li');
-                        li.textContent = element.value;
-                        ul.appendChild(li);
-                    });
-                }
-
-                registerButton.disabled = false;
+        if (data.isSuccess) {
+            theform.reset();
+            theform.remove();
+            hide(wrapperDiv);
+            showInfoMessage(data.message);
+            if (@Model.ShouldAutoReset(ViewContext.HttpContext!.GetTrueClientIp()).ToJavascriptBool()) {
+                setTimeout(function() { location = '@this.BuildAction("Create")'; }, @(Settings.ResetSeconds * 1000));
             }
-        });
+            return;
+        }
+
+        showWarningMessage(data.message);
+
+        if (data.errors.length > 0) {
+            var ul = document.createElement('ul');
+            messageDiv.appendChild(ul);
+            data.errors.forEach((element) => {
+                var li = document.createElement('li');
+                li.textContent = element.value;
+                ul.appendChild(li);
+            });
+        }
+
+        registerButton.disabled = false;
     }
 
     function handleNotificationPreferenceChange(deliveryOptionId) {
@@ -796,7 +793,7 @@
         await handleBirthdateChanged();
     }
 
-    async function dupecheck() {
+    function dupecheck() {
         if (isTeacher) {
             //console.log('skip for teacher');
             return;
@@ -810,11 +807,12 @@
             formData.append("LibraryId", @(Model.LibraryId));
             formData.append("BirthDate", birthdate.value);
             formData.append("__RequestVerificationToken", antiforgeryToken.value);
-            const data = await postData("@duplicateCheckUrl", formData);
-            if (data.isDupe === true) {
-                theform.innerHTML = data.message;
-                window.scrollTo(0, 0);
-            }
+            postData("@duplicateCheckUrl", formData).then((data) => {
+                if (data.isDupe === true) {
+                    theform.innerHTML = data.message;
+                    window.scrollTo(0, 0);
+                }
+            });
             //else { console.log('not dupe'); }
         }
         // else { console.log('not enough info yet'); }
