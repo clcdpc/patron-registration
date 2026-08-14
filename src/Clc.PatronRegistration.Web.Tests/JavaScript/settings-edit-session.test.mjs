@@ -489,6 +489,43 @@ function workflowUploadFixture(fetchImplementation) {
     };
 }
 
+function blockerStatusFixture() {
+    const status = new Control();
+    const candidateRow = { dataset: { candidateOperation: "Upsert" } };
+    const uploadRow = { dataset: { imageUploading: "true" } };
+    const state = { candidate: false, uploading: false };
+    const form = {
+        querySelector(selector) {
+            if (selector.includes("candidate-operation")) return state.candidate ? candidateRow : null;
+            if (selector.includes("image-uploading")) return state.uploading ? uploadRow : null;
+            return null;
+        },
+        querySelectorAll(selector) {
+            if (selector.includes("candidate-operation")) return state.candidate ? [candidateRow] : [];
+            if (selector.includes("image-uploading")) return state.uploading ? [uploadRow] : [];
+            return [];
+        }
+    };
+    const sandbox = {
+        document: {
+            querySelector(selector) { return selector === "#edit-session-status" ? status : null; },
+            querySelectorAll() { return []; },
+            createElement() { return new Control(); }
+        },
+        window: { addEventListener() {} },
+        globalThis: {}, Event, Map, Set
+    };
+    sandbox.globalThis = sandbox;
+    vm.runInNewContext(readFileSync(new URL("../../Clc.PatronRegistration.Web/wwwroot/js/settings.js", import.meta.url), "utf8"), sandbox);
+    return {
+        sandbox,
+        form,
+        status,
+        state,
+        synchronize() { return sandbox.SettingsWorkflow.clearEditSessionStatus(form); }
+    };
+}
+
 function startUnresolvedImageUpload(fixture) {
     fixture.controls.uploadTrigger.click();
     fixture.controls.file.files = [{ name: "replacement.png" }];
@@ -570,6 +607,56 @@ test("beforeunload protects unresolved image uploads but not an approved submiss
     workflow.beforeUnload(approvedEvent);
     assert.equal(prevented, false);
     workflow.fixture.controls.undo.click();
+});
+
+test("blocker status switches from upload to a remaining candidate edit", () => {
+    const fixture = blockerStatusFixture();
+    fixture.state.uploading = true;
+    fixture.synchronize();
+    assert.match(fixture.status.textContent, /Wait for the image upload/);
+
+    fixture.state.candidate = true;
+    fixture.synchronize();
+    assert.equal(fixture.status.textContent, "Apply or Cancel the active setting edit before saving.");
+
+    fixture.state.uploading = false;
+    fixture.synchronize();
+    assert.equal(fixture.status.textContent, "Apply or Cancel the active setting edit before saving.");
+
+    fixture.state.candidate = false;
+    fixture.synchronize();
+    assert.equal(fixture.status.hidden, true);
+    assert.equal(fixture.status.textContent, "");
+});
+
+test("blocker status switches from a resolved candidate edit to a remaining upload", () => {
+    const fixture = blockerStatusFixture();
+    fixture.state.candidate = true;
+    fixture.synchronize();
+    assert.equal(fixture.status.textContent, "Apply or Cancel the active setting edit before saving.");
+
+    fixture.state.uploading = true;
+    fixture.synchronize();
+    assert.equal(fixture.status.textContent, "Apply or Cancel the active setting edit before saving.");
+
+    fixture.state.candidate = false;
+    fixture.synchronize();
+    assert.match(fixture.status.textContent, /Wait for the image upload/);
+
+    fixture.state.uploading = false;
+    fixture.synchronize();
+    assert.equal(fixture.status.hidden, true);
+    assert.equal(fixture.status.textContent, "");
+});
+
+test("blocker status synchronization preserves unrelated validation messages", () => {
+    const fixture = blockerStatusFixture();
+    fixture.status.textContent = "Choose a valid uploaded image before saving.";
+    fixture.status.dataset.statusKind = "validation";
+    fixture.synchronize();
+    assert.equal(fixture.status.hidden, false);
+    assert.equal(fixture.status.textContent, "Choose a valid uploaded image before saving.");
+    assert.equal(fixture.status.dataset.statusKind, "validation");
 });
 
 test("a successful image upload clears the global upload-blocking status", async () => {

@@ -43,16 +43,28 @@
         });
     }
 
-    function clearEditSessionStatus(settingsForm = form) {
-        if (settingsForm?.querySelector('.setting-row[data-candidate-operation]') || hasImageUpload(settingsForm)) return;
-        if (!editStatus) return;
-        const isBlockingStatus = editStatus.dataset?.statusKind === "blocking"
-            || editStatus.textContent === candidateEditBlockedMessage
-            || editStatus.textContent === imageUploadBlockedMessage;
+    function clearEditSessionStatus(settingsForm = form, status = editStatus) {
+        if (!status) return;
+        const hasCandidate = Boolean(settingsForm?.querySelector?.('.setting-row[data-candidate-operation]'));
+        if (hasCandidate) {
+            status.textContent = candidateEditBlockedMessage;
+            status.dataset.statusKind = "blocking";
+            status.hidden = false;
+            return "candidate";
+        }
+        if (hasImageUpload(settingsForm)) {
+            status.textContent = imageUploadBlockedMessage;
+            status.dataset.statusKind = "blocking";
+            status.hidden = false;
+            return "upload";
+        }
+        const isBlockingStatus = status.dataset?.statusKind === "blocking"
+            || status.textContent === candidateEditBlockedMessage
+            || status.textContent === imageUploadBlockedMessage;
         if (!isBlockingStatus) return;
-        delete editStatus.dataset.statusKind;
-        editStatus.hidden = true;
-        editStatus.textContent = "";
+        delete status.dataset.statusKind;
+        status.hidden = true;
+        status.textContent = "";
     }
 
     function initializeImageRow(row, settingsForm) {
@@ -245,6 +257,7 @@
             const requestVersion = ++imageState.requestVersion;
             row.dataset.imageUploading = "true";
             updateImagePresentation();
+            clearEditSessionStatus(activeForm);
 
             const payload = new FormData();
             payload.append("file", file, file.name);
@@ -427,6 +440,7 @@
             } else {
                 apply.focus();
             }
+            clearEditSessionStatus(settingsForm);
         }
 
         async function applyEdit() {
@@ -440,7 +454,7 @@
             delete row.dataset.candidateOperation;
             session = null;
             showNormalState();
-            clearEditSessionStatus();
+            clearEditSessionStatus(settingsForm);
             updatePendingActions(settingsForm);
             change.focus();
         }
@@ -461,7 +475,7 @@
             delete row.dataset.candidateOperation;
             session = null;
             showNormalState();
-            clearEditSessionStatus();
+            clearEditSessionStatus(settingsForm);
             updatePendingActions(settingsForm);
             change.focus();
         }
@@ -530,23 +544,21 @@
         return rows;
     }
     function blockActiveEdit(settingsForm, status) {
-        const activeRow = settingsForm.querySelector('.setting-row[data-candidate-operation]');
+        const activeRow = settingsForm?.querySelector?.('.setting-row[data-candidate-operation]');
+        const uploadingRow = hasImageUpload(settingsForm) ? imageUploadRow(settingsForm) : null;
+        if (!activeRow && !uploadingRow) {
+            clearEditSessionStatus(settingsForm, status);
+            return false;
+        }
+        clearEditSessionStatus(settingsForm, status);
         if (activeRow) {
             activeRow.setAttribute("open", "");
             activeRow.closest(".setting-category, .dynamic-settings")?.setAttribute("open", "");
-            status.textContent = candidateEditBlockedMessage;
-            status.dataset.statusKind = "blocking";
-            status.hidden = false;
             status.focus();
             activeRow.querySelector(".apply-setting").focus();
             return true;
         }
-        const uploadingRow = hasImageUpload(settingsForm) ? imageUploadRow(settingsForm) : null;
-        if (!uploadingRow) return false;
         uploadingRow.setAttribute("open", "");
-        status.textContent = imageUploadBlockedMessage;
-        status.dataset.statusKind = "blocking";
-        status.hidden = false;
         const undo = uploadingRow.querySelector(".image-undo-pending");
         (undo || uploadingRow.querySelector(".image-upload-trigger"))?.focus();
         return true;
