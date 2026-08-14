@@ -43,6 +43,20 @@ public sealed class RegistrationMvcValidationTests
         Assert.IsTrue(modelState[nameof(Registration.NameFirst)]!.Errors.Count > 0);
     }
 
+    [TestMethod]
+    public void FutureBirthdate_IsRejectedByServerValidation()
+    {
+        var settings = Mock.Of<ISettingProvider>();
+        var registration = ValidRegistration(settings);
+        registration.Birthdate = DateTime.Today.AddDays(1);
+
+        var modelState = ValidateModel(registration, settings);
+
+        Assert.AreEqual(1, modelState[nameof(Registration.Birthdate)]!.Errors.Count);
+        Assert.AreEqual("Please enter a valid birth date.",
+            modelState[nameof(Registration.Birthdate)]!.Errors.Single().ErrorMessage);
+    }
+
     private static ModelStateDictionary Validate(bool required, string? user5, out Registration registration)
     {
         var settings = new Mock<ISettingProvider>();

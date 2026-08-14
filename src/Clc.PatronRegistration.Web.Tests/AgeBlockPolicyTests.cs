@@ -54,6 +54,16 @@ public sealed class AgeBlockPolicyTests
         Assert.IsFalse(result.IsBlocked);
     }
 
+    [TestMethod]
+    public void FutureBirthdate_IsNotBlockedByPolicy()
+    {
+        var result = AgeBlockPolicy.Evaluate(Settings().Object,
+            AsOf.AddDays(1).ToDateTime(TimeOnly.MinValue), AsOf);
+
+        Assert.IsFalse(result.IsBlocked);
+        Assert.AreEqual(string.Empty, result.Message);
+    }
+
     private static Mock<ISettingProvider> Settings(bool enabled = true)
     {
         var settings = new Mock<ISettingProvider>();

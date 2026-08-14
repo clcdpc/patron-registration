@@ -15,7 +15,13 @@ public static class AgeBlockPolicy
             return new(false, string.Empty);
         }
 
-        var isBlocked = DateOnly.FromDateTime(birthdate.Value) > asOf.AddYears(-MinimumAge);
+        var birthdateOnly = DateOnly.FromDateTime(birthdate.Value);
+        if (birthdateOnly > asOf)
+        {
+            return new(false, string.Empty);
+        }
+
+        var isBlocked = birthdateOnly > asOf.AddYears(-MinimumAge);
         return new(isBlocked, isBlocked ? settings.AgeBlockText : string.Empty);
     }
 
