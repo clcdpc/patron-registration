@@ -9,6 +9,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
 using Moq;
 using Clc.Polaris.Api.Models;
+using SixLabors.ImageSharp;
 
 namespace Clc.PatronRegistration.Tests;
 
@@ -45,6 +46,18 @@ public sealed class RegistrationFormAssetTests
             "RIFFxxxxWEBP"u8.ToArray(), "logo.webp", out _, out _));
         Assert.IsFalse(RegistrationFormAssetUploadValidation.TryValidate("image/jpeg",
             TestImageData.Create("image/png"), "logo.jpg", out _, out _));
+    }
+
+    [TestMethod]
+    public void UploadValidation_RejectsAnimatedWebpBeforeDecodingAllFrames()
+    {
+        var animated = TestImageData.CreateAnimatedWebp();
+        using var decoded = Image.Load(animated);
+        Assert.IsTrue(decoded.Frames.Count > 1, $"Test fixture decoded {decoded.Frames.Count} frame(s).");
+
+        Assert.IsFalse(RegistrationFormAssetUploadValidation.TryValidate(
+            "image/webp", animated, "animated.webp", out _, out var error));
+        StringAssert.Contains(error, "Animated");
     }
 
     [TestMethod]
@@ -153,7 +166,7 @@ public sealed class RegistrationFormAssetTests
         var result = (FileContentResult)controller.Get(42, 3);
 
         CollectionAssert.AreEqual(new byte[] { 1, 2 }, result.FileContents);
-        Assert.AreEqual("private, max-age=31536000, immutable", controller.Response.Headers.CacheControl.ToString());
+        Assert.AreEqual("no-store", controller.Response.Headers.CacheControl.ToString());
     }
 
     [TestMethod]

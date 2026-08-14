@@ -28,4 +28,18 @@ internal static class TestImageData
         }
         return stream.ToArray();
     }
+
+    public static byte[] CreateAnimatedWebp()
+    {
+        using var image = new Image<Rgba32>(1, 1);
+        image[0, 0] = new Rgba32(0x33, 0x66, 0x99, 0xff);
+        image.Metadata.GetWebpMetadata().RepeatCount = 0;
+        image.Frames.RootFrame.Metadata.GetWebpMetadata().FrameDelay = 100;
+        var secondFrame = image.Frames.AddFrame(image.Frames.RootFrame);
+        secondFrame[0, 0] = new Rgba32(0xcc, 0x66, 0x33, 0xff);
+        secondFrame.Metadata.GetWebpMetadata().FrameDelay = 100;
+        using var stream = new MemoryStream();
+        image.SaveAsWebp(stream, new WebpEncoder { Quality = 90 });
+        return stream.ToArray();
+    }
 }

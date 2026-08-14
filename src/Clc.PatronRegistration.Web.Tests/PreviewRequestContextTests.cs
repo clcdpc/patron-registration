@@ -42,9 +42,10 @@ public class PreviewRequestContextTests
     }
 
     [TestMethod]
-    public void PreviewAssetRouteServesOnlyTheAssetSelectedByTheStagedPreviewSettings()
+    public void PreviewAssetRouteAllowsAnAssetStagedAtTheDraftScope()
     {
-        var draft = ActiveDraft(new SettingMutation("header_image_asset_id", DraftOperation.Upsert, "42"));
+        var draft = new SettingDraft(7, 2, string.Empty, 0, DraftStatus.Active,
+            [new SettingMutation("header_image_asset_id", DraftOperation.Upsert, "42")]);
         var context = new PreviewRequestContext(
             Link("Active"),
             draft,
@@ -56,7 +57,7 @@ public class PreviewRequestContextTests
         assets.Setup(service => service.Get(42)).Returns(new RegistrationFormAsset(
             42, "draft.png", "image/png", [1, 2], "hash", DateTime.UtcNow, DateTime.UtcNow));
         var assetAuthorization = new Mock<IRegistrationFormAssetAuthorization>();
-        assetAuthorization.Setup(service => service.GetAuthorizedMetadata(42, 3, string.Empty))
+        assetAuthorization.Setup(service => service.GetAuthorizedMetadata(42, 2, string.Empty))
             .Returns(assets.Object.GetMetadata(42));
         var controller = new PreviewController(
             Mock.Of<ISettingsAdministrationRepository>(), accessor, new TestCache(), Mock.Of<IDbHelper>(),
@@ -69,7 +70,52 @@ public class PreviewRequestContextTests
 
         CollectionAssert.AreEqual(new byte[] { 1, 2 }, result.FileContents);
         Assert.IsInstanceOfType(controller.Asset("preview-token", 99, assets.Object, assetAuthorization.Object), typeof(NotFoundResult));
+        assetAuthorization.Verify(service => service.GetAuthorizedMetadata(42, 3, string.Empty), Times.Once);
+        assetAuthorization.Verify(service => service.GetAuthorizedMetadata(42, 2, string.Empty), Times.Once);
         assets.Verify(service => service.Get(99), Times.Never);
+    }
+
+    [TestMethod]
+    public void PreviewAssetRouteAuthorizesEffectiveAssetAtOperationalBranch()
+    {
+        var cache = new TestCache
+        {
+            SettingsCache =
+            [
+                new RegistrationFormSetting
+                {
+                    OrganizationID = 3,
+                    FormCode = string.Empty,
+                    Setting = "header_image_asset_id",
+                    Value = "42"
+                }
+            ]
+        };
+        var draft = new SettingDraft(7, 2, string.Empty, 0, DraftStatus.Active, []);
+        var settings = new PreviewSettingProvider(draft, 3, cache, 1);
+        Assert.AreEqual(42, settings.HeaderImageAssetId);
+        var context = new PreviewRequestContext(Link("Active"), draft, settings);
+        var accessor = new PreviewRequestContextAccessor { IsPreviewRequest = true, PlaintextToken = "preview-token", Current = context };
+        var assets = new Mock<IRegistrationFormAssetRepository>();
+        var metadata = new RegistrationFormAssetMetadata(
+            42, "branch.png", "image/png", "hash", DateTime.UtcNow, DateTime.UtcNow, 3, string.Empty);
+        assets.Setup(service => service.GetMetadata(42)).Returns(metadata);
+        assets.Setup(service => service.Get(42)).Returns(new RegistrationFormAsset(
+            42, "branch.png", "image/png", [1, 2], "hash", DateTime.UtcNow, DateTime.UtcNow, 3, string.Empty));
+        var assetAuthorization = new Mock<IRegistrationFormAssetAuthorization>();
+        assetAuthorization.Setup(service => service.GetAuthorizedMetadata(42, 3, string.Empty)).Returns(metadata);
+        var controller = new PreviewController(
+            Mock.Of<ISettingsAdministrationRepository>(), accessor, new TestCache(), Mock.Of<IDbHelper>(),
+            Mock.Of<IPapiClient>(), Mock.Of<IMelissaRestClient>(), Mock.Of<IEmailSender>())
+        {
+            ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() }
+        };
+
+        var result = (FileContentResult)controller.Asset("preview-token", 42, assets.Object, assetAuthorization.Object);
+
+        CollectionAssert.AreEqual(new byte[] { 1, 2 }, result.FileContents);
+        assetAuthorization.Verify(service => service.GetAuthorizedMetadata(42, 3, string.Empty), Times.Once);
+        assetAuthorization.Verify(service => service.GetAuthorizedMetadata(42, 2, string.Empty), Times.Never);
     }
 
     [TestMethod]

@@ -1,3 +1,4 @@
+using System.Globalization;
 using Clc.Melissa;
 using Clc.PatronRegistration.Administration;
 using Clc.PatronRegistration.Configuration;
@@ -59,15 +60,29 @@ public sealed class PreviewController(
     {
         // PreviewRequestContextMiddleware has already authenticated the bearer token
         // and populated the draft overlay before this action can run.
-        if (previewRequestContext.Current is null || id <= 0 ||
-            previewRequestContext.Current.Settings.HeaderImageAssetId != id)
+        var current = previewRequestContext.Current;
+        if (current is null || id <= 0 || current.Settings.HeaderImageAssetId != id)
         {
             return NotFound();
         }
 
         SetSecurityHeaders();
         var metadata = assetAuthorization.GetAuthorizedMetadata(
-            id, previewRequestContext.Current.Draft.OrganizationId, previewRequestContext.Current.Draft.FormCode);
+            id, current.Link.OperationalBranchId, current.Draft.FormCode);
+        // The effective preview settings run at the operational branch, while a
+        // newly uploaded asset staged by the draft may only be authorized at the
+        // draft's own scope. Try that scope only after the effective operational
+        // scope has rejected the selected asset.
+        var stagedAtDraftScope = current.Draft.Changes.Any(change =>
+            change.Operation == DraftOperation.Upsert &&
+            string.Equals(change.Key, "header_image_asset_id", StringComparison.OrdinalIgnoreCase) &&
+            int.TryParse(change.Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var stagedAssetId) &&
+            stagedAssetId == id);
+        if (metadata is null && current.Draft.OrganizationId != current.Link.OperationalBranchId && stagedAtDraftScope)
+        {
+            metadata = assetAuthorization.GetAuthorizedMetadata(
+                id, current.Draft.OrganizationId, current.Draft.FormCode);
+        }
         if (metadata is null)
         {
             return NotFound();

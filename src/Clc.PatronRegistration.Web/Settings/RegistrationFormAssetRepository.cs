@@ -87,7 +87,10 @@ public static class RegistrationFormAssetUploadValidation
 
         try
         {
-            var information = Image.Identify(content);
+            // Inspect at most two frame headers before decoding. A second frame
+            // is enough to reject animation without allocating every frame's
+            // pixel buffer during validation.
+            var information = Image.Identify(new DecoderOptions { MaxFrames = 2 }, content);
             if (information is null || information.Width <= 0 || information.Height <= 0 ||
                 (long)information.Width * information.Height > MaximumDecodedPixelCount)
             {
@@ -96,8 +99,15 @@ public static class RegistrationFormAssetUploadValidation
             }
 
             // Loading the complete image through a maintained decoder rejects truncated
-            // headers and malformed chunks without transforming the stored bytes.
-            using var image = Image.Load(new DecoderOptions { SkipMetadata = true }, content);
+            // headers and malformed chunks without transforming the stored bytes. The
+            // bounded frame load rejects animation while ensuring a malicious upload
+            // cannot force every frame to be decompressed before it is rejected.
+            using var image = Image.Load(new DecoderOptions { MaxFrames = 2, SkipMetadata = true }, content);
+            if (image.Frames.Count > 1)
+            {
+                error = "Animated header images are not supported.";
+                return false;
+            }
         }
         catch (Exception exception) when (exception is ImageFormatException or InvalidImageContentException
             or UnknownImageFormatException or NotSupportedException or ArgumentException or OverflowException)

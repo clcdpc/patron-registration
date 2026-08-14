@@ -38,7 +38,7 @@ public sealed class SettingsRegistrationFormAssetsController(
         }
 
         var etag = $"\"{metadata.ContentHash}\"";
-        Response.Headers.CacheControl = "private, max-age=31536000, immutable";
+        Response.Headers.CacheControl = "no-store";
         Response.Headers.ETag = etag;
         Response.Headers["X-Content-Type-Options"] = "nosniff";
         if (MatchesIfNoneMatch(etag))
