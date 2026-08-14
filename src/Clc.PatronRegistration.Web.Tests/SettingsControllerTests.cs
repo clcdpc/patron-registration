@@ -1089,6 +1089,28 @@ public class SettingsControllerTests
     }
 
     [TestMethod]
+    public async Task UploadHeaderImageAsset_LeavesFullImageValidationToRepository()
+    {
+        var repository = new Mock<ISettingsAdministrationRepository>();
+        var assets = new Mock<IRegistrationFormAssetRepository>();
+        assets.Setup(service => service.Create("header.png", "image/png", It.IsAny<byte[]>(), 3, string.Empty))
+            .Throws(new ArgumentException("The uploaded file is not a complete, valid image.", "content"));
+        var controller = CreateController(repository, LibraryAuthorization(), suppliedAssets: assets);
+        var content = new byte[] { 0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a };
+        var file = new FormFile(new MemoryStream(content), 0, content.Length, "file", "header.png")
+        {
+            Headers = new HeaderDictionary(),
+            ContentType = "image/png"
+        };
+
+        var result = await controller.UploadHeaderImageAsset(file, 3, string.Empty);
+
+        Assert.IsInstanceOfType<BadRequestObjectResult>(result);
+        assets.Verify(service => service.Create("header.png", "image/png",
+            It.Is<byte[]>(bytes => bytes.SequenceEqual(content)), 3, string.Empty), Times.Once);
+    }
+
+    [TestMethod]
     public void Index_MarksMissingHeaderAssetWithoutRewritingTheSetting()
     {
         var repository = new Mock<ISettingsAdministrationRepository>();

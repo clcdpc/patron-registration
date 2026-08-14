@@ -392,7 +392,7 @@ public sealed class SettingsController(
             content = buffer.ToArray();
         }
 
-        if (!RegistrationFormAssetUploadValidation.TryValidate(file.ContentType, content, file.FileName,
+        if (!RegistrationFormAssetUploadValidation.TryValidateUploadEnvelope(file.ContentType, content, file.FileName,
                 out var sanitizedFileName, out var validationError))
         {
             return BadRequest(new { error = validationError });
@@ -400,7 +400,17 @@ public sealed class SettingsController(
 
         // Asset creation is deliberately independent from setting mutation. The browser places this
         // returned ID into the normal row edit session, and Save/Save-to-draft persists it with peers.
-        var asset = assetRepository.Create(sanitizedFileName, file.ContentType, content, organizationId, formCode);
+        RegistrationFormAsset asset;
+        try
+        {
+            // The repository repeats the complete image validation, including the
+            // animation and decoded-pixel checks, before storing the bytes.
+            asset = assetRepository.Create(sanitizedFileName, file.ContentType, content, organizationId, formCode);
+        }
+        catch (ArgumentException exception)
+        {
+            return BadRequest(new { error = exception.Message });
+        }
         var previewUrl = Url?.RouteUrl("SettingsRegistrationFormAsset", new { id = asset.AssetId, organizationId, formCode })
             ?? $"/settings/assets/{asset.AssetId}?organizationId={organizationId}&formCode={Uri.EscapeDataString(formCode)}";
         return Ok(new

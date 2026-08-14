@@ -10,6 +10,7 @@ using Microsoft.Extensions.Options;
 using Moq;
 using Clc.Polaris.Api.Models;
 using SixLabors.ImageSharp;
+using SixLabors.ImageSharp.Formats;
 
 namespace Clc.PatronRegistration.Tests;
 
@@ -58,6 +59,45 @@ public sealed class RegistrationFormAssetTests
         Assert.IsFalse(RegistrationFormAssetUploadValidation.TryValidate(
             "image/webp", animated, "animated.webp", out _, out var error));
         StringAssert.Contains(error, "Animated");
+    }
+
+    [TestMethod]
+    public void UploadValidation_RejectsNearLimitAnimatedWebpFromIdentificationMetadata()
+    {
+        // The fixture contains only tiny 1x1 encoded frames. Its WebP canvas is
+        // changed to the exact pixel budget so the old MaxFrames=2 load would
+        // allocate two near-limit canvases before observing Frames.Count > 1.
+        var animated = TestImageData.CreateAnimatedWebpWithCanvas(5_000, 5_000);
+        var information = Image.Identify(new DecoderOptions { MaxFrames = 2 }, animated);
+
+        Assert.IsNotNull(information);
+        Assert.AreEqual(5_000, information.Width);
+        Assert.AreEqual(5_000, information.Height);
+        Assert.IsFalse(RegistrationFormAssetUploadValidation.TryValidate(
+            "image/webp", animated, "animated-near-limit.webp", out _, out var error));
+        StringAssert.Contains(error, "Animated");
+    }
+
+    [TestMethod]
+    public void UploadValidation_RejectsAnimatedPngBeforeFullDecode()
+    {
+        var animated = TestImageData.CreateAnimatedPng();
+        using var decoded = Image.Load(animated);
+        Assert.IsTrue(decoded.Frames.Count > 1, $"Test fixture decoded {decoded.Frames.Count} frame(s).");
+
+        Assert.IsFalse(RegistrationFormAssetUploadValidation.TryValidate(
+            "image/png", animated, "animated.png", out _, out var error));
+        StringAssert.Contains(error, "Animated");
+    }
+
+    [TestMethod]
+    public void UploadValidation_RejectsStaticImageAboveDecodedPixelLimitBeforeFullDecode()
+    {
+        var oversized = TestImageData.CreatePngWithDimensions(5_000, 5_001);
+
+        Assert.IsFalse(RegistrationFormAssetUploadValidation.TryValidate(
+            "image/png", oversized, "oversized.png", out _, out var error));
+        StringAssert.Contains(error, "pixel limit");
     }
 
     [TestMethod]
