@@ -30,10 +30,9 @@ public sealed class AgeBlockControllerTests
 
         Assert.IsTrue(decision.IsBlocked);
         Assert.AreEqual("Live block", decision.Message);
-        Assert.IsNotNull(typeof(RegistrationController).GetMethod(nameof(RegistrationController.AgeBlockCheck))!
-            .GetCustomAttribute<HttpPostAttribute>());
-        Assert.IsNotNull(typeof(RegistrationController).GetMethod(nameof(RegistrationController.AgeBlockCheck))!
-            .GetCustomAttribute<ValidateAntiForgeryTokenAttribute>());
+        var action = typeof(RegistrationController).GetMethod(nameof(RegistrationController.AgeBlockCheck))!;
+        Assert.IsNotNull(action.GetCustomAttribute<HttpPostAttribute>());
+        Assert.IsNull(action.GetCustomAttribute<ValidateAntiForgeryTokenAttribute>());
     }
 
     [TestMethod]

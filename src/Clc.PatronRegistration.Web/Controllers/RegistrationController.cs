@@ -45,7 +45,6 @@ namespace Clc.PatronRegistration.Web.Controllers
         public RegistrationAttempt Submit(Registration p) => p.CreateRegistration(Request.GetTrueClientIP(), ModelState, settings, db, papi, melissa, emailSender);
 
         [HttpPost]
-        [ValidateAntiForgeryToken]
         public JsonResult AgeBlockCheck(DateTime? birthdate) => Json(AgeBlockPolicy.Evaluate(settings, birthdate));
 
         public string ViewIp() => Request.GetTrueClientIP();

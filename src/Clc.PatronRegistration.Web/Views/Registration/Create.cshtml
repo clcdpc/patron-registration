@@ -329,6 +329,7 @@
     </form>
 </div>
 
+<script src="@this.BuildUrl("/js/age-block-request-coordinator.js")"></script>
 
 <script type="text/javascript">
     const q = document.querySelector.bind(document);
@@ -378,6 +379,7 @@
     const addToMailingListCheckbox = q('#AddToMailingList');
     const smsNoticeInfo = q('#smsNoticeInfo');
     const antiforgeryToken = q('input[name="__RequestVerificationToken"]');
+    const ageBlockRequests = AgeBlockRequestCoordinator.create(() => birthdate.value);
 
     let isTeacher = false;
 
@@ -411,41 +413,44 @@
     }
 
     async function ageBlockCheck() {
-        if (!birthdate.value) {
+        const checkedBirthdate = birthdate.value;
+        if (!checkedBirthdate) {
+            ageBlockRequests.invalidate();
             return false;
         }
 
-        const formData = new FormData();
-        formData.append("Birthdate", birthdate.value);
-        formData.append("__RequestVerificationToken", antiforgeryToken.value);
+        const result = await ageBlockRequests.request(checkedBirthdate, async (birthdateValue) => {
+            const formData = new FormData();
+            formData.append("Birthdate", birthdateValue);
+            formData.append("__RequestVerificationToken", antiforgeryToken.value);
 
-        try {
             const response = await fetch("@ageBlockCheckUrl", {
                 method: "POST",
                 credentials: "same-origin",
                 body: formData
             });
             if (!response.ok) {
-                return false;
+                return { status: "unavailable" };
             }
 
-            const result = await response.json();
-            if (result.isBlocked) {
-                wrapperDiv.innerHTML = result.message;
-                window.scrollTo(0, 0);
-                return true;
-            }
-        } catch {
-            return false;
+            const responseJson = await response.json();
+            return responseJson.isBlocked
+                ? { status: "blocked", message: responseJson.message }
+                : { status: "allowed" };
+        });
+
+        if (result.status === "blocked") {
+            wrapperDiv.innerHTML = result.message;
+            window.scrollTo(0, 0);
         }
 
-        return false;
+        return result;
     }
 
     async function handleBirthdateChanged() {
-        const blocked = await ageBlockCheck();
-        if (blocked) {
-            return true;
+        const ageBlockResult = await ageBlockCheck();
+        if (ageBlockResult && (ageBlockResult.status === "stale" || ageBlockResult.status === "blocked")) {
+            return ageBlockResult;
         }
 
         if (@Settings.EnableAgeWarning.ToJavascriptBool()) {
@@ -453,7 +458,7 @@
         }
 
         await dupecheck();
-        return false;
+        return ageBlockResult;
     }
 
     function show(e) {
@@ -693,7 +698,9 @@
             return;
         }
 
-        if (await ageBlockCheck()) {
+        const ageBlockResult = await ageBlockCheck();
+        if (ageBlockResult && (ageBlockResult.status === "blocked" || ageBlockResult.status === "stale")) {
+            registerButton.disabled = false;
             return;
         }
 
