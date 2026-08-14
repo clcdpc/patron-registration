@@ -9,6 +9,9 @@
     var submitUrl = isSettingsPreview
         ? Url.Action("Submit", "Preview", new { token = previewToken })
         : this.BuildAction("Submit");
+    var ageBlockCheckUrl = isSettingsPreview
+        ? Url.Action("AgeBlockCheck", "Preview", new { token = previewToken })
+        : this.BuildAction("AgeBlockCheck");
     var driverLicenseUrl = isSettingsPreview
         ? Url.Action("DriverLicense", "Preview", new { token = previewToken })
         : this.BuildAction("dl");
@@ -342,7 +345,9 @@
     const birthdate = q('#Birthdate');
     const streetOne = q('#StreetOne');
     const city = q('#City');
+    const state = q('#State');
     const postalCode = q('#PostalCode');
+    const gender = q('#Gender');
     const deliveryOptionId = q("#DeliveryOptionId");
     const phoneVoice1 = q("#PhoneVoice1");
     const emailAddress = q("#EmailAddress");
@@ -393,10 +398,7 @@
     // force required asterisk to show on email field
     dispatchEvent(deliveryOptionId, "change");
 
-    if (@Settings.EnableAgeWarning.ToJavascriptBool()) {
-        AddEventHandler(birthdate, "blur", (e) => { ageCheck(); })
-    }
-    AddEventHandler(birthdate, "blur", (e) => { dupecheck(); ageBlockCheck(); })
+    AddEventHandler(birthdate, "blur", (e) => { handleBirthdateChanged(); })
     AddEventHandler(nameFirst, "blur", (e) => { dupecheck(); })
     AddEventHandler(nameLast, "blur", (e) => { dupecheck(); })
 
@@ -408,16 +410,50 @@
         }
     }
 
-    function ageBlockCheck(){
-        if (!@Settings.EnableAgeBlock.ToJavascriptBool()) {
-            return;
+    async function ageBlockCheck() {
+        if (!birthdate.value) {
+            return false;
         }
 
-        let age = calculateAge(birthdate.value);
-        if (age !== null && age < 18) {
-            const ageBlockHtml = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Settings.AgeBlockText));
-            wrapperDiv.innerHTML = ageBlockHtml;
+        const formData = new FormData();
+        formData.append("Birthdate", birthdate.value);
+        formData.append("__RequestVerificationToken", antiforgeryToken.value);
+
+        try {
+            const response = await fetch("@ageBlockCheckUrl", {
+                method: "POST",
+                credentials: "same-origin",
+                body: formData
+            });
+            if (!response.ok) {
+                return false;
+            }
+
+            const result = await response.json();
+            if (result.isBlocked) {
+                wrapperDiv.innerHTML = result.message;
+                window.scrollTo(0, 0);
+                return true;
+            }
+        } catch {
+            return false;
         }
+
+        return false;
+    }
+
+    async function handleBirthdateChanged() {
+        const blocked = await ageBlockCheck();
+        if (blocked) {
+            return true;
+        }
+
+        if (@Settings.EnableAgeWarning.ToJavascriptBool()) {
+            ageCheck();
+        }
+
+        await dupecheck();
+        return false;
     }
 
     function show(e) {
@@ -645,7 +681,7 @@
         window.scrollTo(0, 0);
     }
 
-    function submitReg(e) {
+    async function submitReg(e) {
         registerButton.disabled = true;
         e.preventDefault();
 
@@ -654,6 +690,10 @@
         } else {
             console.log("invalid");
             registerButton.disabled = false;
+            return;
+        }
+
+        if (await ageBlockCheck()) {
             return;
         }
 
@@ -722,29 +762,36 @@
         }
     }
 
-    function dl() {
+    async function dl() {
         var dlinfo = window.prompt("@Settings.DriversLicensePromptText");
 
-        if (dlinfo.length < 20) { return; }
+        if (!dlinfo || dlinfo.length < 20) { return; }
 
         var formData = new FormData();
         formData.append("dlinfo", dlinfo);
         formData.append("__RequestVerificationToken", antiforgeryToken.value);
 
-        postData("@driverLicenseUrl", formData).then((data) => {
-            var dataJson = JSON.stringify(data);
-            nameFirst.value = data.firstName;
-            nameMiddle.value = data.middleName;
-            nameLast.value = data.lastName;
-            birthdate.value = data.birthdate.split('T')[0];
-            streetOne.value = data.address;
-            city.value = data.city;
-            postalCode.value = data.zip;
-        });
-        dupecheck();
+        const data = await postData("@driverLicenseUrl", formData);
+        if (!data || typeof data !== "object") {
+            return;
+        }
+
+        nameFirst.value = data.firstName || "";
+        nameMiddle.value = data.middleName || "";
+        nameLast.value = data.lastName || "";
+        birthdate.value = data.birthdate ? data.birthdate.split('T')[0] : "";
+        streetOne.value = data.address || "";
+        city.value = data.city || "";
+        state.value = data.state || "";
+        postalCode.value = data.zip || "";
+        if (gender) {
+            gender.value = data.gender || "";
+        }
+
+        await handleBirthdateChanged();
     }
 
-    function dupecheck() {
+    async function dupecheck() {
         if (isTeacher) {
             //console.log('skip for teacher');
             return;
@@ -758,13 +805,12 @@
             formData.append("LibraryId", @(Model.LibraryId));
             formData.append("BirthDate", birthdate.value);
             formData.append("__RequestVerificationToken", antiforgeryToken.value);
-            postData("@duplicateCheckUrl", formData).then((data) => {
-                if (data.isDupe === true) {
-                    theform.innerHTML = data.message;
-                    window.scrollTo(0, 0);
-                }
-                //else { console.log('not dupe'); }
-            });
+            const data = await postData("@duplicateCheckUrl", formData);
+            if (data.isDupe === true) {
+                theform.innerHTML = data.message;
+                window.scrollTo(0, 0);
+            }
+            //else { console.log('not dupe'); }
         }
         // else { console.log('not enough info yet'); }
     }
@@ -790,35 +836,6 @@
         if (m < 0 || (m === 0 && today.getDate() < birthDate.getDate())) {
             age--;
         }
-        return age;
-    }
-
-    function calculateAge(birthDate, asOf = new Date()) {
-        if (typeof birthDate !== "string") {
-            return null;
-        }
-
-        const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(birthDate);
-
-        if (!match) {
-            return null;
-        }
-
-        const [, yearText, monthText, dayText] = match;
-        const year = Number(yearText);
-        const month = Number(monthText);
-        const day = Number(dayText);
-        const parsedBirthDate = new Date(year, month - 1, day);
-
-        if (parsedBirthDate.getFullYear() !== year || parsedBirthDate.getMonth() !== month - 1 || parsedBirthDate.getDate() !== day || parsedBirthDate > asOf) {
-            return null;
-        }
-
-        let age = asOf.getFullYear() - year;
-        if (asOf.getMonth() < month - 1 || (asOf.getMonth() === month - 1 && asOf.getDate() < day)) {
-            age--;
-        }
-
         return age;
     }
 

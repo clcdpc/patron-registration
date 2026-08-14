@@ -80,6 +80,43 @@ public class RegistrationModelStateTests
         melissa.Verify(value => value.PersonatorRequest(It.IsAny<PersonatorRequestRecord>()), Times.Once);
     }
 
+    [TestMethod]
+    public void UnderageRegistration_IsRejectedBeforeAnyRegistrationSideEffects()
+    {
+        var settings = new Mock<ISettingProvider>();
+        settings.SetupGet(value => value.EnableAgeBlock).Returns(true);
+        settings.SetupGet(value => value.AgeBlockText).Returns("Underage registrations are not allowed.");
+        var db = new Mock<IDbHelper>();
+        var papi = new Mock<IPapiClient>();
+        var melissa = new Mock<IMelissaRestClient>();
+        var email = new Mock<IEmailSender>();
+        var registration = new Registration(settings.Object)
+        {
+            Birthdate = DateTime.Today.AddYears(-AgeBlockPolicy.MinimumAge).AddDays(1)
+        };
+        var previousGlobal = DbHelper.Global;
+
+        try
+        {
+            DbHelper.Global = db.Object;
+            var result = registration.CreateRegistration("127.0.0.1", new ModelStateDictionary(), settings.Object,
+                db.Object, papi.Object, melissa.Object, email.Object);
+
+            Assert.AreEqual(RegistrationStatus.Error, result.Status);
+            Assert.AreEqual("Underage registrations are not allowed.", result.Message);
+            db.Verify(value => value.CheckPatronIsDuplicate(It.IsAny<int>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<DateTime>()), Times.Never);
+            db.Verify(value => value.AddRegistrationHistoryEntry(It.IsAny<RegistrationHistoryEntry>()), Times.Never);
+            melissa.Verify(value => value.PersonatorRequest(It.IsAny<PersonatorRequestRecord>()), Times.Never);
+            papi.Verify(value => value.PatronRegistrationCreate(It.IsAny<PatronRegistrationParams>()), Times.Never);
+            papi.Verify(value => value.RecordSetContentAdd(It.IsAny<int>(), It.IsAny<int>(), It.IsAny<int>(), It.IsAny<int>()), Times.Never);
+            email.VerifyNoOtherCalls();
+        }
+        finally
+        {
+            DbHelper.Global = previousGlobal;
+        }
+    }
+
     [DataTestMethod]
     [DataRow(IdentifierSettingState.Missing)]
     [DataRow(IdentifierSettingState.Zero)]

@@ -177,6 +177,19 @@ public sealed class PreviewController(
         return Json(registration.DupeCheck(db, papi));
     }
 
+    [HttpPost("{token}/age-block-check")]
+    [ValidateAntiForgeryToken]
+    public IActionResult AgeBlockCheck(string token, DateTime? birthdate)
+    {
+        SetSecurityHeaders();
+        var context = previewRequestContext.Current;
+        if (context is null)
+        {
+            return NotFound();
+        }
+        return Json(AgeBlockPolicy.Evaluate(context.Settings, birthdate));
+    }
+
     [HttpPost("{token}/driver-license")]
     [ValidateAntiForgeryToken]
     public IActionResult DriverLicense(string token, string dlinfo)

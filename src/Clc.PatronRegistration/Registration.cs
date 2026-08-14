@@ -165,6 +165,17 @@ namespace Clc.PatronRegistration
                     Errors = ModelErrors
                 };
             }
+
+            var ageBlockResult = AgeBlockPolicy.Evaluate(settings, Birthdate);
+            if (ageBlockResult.IsBlocked)
+            {
+                return new RegistrationAttempt
+                {
+                    Status = RegistrationStatus.Error,
+                    Message = ageBlockResult.Message
+                };
+            }
+
             HandleSmsSettings(); // might need to go back above ValidateRegistration
 
             ApplyForceEcardSetting(ip);
