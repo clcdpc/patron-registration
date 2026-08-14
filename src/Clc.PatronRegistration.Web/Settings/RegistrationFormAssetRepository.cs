@@ -133,7 +133,7 @@ public static class RegistrationFormAssetUploadValidation
 
         var riffSize = BinaryPrimitives.ReadUInt32LittleEndian(content[4..8]);
         var riffEnd = 8UL + riffSize;
-        if (riffEnd < 12 || riffEnd > (ulong)content.Length)
+        if (riffEnd != (ulong)content.Length)
         {
             return AnimationDetection.Invalid;
         }
@@ -157,7 +157,9 @@ public static class RegistrationFormAssetUploadValidation
             var chunkType = content.Slice(offset, 4);
             if (chunkType.SequenceEqual("VP8X"u8))
             {
-                if (chunkSize < 10)
+                // VP8X has a fixed ten-byte payload. Do not trust an oversized
+                // declaration to skip physical chunks that ImageSharp will scan.
+                if (chunkSize != 10)
                 {
                     return AnimationDetection.Invalid;
                 }

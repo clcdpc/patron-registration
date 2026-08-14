@@ -59,6 +59,49 @@ internal static class TestImageData
         return content;
     }
 
+    public static byte[] CreateAnimatedWebpWithOversizedVp8x()
+    {
+        var content = CreateAnimatedWebp();
+        var vp8xOffset = FindChunk(content, "VP8X"u8);
+        var originalSize = BinaryPrimitives.ReadUInt32LittleEndian(content.AsSpan(vp8xOffset + 4, 4));
+        if (originalSize != 10)
+        {
+            throw new InvalidDataException($"The generated WebP fixture has VP8X size {originalSize}, not 10.");
+        }
+
+        // Keep the physical ANIM/ANMF chunks in place, but make the declared
+        // VP8X extent cover them. ImageSharp reads the fixed VP8X fields and
+        // still sees those physical chunks; the pre-decode scanner must reject
+        // the malformed extent instead of skipping them.
+        content[vp8xOffset + 8] &= unchecked((byte)~0x02);
+        var oversized = content.Length - vp8xOffset - 8;
+        if ((oversized & 1) != 0)
+        {
+            Array.Resize(ref content, content.Length + 1);
+            content[^1] = 0;
+            BinaryPrimitives.WriteUInt32LittleEndian(content.AsSpan(4, 4), (uint)(content.Length - 8));
+            oversized++;
+        }
+        BinaryPrimitives.WriteUInt32LittleEndian(content.AsSpan(vp8xOffset + 4, 4), (uint)oversized);
+        return content;
+    }
+
+    public static byte[] CreateWebpWithUnderstatedRiffSize()
+    {
+        var content = Create("image/webp");
+        var originalLength = content.Length;
+        var result = new byte[originalLength + 12];
+        Buffer.BlockCopy(content, 0, result, 0, originalLength);
+        "JUNK"u8.CopyTo(result.AsSpan(originalLength, 4));
+        BinaryPrimitives.WriteUInt32LittleEndian(result.AsSpan(originalLength + 4, 4), 4);
+        result[originalLength + 8] = 1;
+        result[originalLength + 9] = 2;
+        result[originalLength + 10] = 3;
+        result[originalLength + 11] = 4;
+        // Leave the original RIFF size untouched so it understates result.Length.
+        return result;
+    }
+
     public static byte[] CreateAnimatedPng()
     {
         using var image = new Image<Rgba32>(1, 1);

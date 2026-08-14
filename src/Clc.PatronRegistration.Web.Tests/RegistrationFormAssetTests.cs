@@ -79,6 +79,27 @@ public sealed class RegistrationFormAssetTests
     }
 
     [TestMethod]
+    public void UploadValidation_RejectsWebpWithVp8xExtentThatHidesPhysicalAnimationChunks()
+    {
+        var crafted = TestImageData.CreateAnimatedWebpWithOversizedVp8x();
+        using var decoded = Image.Load(crafted);
+        Assert.IsTrue(decoded.Frames.Count > 1,
+            $"ImageSharp did not interpret the physical ANIM/ANMF chunks as animation ({decoded.Frames.Count} frame(s)).");
+
+        Assert.IsFalse(RegistrationFormAssetUploadValidation.TryValidate(
+            "image/webp", crafted, "malformed-animated.webp", out _, out _));
+    }
+
+    [TestMethod]
+    public void UploadValidation_RejectsWebpWithUnderstatedRiffBoundary()
+    {
+        var malformed = TestImageData.CreateWebpWithUnderstatedRiffSize();
+
+        Assert.IsFalse(RegistrationFormAssetUploadValidation.TryValidate(
+            "image/webp", malformed, "malformed-boundary.webp", out _, out _));
+    }
+
+    [TestMethod]
     public void UploadValidation_RejectsAnimatedPngBeforeFullDecode()
     {
         var animated = TestImageData.CreateAnimatedPng();
