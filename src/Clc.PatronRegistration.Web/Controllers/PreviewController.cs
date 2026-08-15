@@ -4,6 +4,7 @@ using Clc.PatronRegistration.Administration;
 using Clc.PatronRegistration.Configuration;
 using Clc.PatronRegistration.Data;
 using Clc.PatronRegistration.Helpers;
+using Clc.PatronRegistration.Web.Models;
 using Clc.PatronRegistration.Web.Settings;
 using Clc.Polaris.Api;
 using Microsoft.AspNetCore.Mvc;
@@ -45,6 +46,7 @@ public sealed class PreviewController(
         model.BypassAgreement = agreementAccepted;
         ViewData["IsSettingsPreview"] = true;
         ViewData["AllowLiveSubmission"] = context.Link.AllowLiveSubmission;
+        ViewData["RegistrationDisabled"] = context.Settings.DisableBranch;
         ViewData["PreviewToken"] = previewRequestContext.PlaintextToken;
         ViewData["PreviewOperationalBranchName"] = branch.DisplayName;
         repository.WriteAudit("PreviewAccess", true, AnonymousAudit(context));
@@ -172,6 +174,10 @@ public sealed class PreviewController(
         if (context is null)
         {
             return NotFound();
+        }
+        if (context.Settings.DisableBranch)
+        {
+            return Json(DupeCheckResult.False());
         }
         ApplyOperationalContext(registration, context.Settings, context.Link.OperationalBranchId);
         return Json(registration.DupeCheck(db, papi));

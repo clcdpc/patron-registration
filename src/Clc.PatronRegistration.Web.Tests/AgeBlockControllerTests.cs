@@ -23,7 +23,7 @@ public sealed class AgeBlockControllerTests
         var settings = Settings(true, "Live block");
         var controller = new RegistrationController(
             Mock.Of<IPapiClient>(), Mock.Of<IMelissaRestClient>(), Mock.Of<IDbHelper>(), settings.Object,
-            Mock.Of<IEmailSender>());
+            Mock.Of<IEmailSender>(), Mock.Of<IRegistrationScopeResolver>());
 
         var result = controller.AgeBlockCheck(UnderageBirthdate);
         var decision = (AgeBlockResult)((JsonResult)result).Value!;

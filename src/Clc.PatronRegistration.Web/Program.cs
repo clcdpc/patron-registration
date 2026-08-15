@@ -73,6 +73,7 @@ namespace Clc.PatronRegistration.Web
             builder.Services.AddScoped<IPreviewRequestContextAccessor, PreviewRequestContextAccessor>();
             builder.Services.AddScoped<ISettingsPageBrandingContextAccessor, SettingsPageBrandingContextAccessor>();
             builder.Services.AddScoped<IRequestSettingProviderResolver, RequestSettingProviderResolver>();
+            builder.Services.AddScoped<IRegistrationScopeResolver, RegistrationScopeResolver>();
             builder.Services.AddSingleton<IPreviewContextResolver, PreviewContextResolver>();
             builder.Services.AddScoped<IEmailSenderFactory, EmailSenderFactory>();
             builder.Services.AddScoped<IMelissaClientFactory, MelissaClientFactory>();

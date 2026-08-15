@@ -26,6 +26,8 @@ namespace Clc.PatronRegistration
     [ModelMetadataType(typeof(RegistrationMetadata))]
     public partial class Registration
     {
+        public const string RegistrationUnavailableMessage = "Registration is currently unavailable. Please try again later or contact the library.";
+
         [JsonIgnore]
         private static readonly ILogger logger = LogManager.GetCurrentClassLogger();
 
@@ -155,6 +157,25 @@ namespace Clc.PatronRegistration
         public RegistrationAttempt CreateRegistration(string ip, ModelStateDictionary modelState, ISettingProvider settings, IDbHelper db, IPapiClient papi, IMelissaRestClient melissa, IEmailSender emailSender)
         {
             Settings = settings;
+
+            // These checks must remain before model validation and every operation that can
+            // contact Polaris, Melissa, Postmark, or persist registration history.
+            if (IsRegistrationDisabled)
+            {
+                return new RegistrationAttempt
+                {
+                    Status = RegistrationStatus.Disabled,
+                    Message = RegistrationUnavailableMessage
+                };
+            }
+
+            // a_password is the legacy honeypot field. Preserve its silent, side-effect-free
+            // suppression separately from the administrative unavailable response.
+            if (HasHoneypotValue)
+            {
+                return new RegistrationAttempt { Status = RegistrationStatus.Error };
+            }
+
             if (!modelState.IsValid)
             {
                 ModelErrors = RegistrationAttempt.ErrorsFromModelState(modelState);
@@ -392,7 +413,14 @@ namespace Clc.PatronRegistration
                 }
             }
         }
-        public bool ShouldSkipRegistration() => !string.IsNullOrWhiteSpace(a_password) || Settings.DisableBranch;
+        public bool HasHoneypotValue => !string.IsNullOrWhiteSpace(a_password);
+
+        public bool IsRegistrationDisabled => Settings.DisableBranch;
+
+        // Retain the legacy combined predicate for callers that still use it. The workflow
+        // deliberately uses the named predicates above so honeypot suppression and an
+        // administrative unavailable response cannot be confused with one another.
+        public bool ShouldSkipRegistration() => HasHoneypotValue || IsRegistrationDisabled;
 
         public void SetLogonUserID()
         {

@@ -203,7 +203,7 @@ namespace Clc.PatronRegistration.Configuration
         int? PatronCodeId { get; }
         [AdminSetting(SettingCategory.BranchAndPatronDefaults, "Hide home branch when only one option exists", "Replaces the home-branch selector with its single available branch value.", Key = "hide_branch_select_if_only_one_option")]
         bool HideBranchSelectIfOnlyOneBranch { get; }
-        [AdminSetting(SettingCategory.BranchAndPatronDefaults, "Disable registration for this branch and form", "Causes registration submission to be skipped for this branch and form through the existing ShouldSkipRegistration check.")]
+        [AdminSetting(SettingCategory.BranchAndPatronDefaults, "Disable registration for this branch and form", "Prevents registration submission for this branch and form before registration validation or side effects run.")]
         bool DisableBranch { get; }
         [AdminSetting(SettingCategory.FormBehaviorAndFields, "Phone-number storage format", "Applies this replacement format to the primary phone number before patron creation.")]
         string PhoneNumberFormat { get; }

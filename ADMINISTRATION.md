@@ -81,11 +81,10 @@ All settings-administration responses use `Cache-Control: no-store, no-cache, ma
 ## Manual database deployment
 
 1. Back up `clcdb` and verify the existing `dbo.RegistrationFormSettings` table.
-2. Run [`database/001-settings-administration.sql`](database/001-settings-administration.sql) against `clcdb`.
-3. Run [`database/002-preview-operational-branch.sql`](database/002-preview-operational-branch.sql); on upgraded installations it revokes legacy unbound links before requiring an operational branch.
-4. Run [`database/003-expand-audit-setting-values.sql`](database/003-expand-audit-setting-values.sql).
-5. Apply the least-privilege grants described in [`database/README.md`](database/README.md).
-6. Configure Azure AD, role assignments, organization IDs, SQL access, and existing external services.
-7. Deploy the application.
+2. Run these migrations against `clcdb` in this exact order: [`001-settings-administration.sql`](database/001-settings-administration.sql), [`002-preview-operational-branch.sql`](database/002-preview-operational-branch.sql), [`003-expand-audit-setting-values.sql`](database/003-expand-audit-setting-values.sql), [`004-registration-form-assets.sql`](database/004-registration-form-assets.sql), [`005-registration-form-asset-scope.sql`](database/005-registration-form-asset-scope.sql), [`006-register-header-image-asset-setting.sql`](database/006-register-header-image-asset-setting.sql), then [`007-remove-legacy-header-image-url.sql`](database/007-remove-legacy-header-image-url.sql). Migration 002 revokes legacy unbound preview links before requiring an operational branch. Migration 006 must register `header_image_asset_id` before the application persists that key. Migration 007 removes URL-only settings and retired-key mutations from active drafts while preserving historical draft and audit data.
+3. Apply the least-privilege grants described in [`database/README.md`](database/README.md).
+4. Configure Azure AD, role assignments, organization IDs, SQL access, and existing external services.
+5. Deploy the application only after all seven migrations succeed. Existing URL-based header images disappear in this version and remain absent until database-backed replacement images are uploaded through the Header image administration editor.
+6. Verify the affected public registration pages and confirm that each replacement image is displayed.
 
 Production requires HTTPS; the application redirects to HTTPS and enables HSTS outside Development. All SQL scripts are manual and idempotent when applied in order. The application never applies production schema changes automatically.
