@@ -615,6 +615,10 @@ public class SettingsAdministrationTests
         StringAssert.Contains(forms, "Organization ID @form.OrganizationId");
         StringAssert.Contains(forms, "Organization ID @legacy.OwnerOrganizationId");
         StringAssert.Contains(forms, "id=\"form-owner-id\" type=\"hidden\"");
+        StringAssert.Contains(forms, "<dl class=\"form-owner-display\">");
+        StringAssert.Contains(forms, "<dt>Owning organization</dt>");
+        StringAssert.Contains(forms, "<dd>");
+        Assert.IsFalse(forms.Contains("<label for=\"form-owner-id\">", StringComparison.Ordinal));
         StringAssert.Contains(forms, "<h2 id=\"create-form-heading\">Create a named form</h2>");
         StringAssert.Contains(forms, ">Create named form</button>");
         Assert.IsFalse(forms.Contains("inferred owner @legacy.OwnerOrganizationId", StringComparison.Ordinal));
@@ -1479,6 +1483,68 @@ public class SettingsAdministrationTests
         var message = SettingInheritancePresentation.MessageFor(sensitive);
         Assert.IsFalse(message.Contains("recognizable secret", StringComparison.Ordinal));
         Assert.AreEqual("Choosing Use inherited value will remove this customization. Use the inherited value from the inherited scope.", message);
+    }
+
+    [TestMethod]
+    public void SettingReviewPresentation_UsesSafeImageFilenamesAndInheritanceStates()
+    {
+        var image = new SettingDefinition("header_image_asset_id", "Header image", "Header image", SettingValueType.Image);
+        var resolution = new ResolvedSetting("header_image_asset_id", "42", 2, "Main Library", string.Empty, true, "42", false);
+        var currentAsset = new SettingAssetPresentation(42, "old-header.webp", "/settings/assets/42");
+        var stagedAsset = new SettingAssetPresentation(43, "branch-header.webp", "/settings/assets/43");
+
+        var live = new SettingRowViewModel("image-live", image, resolution, null, null, null,
+            SourceDescription: "Main Library", EffectiveAsset: currentAsset);
+        Assert.AreEqual("old-header.webp", SettingReviewPresentation.Live(live));
+
+        var replacement = live with
+        {
+            DraftValue = "43",
+            DraftOperation = DraftOperation.Upsert,
+            DraftId = 7,
+            StagedAsset = stagedAsset
+        };
+        Assert.AreEqual("branch-header.webp", SettingReviewPresentation.Proposed(replacement));
+
+        var inherited = live with
+        {
+            DraftOperation = DraftOperation.RemoveOverride,
+            DraftValue = null,
+            InheritedValue = "44",
+            HasInheritedValue = true,
+            InheritedSourceDescription = "Main Library"
+        };
+        Assert.AreEqual("use inherited image from Main Library", SettingReviewPresentation.Proposed(inherited));
+
+        var noInherited = live with
+        {
+            DraftOperation = DraftOperation.RemoveOverride,
+            DraftValue = null,
+            InheritedValue = null,
+            HasInheritedValue = false
+        };
+        Assert.AreEqual("no configured image", SettingReviewPresentation.Proposed(noInherited));
+
+        var missingEffective = live with { EffectiveAsset = null, EffectiveAssetMissing = true };
+        Assert.AreEqual("missing configured image", SettingReviewPresentation.Live(missingEffective));
+
+        var missingStaged = replacement with { StagedAsset = null, StagedAssetMissing = true };
+        Assert.AreEqual("missing staged image", SettingReviewPresentation.Proposed(missingStaged));
+
+        foreach (var summary in new[]
+        {
+            SettingReviewPresentation.Live(live),
+            SettingReviewPresentation.Proposed(replacement),
+            SettingReviewPresentation.Proposed(inherited),
+            SettingReviewPresentation.Proposed(noInherited),
+            SettingReviewPresentation.Live(missingEffective),
+            SettingReviewPresentation.Proposed(missingStaged)
+        })
+        {
+            Assert.IsFalse(summary.Contains("42", StringComparison.Ordinal));
+            Assert.IsFalse(summary.Contains("43", StringComparison.Ordinal));
+            Assert.IsFalse(summary.Contains("44", StringComparison.Ordinal));
+        }
     }
 
     [TestMethod]

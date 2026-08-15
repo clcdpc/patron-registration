@@ -115,11 +115,13 @@
     <h2 id="create-form-heading">Create a named form</h2>
     <form asp-action="CreateForm" method="post">
         @Html.AntiForgeryToken()
-        <label for="form-owner-id">Owning organization</label>
-        <div class="form-owner-display">
-            <span class="form-owner-name">@Model.LibraryName</span>
-            <small>Organization ID @Model.LibraryId</small>
-        </div>
+        <dl class="form-owner-display">
+            <dt>Owning organization</dt>
+            <dd>
+                <span class="form-owner-name">@Model.LibraryName</span>
+                <small>Organization ID @Model.LibraryId</small>
+            </dd>
+        </dl>
         <input id="form-owner-id" type="hidden" name="OrganizationId" value="@Model.LibraryId" />
         <label for="new-form-code">Immutable code</label>
         <input id="new-form-code" name="FormCode" maxlength="64" pattern="[A-Za-z0-9_-]+" required />

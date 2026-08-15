@@ -164,6 +164,10 @@ public static class SettingReviewPresentation
         {
             return row.Resolution.SourceOrganizationId.HasValue ? "configured" : "not configured";
         }
+        if (row.Definition.ValueType == SettingValueType.Image)
+        {
+            return LiveImage(row);
+        }
         if (!row.Resolution.SourceOrganizationId.HasValue)
         {
             return "not configured";
@@ -179,9 +183,17 @@ public static class SettingReviewPresentation
         {
             if (!row.HasInheritedValue)
             {
-                return "remove customization; no inherited value configured";
+                return row.Definition.ValueType == SettingValueType.Image
+                    ? "no configured image"
+                    : "remove customization; no inherited value configured";
             }
             var source = row.InheritedSourceDescription ?? "the inherited scope";
+            if (row.Definition.ValueType == SettingValueType.Image)
+            {
+                return row.InheritedAssetMissing
+                    ? $"use inherited image from {source} (image currently missing)"
+                    : $"use inherited image from {source}";
+            }
             return row.Definition.IsSensitive
                 ? $"use inherited value from {source}"
                 : $"use {SettingValuePresentation.Format(row.Definition, row.InheritedValue, true)} from {source}";
@@ -190,7 +202,32 @@ public static class SettingReviewPresentation
         {
             return "replacement value entered";
         }
+        if (row.Definition.ValueType == SettingValueType.Image)
+        {
+            return row.StagedAsset is not null && !string.IsNullOrWhiteSpace(row.StagedAsset.FileName)
+                ? row.StagedAsset.FileName
+                : row.StagedAssetMissing ? "missing staged image" : "uploaded image";
+        }
         return SettingValuePresentation.Format(row.Definition, row.DraftValue, true);
+    }
+
+    private static string LiveImage(SettingRowViewModel row)
+    {
+        if (row.EffectiveAsset is not null && !string.IsNullOrWhiteSpace(row.EffectiveAsset.FileName))
+        {
+            return row.EffectiveAsset.FileName;
+        }
+        if (row.EffectiveAssetMissing)
+        {
+            return "missing configured image";
+        }
+        if (!row.Resolution.SourceOrganizationId.HasValue)
+        {
+            return "no configured image";
+        }
+        return row.Resolution.OwnsOverride
+            ? "configured image"
+            : $"inherited image from {row.SourceDescription}";
     }
 }
 

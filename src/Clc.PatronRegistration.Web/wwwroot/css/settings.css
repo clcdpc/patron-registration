@@ -830,6 +830,8 @@ body.settings-administration-page #regFormContainer {
 .form-owner-name { display: block; font-weight: 600; overflow-wrap: anywhere }
 table small, .form-owner-display small { color: #555; display: block; overflow-wrap: anywhere }
 .form-owner-display { margin: -.15rem 0 .5rem; padding: .45rem .6rem; border: 1px solid #c8c8c8; border-radius: .25rem; max-width: 32rem }
+.form-owner-display dt { font-weight: 600 }
+.form-owner-display dd { margin: .25rem 0 0 }
 .settings-success { background:#e7f5e9; border:2px solid #247239; padding:.75rem; margin-block:.75rem }
 dialog { max-width:min(46rem,calc(100% - 2rem)); max-height:calc(100% - 2rem); overflow:auto }
 dialog::backdrop { background:rgb(0 0 0 / .55) }
