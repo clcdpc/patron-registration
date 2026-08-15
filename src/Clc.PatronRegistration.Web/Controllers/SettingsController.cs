@@ -108,7 +108,7 @@ public sealed class SettingsController(
             var draftChange = draft?.Changes.FirstOrDefault(change => change.Key.Equals(definition.Key, StringComparison.OrdinalIgnoreCase));
             var resolution = resolver.Resolve(cache.SettingsCache, definition.Key, target, libraryId, formCode,
                 settingsOptions.SystemOrganizationId);
-            var inheritedResolution = resolution.OwnsOverride && !definition.IsSensitive
+            var inheritedResolution = resolution.OwnsOverride
                 ? resolver.Resolve(cache.SettingsCache, definition.Key, target, libraryId, formCode,
                     settingsOptions.SystemOrganizationId,
                     new HashSet<(int OrganizationId, string FormCode, string Key)>
@@ -144,15 +144,20 @@ public sealed class SettingsController(
                 draftChange?.Operation,
                 draft?.DraftId,
                 DescribeSource(resolution),
-                inheritedResolution?.EffectiveValue,
+                definition.IsSensitive ? null : inheritedResolution?.EffectiveValue,
                 inheritedResolution?.SourceOrganizationId.HasValue == true,
                 effectiveAsset,
                 effectiveAssetMissing,
                 stagedAsset,
                 stagedAssetMissing,
                 inheritedAsset,
-                inheritedAssetMissing));
+                inheritedAssetMissing,
+                inheritedResolution is null ? null : DescribeSource(inheritedResolution)));
         }
+
+        var formCodes = formCodeAvailability.GetAvailable(libraryId).ToList();
+        var formDisplayName = formCodes.FirstOrDefault(form => form.FormCode.Equals(formCode, StringComparison.OrdinalIgnoreCase))?.DisplayName
+            ?? (formCode.Length == 0 ? "Default form" : formCode);
 
         var model = new SettingsIndexViewModel
         {
@@ -160,6 +165,7 @@ public sealed class SettingsController(
             OrganizationName = GetOrganizationName(target),
             LibraryId = libraryId,
             FormCode = formCode,
+            FormDisplayName = formDisplayName,
             IsGlobal = principal.IsGlobal,
             ScopeVersion = repository.GetVersion(target, formCode),
             ActiveDraft = draft is null ? null : SanitizeDraftForView(draft, principal.IsGlobal),
@@ -168,7 +174,7 @@ public sealed class SettingsController(
             PreviewLinks = draft is null ? [] : repository.GetPreviewLinks(draft.DraftId),
             PreviewBranches = GetPreviewBranches(target),
             Scopes = GetAuthorizedScopes(principal),
-            FormCodes = formCodeAvailability.GetAvailable(libraryId).ToList(),
+            FormCodes = formCodes,
             Settings = rows
         };
         return View(model);
@@ -307,7 +313,7 @@ public sealed class SettingsController(
         var mutations = ValidateMutations(request.Changes, request.OrganizationId, request.FormCode);
         if (!ModelState.IsValid)
         {
-            repository.WriteAudit("ValidationFailed", false, CreateAudit(request.OrganizationId, request.FormCode), "Draft changes were invalid.", request.ExpectedDraftId);
+            repository.WriteAudit("ValidationFailed", false, CreateAudit(request.OrganizationId, request.FormCode), "Shared draft changes were invalid.", request.ExpectedDraftId);
             TempData["SettingsError"] = string.Join(" ", ModelState.Values.SelectMany(value => value.Errors).Select(error => error.ErrorMessage));
             TempData["SettingsErrorGroup"] = request.Changes.FirstOrDefault(change => ModelState.ContainsKey(change.Key))?.Key.Split('.')[0];
             return RedirectToAction(nameof(Index), new { organizationId = request.OrganizationId, formCode = request.FormCode });
@@ -331,8 +337,8 @@ public sealed class SettingsController(
         catch (InvalidOperationException)
         {
             repository.WriteAudit("ValidationFailed", false,
-                CreateAudit(request.OrganizationId, request.FormCode), "Draft changes were invalid.", request.ExpectedDraftId);
-            TempData["SettingsError"] = "The draft changes could not be saved. Reloaded values are shown below.";
+                CreateAudit(request.OrganizationId, request.FormCode), "Shared draft changes were invalid.", request.ExpectedDraftId);
+            TempData["SettingsError"] = "The shared draft changes could not be saved. Reloaded values are shown below.";
             return RedirectToAction(nameof(Index), new { organizationId = request.OrganizationId, formCode = request.FormCode });
         }
         return RedirectToAction(nameof(Index), new { organizationId = request.OrganizationId, formCode = request.FormCode });
@@ -439,7 +445,7 @@ public sealed class SettingsController(
         try
         {
             repository.RemoveDraftChange(draftId, settingKey, CatalogByKey, authorization.Describe(User).IsGlobal, CreateAudit(organizationId, formCode));
-            TempData["SettingsStatus"] = $"A change was removed from shared draft #{draftId}.";
+            TempData["SettingsStatus"] = $"Removed one change from shared draft #{draftId}.";
         }
         catch (UnauthorizedAccessException)
         {
@@ -909,14 +915,28 @@ public sealed class SettingsController(
         Response.Headers["Referrer-Policy"] = "no-referrer";
     }
 
-    private FormsViewModel BuildFormsViewModel(int libraryId, bool isGlobal) => new()
+    private FormsViewModel BuildFormsViewModel(int libraryId, bool isGlobal)
     {
-        LibraryId = libraryId,
-        SystemOrganizationId = settingsOptions.SystemOrganizationId,
-        IsGlobal = isGlobal,
-        Forms = repository.GetFormCodes(libraryId, settingsOptions.SystemOrganizationId),
-        LegacyForms = formCodeAvailability.GetLegacy(libraryId)
-    };
+        var forms = repository.GetFormCodes(libraryId, settingsOptions.SystemOrganizationId);
+        var legacyForms = formCodeAvailability.GetLegacy(libraryId);
+        var organizationIds = forms.Select(form => form.OrganizationId)
+            .Concat(legacyForms.Select(form => form.OwnerOrganizationId))
+            .Append(libraryId)
+            .Append(settingsOptions.SystemOrganizationId)
+            .Distinct()
+            .ToList();
+        var organizationNames = organizationIds.ToDictionary(id => id, OrganizationDisplayName);
+        return new FormsViewModel
+        {
+            LibraryId = libraryId,
+            LibraryName = OrganizationDisplayName(libraryId),
+            SystemOrganizationId = settingsOptions.SystemOrganizationId,
+            IsGlobal = isGlobal,
+            Forms = forms,
+            LegacyForms = legacyForms,
+            OrganizationNames = organizationNames
+        };
+    }
 
     private bool ValidateScope(int organizationId, string formCode) =>
         RequireManager() is not null && authorization.CanManage(User, organizationId) && formCodeAvailability.IsAvailable(organizationId, formCode);

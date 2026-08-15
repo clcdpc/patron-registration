@@ -4,7 +4,7 @@
     const form = document.querySelector("#settings-form");
     const dialog = document.querySelector("#save-confirm");
     const editStatus = document.querySelector("#edit-session-status");
-    const candidateEditBlockedMessage = "Apply or Cancel the active setting edit before saving.";
+    const candidateEditBlockedMessage = "Keep or cancel the active setting edit before saving.";
     const imageUploadBlockedMessage = "Wait for the image upload to finish or undo the image change before continuing.";
     let approved = false;
     let submitter = null;
@@ -37,10 +37,38 @@
         const count = settingsForm.querySelectorAll('.setting-row[data-dirty="true"]').length;
         const status = actions.querySelector(".pending-changes-status");
         actions.hidden = count === 0;
-        if (status) status.textContent = count === 0 ? "" : `${count} unsaved browser ${count === 1 ? "change" : "changes"}`;
+        if (status) status.textContent = count === 0 ? "" : `${count} ${count === 1 ? "change" : "changes"} unsaved in this browser`;
         actions.querySelectorAll?.("[data-label-template]")?.forEach((button) => {
             button.textContent = button.dataset.labelTemplate.replace("{count}", count).replace("{noun}", count === 1 ? "change" : "changes");
         });
+    }
+
+    function safeBrowserSummary(row, value, operation) {
+        if (operation === "RemoveOverride") return "Will use inherited value";
+        if (row.dataset.sensitive === "true") return "New value entered";
+        const valueType = row.dataset.valueType;
+        if (valueType === "boolean") return String(value).toLowerCase() === "true" ? "Yes" : "No";
+        if (valueType === "html") return "HTML configured";
+        if (valueType === "emailtemplate") return "Email template configured";
+        if (valueType === "longstring") {
+            const normalized = String(value ?? "").replace(/\s+/g, " ").trim();
+            if (!normalized) return "Blank";
+            return normalized.length <= 120 ? normalized : `${normalized.slice(0, 120).trimEnd()}…`;
+        }
+        return String(value ?? "").trim() || "Blank";
+    }
+
+    function renderBrowserPendingSummary(row, value, operation) {
+        const summary = row.querySelector?.(".summary-value");
+        const status = row.querySelector?.(".setting-status");
+        const pendingValue = safeBrowserSummary(row, value, operation);
+        const text = operation === "RemoveOverride" ? pendingValue : `Unsaved: ${pendingValue}`;
+        if (summary) {
+            summary.textContent = text;
+            summary.setAttribute?.("title", text);
+        }
+        if (status) status.textContent = "Unsaved in this browser";
+        row.dataset.browserState = "unsaved";
     }
 
     function clearEditSessionStatus(settingsForm = form, status = editStatus) {
@@ -172,17 +200,20 @@
             if (imageState.pendingOperation === "Upsert") {
                 summaryValue.textContent = `Unsaved: ${imageState.fileName || "new image"}`;
                 summaryValue.setAttribute?.("title", summaryValue.textContent);
-                if (settingStatus) settingStatus.textContent = "Unsaved change";
+                if (settingStatus) settingStatus.textContent = "Unsaved in this browser";
+                row.dataset.browserState = "unsaved";
             } else if (imageState.pendingOperation === "RemoveOverride") {
                 const summary = row.dataset.imageHasInherited === "true" ? "Unsaved: use inherited image" : "Unsaved: remove image";
                 summaryValue.textContent = summary;
                 summaryValue.setAttribute?.("title", summary);
-                if (settingStatus) settingStatus.textContent = "Unsaved change";
+                if (settingStatus) settingStatus.textContent = "Unsaved in this browser";
+                row.dataset.browserState = "unsaved";
             } else {
                 summaryValue.textContent = serverState.summaryValue;
                 if (serverState.summaryTitle === null) summaryValue.removeAttribute?.("title");
                 else summaryValue.setAttribute?.("title", serverState.summaryTitle);
                 if (settingStatus) settingStatus.textContent = serverState.status;
+                delete row.dataset.browserState;
             }
         }
 
@@ -409,7 +440,10 @@
 
         function showNormalState() {
             change.hidden = false;
-            if (inherit) inherit.hidden = row.dataset.appliedOperation === "RemoveOverride";
+            if (inherit) {
+                inherit.hidden = row.dataset.appliedOperation === "RemoveOverride";
+                inherit.setAttribute?.("aria-expanded", "false");
+            }
             actions.hidden = true;
             editor.hidden = true;
             message.hidden = true;
@@ -429,7 +463,10 @@
             setBindingEnabled(false, candidateOperation);
             value.disabled = candidateOperation === "RemoveOverride";
             change.hidden = true;
-            if (inherit) inherit.hidden = true;
+            if (inherit) {
+                inherit.hidden = true;
+                inherit.setAttribute?.("aria-expanded", "true");
+            }
             actions.hidden = false;
             editor.hidden = candidateOperation === "RemoveOverride";
             message.hidden = candidateOperation !== "RemoveOverride";
@@ -451,6 +488,7 @@
             row.dataset.appliedOperation = candidateOperation;
             row.dataset.dirty = "true";
             setBindingEnabled(true, candidateOperation);
+            renderBrowserPendingSummary(row, value.value, candidateOperation);
             delete row.dataset.candidateOperation;
             session = null;
             showNormalState();
@@ -496,6 +534,7 @@
                 else summaryValue.setAttribute?.("title", serverState.summaryTitle);
             }
             if (settingStatus) settingStatus.textContent = serverState.status;
+            delete row.dataset.browserState;
             if (inherit) inherit.hidden = serverState.inheritHidden;
             if (serverState.inputType) value.type = serverState.inputType;
             if (reveal) {
@@ -503,6 +542,7 @@
                 reveal.setAttribute("aria-expanded", serverState.revealExpanded ?? "false");
                 reveal.setAttribute("aria-label", serverState.revealLabel ?? `Reveal ${row.dataset.displayName}`);
             }
+            delete row.dataset.browserState;
             session = null;
             showNormalState();
             value.dispatchEvent?.(new Event("input"));
@@ -564,6 +604,24 @@
         return true;
     }
 
+    function reviewLiveSummary(row) {
+        if (row.dataset.liveSummary) return row.dataset.liveSummary;
+        if (row.dataset.sensitive === "true") return row.dataset.oldValue ? "configured" : "not configured";
+        return row.dataset.oldValue || "not configured";
+    }
+
+    function reviewProposedSummary(row, value, operation) {
+        if (operation === "RemoveOverride") {
+            if (row.dataset.imageHasInherited === "true" || row.dataset.hasInherited === "true") {
+                const source = row.dataset.inheritedSource || "the inherited scope";
+                const inherited = row.dataset.sensitive === "true" ? "" : row.dataset.inheritedSummary;
+                return inherited ? `use ${inherited} from ${source}` : `use inherited value from ${source}`;
+            }
+            return "remove customization; no inherited value configured";
+        }
+        return safeBrowserSummary(row, value, operation);
+    }
+
     function populateReviewList(settingsForm, list) {
         list.replaceChildren();
         let valid = true;
@@ -582,15 +640,12 @@
                         ? row.dataset.imageInheritedMissing === "true" ? "Use inherited image (image currently missing)" : "Use inherited image"
                         : "Remove image"
                     : `Replace with “${row.dataset.imagePendingFileName || "uploaded image"}”`;
-                item.textContent = `${row.dataset.displayName}: ${description}`;
+                item.textContent = `${row.dataset.displayName}: Live: ${reviewLiveSummary(row)}; New: ${description}.`;
                 list.append(item);
                 return;
             }
             const item = document.createElement("li");
-            const newValue = row.dataset.sensitive === "true"
-                ? "••••••••"
-                : value.value;
-            item.textContent = `${row.dataset.displayName}: ${operation.value === "RemoveOverride" ? "Use inherited value" : `Set to “${newValue}”`} (current value: “${row.dataset.oldValue || "not configured"}”).`;
+            item.textContent = `${row.dataset.displayName}: Live: ${reviewLiveSummary(row)}; New: ${reviewProposedSummary(row, value.value, operation.value)}.`;
             list.append(item);
         });
         return valid;
@@ -601,7 +656,6 @@
             event.preventDefault();
             return "blocked";
         }
-        if (event.submitter?.dataset.submitKind === "draft") return "draft";
         if (isApproved) return "approved";
 
         event.preventDefault();
@@ -617,6 +671,10 @@
             window.alert("No settings have changed.");
             return "empty";
         }
+        const title = reviewDialog.querySelector("#save-confirm-title");
+        const confirm = reviewDialog.querySelector("#confirm-save");
+        if (title) title.textContent = event.submitter?.dataset.reviewTitle || "Review changes";
+        if (confirm) confirm.textContent = event.submitter?.dataset.confirmLabel || "Save changes";
         reviewDialog.showModal();
         return "review";
     }
@@ -635,19 +693,24 @@
     });
 
     const categories = [...document.querySelectorAll(".setting-category, .dynamic-settings")];
+    const customizedOnly = document.querySelector("#customized-only-filter");
     const draftOnly = document.querySelector("#draft-only-filter");
     const searchRegion = document.querySelector(".settings-search");
     let preFilterDisclosure = null;
     function applyFilters() {
         const query = search?.value.trim().toLowerCase() || "";
-        const filtering = Boolean(query) || Boolean(draftOnly?.checked);
+        const customized = Boolean(customizedOnly?.checked);
+        const draft = Boolean(draftOnly?.checked);
+        const filtering = Boolean(query) || customized || draft;
         if (filtering && preFilterDisclosure === null) {
             preFilterDisclosure = new Map(categories.map((category) => [category, category.open]));
         }
         let visible = 0;
         document.querySelectorAll(".setting-row").forEach((row) => {
-            const matchesDraft = !draftOnly?.checked || row.dataset.draftChange === "true";
-            const matches = matchesDraft && row.dataset.search.includes(query);
+            const matchesText = (row.dataset.search || "").includes(query);
+            const matchesCustomized = !customized || row.dataset.customizedHere === "true";
+            const matchesDraft = !draft || row.dataset.draftChange === "true";
+            const matches = matchesText && matchesCustomized && matchesDraft;
             row.hidden = !matches;
             if (matches) visible += 1;
         });
@@ -661,19 +724,22 @@
             preFilterDisclosure = null;
         }
         const emptyMessage = visible === 0 && filtering
-            ? draftOnly?.checked ? "No shared draft changes match your search." : "No settings match your search."
+            ? query ? "No settings match the current search and filters." : "No settings match the current filters."
             : "";
+        let resultMessage = `${visible} settings shown.`;
+        if (query && (customized || draft)) resultMessage = `${visible} settings match the current search and filters.`;
+        else if (query) resultMessage = `${visible} settings match the current search.`;
+        else if (customized && draft) resultMessage = `${visible} settings match the current filters.`;
+        else if (customized) resultMessage = `${visible} customized ${visible === 1 ? "setting" : "settings"} shown.`;
+        else if (draft) resultMessage = `${visible} shared draft ${visible === 1 ? "change" : "changes"} shown.`;
         if (searchStatus) {
-            searchStatus.textContent = emptyMessage || (filtering
-                ? draftOnly?.checked
-                    ? `${visible} shared draft ${visible === 1 ? "change" : "changes"} found`
-                    : `${visible} ${visible === 1 ? "setting" : "settings"} found`
-                : "");
+            searchStatus.textContent = emptyMessage || resultMessage;
             searchStatus.classList?.toggle("settings-filter-empty", Boolean(emptyMessage));
         }
         return visible;
     }
     search?.addEventListener("input", applyFilters);
+    customizedOnly?.addEventListener("change", applyFilters);
     draftOnly?.addEventListener("change", applyFilters);
     function reviewDraftChanges() {
         if (!draftOnly) return;
@@ -685,6 +751,7 @@
         (firstSummary || draftOnly || search)?.focus?.();
     }
     document.querySelector("[data-review-draft]")?.addEventListener("click", reviewDraftChanges);
+    applyFilters();
 
     document.querySelectorAll(".html-preview").forEach((frame) => {
         const source = frame.previousElementSibling;
@@ -802,7 +869,6 @@
         if (kind === "guarded") { lifecycleSubmit(event); return; }
         reviewSubmitter = event.submitter;
         if (blockActiveEdit(form, editStatus)) { event.preventDefault(); return; }
-        if (kind === "draft") { submitting = true; return; }
         if (approved) { submitting = true; return; }
         event.preventDefault();
         const list = dialog.querySelector("ul");
@@ -813,6 +879,10 @@
             return;
         }
         if (!list.children.length) return;
+        const title = dialog.querySelector("#save-confirm-title");
+        const confirm = dialog.querySelector("#confirm-save");
+        if (title) title.textContent = event.submitter?.dataset.reviewTitle || "Review changes";
+        if (confirm) confirm.textContent = event.submitter?.dataset.confirmLabel || "Save changes";
         dialog._trigger = event.submitter;
         dialog.showModal();
         dialog.querySelector("#confirm-save")?.focus();

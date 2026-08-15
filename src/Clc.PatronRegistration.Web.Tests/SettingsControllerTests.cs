@@ -1278,7 +1278,7 @@ public class SettingsControllerTests
         Assert.IsInstanceOfType<RedirectToActionResult>(result);
         StringAssert.Contains((string)controller.TempData["SettingsError"]!, "unrecognized or inaccessible");
         repository.Verify(service => service.WriteAudit("ValidationFailed", false, It.IsAny<AuditContext>(),
-            "Draft changes were invalid.", null, null, null), Times.Once);
+            "Shared draft changes were invalid.", null, null, null), Times.Once);
         repository.Verify(service => service.SaveToSharedDraft(It.IsAny<int>(), It.IsAny<string>(), It.IsAny<long>(), It.IsAny<long?>(),
             It.IsAny<IReadOnlyList<SettingMutation>>(), It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), It.IsAny<AuditContext>()), Times.Never);
     }
