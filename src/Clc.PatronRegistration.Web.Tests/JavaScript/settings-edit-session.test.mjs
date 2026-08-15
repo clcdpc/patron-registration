@@ -164,21 +164,21 @@ test("pending actions follow applied dirty rows rather than edit sessions or ser
     first.controls.change.click();
     first.controls.apply.click();
     assert.equal(fixture.actions.hidden, false);
-    assert.equal(fixture.status.textContent, "1 unsaved in this browser change");
+    assert.equal(fixture.status.textContent, "1 change unsaved in this browser");
     assert.equal(first.controls.summary.textContent, "Unsaved: server value");
     assert.equal(first.controls.settingStatus.textContent, "Unsaved in this browser");
 
     first.controls.change.click();
     first.controls.apply.click();
-    assert.equal(fixture.status.textContent, "1 unsaved in this browser change", "reapplying a dirty row does not increment the count");
+    assert.equal(fixture.status.textContent, "1 change unsaved in this browser", "reapplying a dirty row does not increment the count");
     first.controls.change.click();
     first.controls.cancel.click();
     assert.equal(fixture.actions.hidden, false, "cancelling a dirty row edit preserves its applied change");
-    assert.equal(fixture.status.textContent, "1 unsaved in this browser change");
+    assert.equal(fixture.status.textContent, "1 change unsaved in this browser");
 
     second.controls.change.click();
     second.controls.apply.click();
-    assert.equal(fixture.status.textContent, "2 unsaved in this browser changes");
+    assert.equal(fixture.status.textContent, "2 changes unsaved in this browser");
 });
 
 test("failed validation and server-loaded draft operations do not create browser-pending changes", () => {
@@ -763,7 +763,7 @@ test("image upload focuses the chooser and immediately creates a browser-pending
     fixture.ordinaryRow.dataset.dirty = "true";
     sandbox.SettingsEditSessions.updatePendingActions(fixture.settingsForm);
     assert.equal(fixture.settingsForm.querySelector(".settings-actions").querySelector(".pending-changes-status").textContent,
-        "2 unsaved in this browser changes", "image and ordinary edits share the page Save workflow");
+        "2 changes unsaved in this browser", "image and ordinary edits share the page Save workflow");
 });
 
 test("a first image upload failure is visibly styled and leaves the setting clean", async () => {

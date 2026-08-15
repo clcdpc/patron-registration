@@ -37,7 +37,7 @@
         const count = settingsForm.querySelectorAll('.setting-row[data-dirty="true"]').length;
         const status = actions.querySelector(".pending-changes-status");
         actions.hidden = count === 0;
-        if (status) status.textContent = count === 0 ? "" : `${count} unsaved in this browser ${count === 1 ? "change" : "changes"}`;
+        if (status) status.textContent = count === 0 ? "" : `${count} ${count === 1 ? "change" : "changes"} unsaved in this browser`;
         actions.querySelectorAll?.("[data-label-template]")?.forEach((button) => {
             button.textContent = button.dataset.labelTemplate.replace("{count}", count).replace("{noun}", count === 1 ? "change" : "changes");
         });
