@@ -1,6 +1,9 @@
 @model Clc.PatronRegistration.Web.Models.FormsViewModel
 @{
     ViewData["Title"] = "Form codes";
+    string OrganizationName(int organizationId) => Model.OrganizationNames.TryGetValue(organizationId, out var name)
+        ? name
+        : $"Organization {organizationId}";
 }
 <header class="settings-header">
     <h1>Form-code management</h1>
@@ -15,7 +18,7 @@
 <div asp-validation-summary="All" class="validation-summary" role="alert"></div>
 
 <table>
-    <caption>System and library form-code metadata available to library @Model.LibraryId</caption>
+    <caption>System and library form-code metadata available to @Model.LibraryName <small>(Organization ID @Model.LibraryId)</small></caption>
     <thead>
         <tr>
             <th scope="col">Code</th>
@@ -30,7 +33,7 @@
             <td><code>(blank)</code></td>
             <td>Default form</td>
             <td>Implicit default form</td>
-            <td>System</td>
+            <td><span class="form-owner-name">@OrganizationName(Model.SystemOrganizationId)</span><small>Organization ID @Model.SystemOrganizationId</small></td>
             <td>Cannot be changed or deleted</td>
         </tr>
         @foreach (var form in Model.Forms)
@@ -39,7 +42,7 @@
                 <td><code>@form.FormCode</code></td>
                 <td>@form.DisplayName</td>
                 <td>@form.Description</td>
-                <td>@form.OrganizationId</td>
+                <td><span class="form-owner-name">@OrganizationName(form.OrganizationId)</span><small>Organization ID @form.OrganizationId</small></td>
                 <td>
                     @if (form.OrganizationId == Model.LibraryId || Model.IsGlobal)
                     {
@@ -75,7 +78,7 @@
                 @Html.AntiForgeryToken()
                 <input type="hidden" name="OrganizationId" value="@legacy.OwnerOrganizationId" />
                 <input type="hidden" name="FormCode" value="@legacy.FormCode" />
-                <strong><code>@legacy.FormCode</code></strong> — inferred owner @legacy.OwnerOrganizationId
+                <strong><code>@legacy.FormCode</code></strong> — <span class="form-owner-name">inferred owner @OrganizationName(legacy.OwnerOrganizationId)</span> <small>(Organization ID @legacy.OwnerOrganizationId)</small>
                 <label for="adopt-name-@legacy.OwnerOrganizationId-@legacy.FormCode">Display name</label>
                 <input id="adopt-name-@legacy.OwnerOrganizationId-@legacy.FormCode" name="DisplayName" value="@legacy.FormCode" maxlength="200" required />
                 <label for="adopt-description-@legacy.OwnerOrganizationId-@legacy.FormCode">Description</label>
@@ -109,18 +112,22 @@
 }
 
 <section class="settings-panel" aria-labelledby="create-form-heading">
-    <h2 id="create-form-heading">Create or customize a named form</h2>
+    <h2 id="create-form-heading">Create a named form</h2>
     <form asp-action="CreateForm" method="post">
         @Html.AntiForgeryToken()
-        <label for="form-owner">Owning organization</label>
-        <input id="form-owner" name="OrganizationId" type="number" value="@Model.LibraryId" readonly />
+        <label for="form-owner-id">Owning organization</label>
+        <div class="form-owner-display">
+            <span class="form-owner-name">@Model.LibraryName</span>
+            <small>Organization ID @Model.LibraryId</small>
+        </div>
+        <input id="form-owner-id" type="hidden" name="OrganizationId" value="@Model.LibraryId" />
         <label for="new-form-code">Immutable code</label>
         <input id="new-form-code" name="FormCode" maxlength="64" pattern="[A-Za-z0-9_-]+" required />
         <label for="new-form-name">Display name</label>
         <input id="new-form-name" name="DisplayName" maxlength="200" required />
         <label for="new-form-description">Description</label>
         <textarea id="new-form-description" name="Description" maxlength="2000"></textarea>
-        <button type="submit">Create metadata</button>
+        <button type="submit">Create named form</button>
     </form>
 </section>
 <p><a asp-action="Index">Back to settings</a></p>

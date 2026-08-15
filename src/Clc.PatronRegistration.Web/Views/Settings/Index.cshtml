@@ -1,5 +1,6 @@
 @using Clc.PatronRegistration.Administration
 @using Clc.PatronRegistration.Web.Settings
+@using System.Globalization
 @model Clc.PatronRegistration.Web.Models.SettingsIndexViewModel
 @{
     ViewData["Title"] = "Registration settings";
@@ -16,7 +17,10 @@
     var settingsError = TempData["SettingsError"] as string;
     var settingsErrorGroup = TempData["SettingsErrorGroup"] as string;
     var settingsStatus = TempData["SettingsStatus"] as string;
-    var formDisplayName = Model.FormCodes.FirstOrDefault(form => form.FormCode == Model.FormCode)?.DisplayName ?? (Model.FormCode.Length == 0 ? "Default form" : Model.FormCode);
+    var formDisplayName = string.IsNullOrWhiteSpace(Model.FormDisplayName)
+        ? Model.FormCodes.FirstOrDefault(form => form.FormCode.Equals(Model.FormCode, StringComparison.OrdinalIgnoreCase))?.DisplayName
+            ?? (Model.FormCode.Length == 0 ? "Default form" : Model.FormCode)
+        : Model.FormDisplayName;
     var draftChangeCount = Model.ActiveDraft?.Changes.Count ?? 0;
     var nowUtc = DateTime.UtcNow;
     var activePreviewCount = Model.PreviewLinks.Count(link => !link.RevokedAtUtc.HasValue && link.ExpiresAtUtc > nowUtc);
@@ -86,7 +90,7 @@
     <header class="draft-summary">
         <h2 id="draft-panel-title">Shared draft #@Model.ActiveDraft.DraftId</h2>
         <p class="draft-scope"><strong>@Model.OrganizationName</strong> — <strong>@formDisplayName</strong></p>
-        <p class="draft-counts">@draftChangeCount @(draftChangeCount == 1 ? "change" : "changes") stored; @activePreviewCount active preview @(activePreviewCount == 1 ? "link" : "links").</p>
+        <p class="draft-counts">@draftChangeCount @(draftChangeCount == 1 ? "change" : "changes") · @activePreviewCount active preview @(activePreviewCount == 1 ? "link" : "links")</p>
         @if (draftChangeCount == 0) { <p class="draft-empty"><strong>This shared draft has no changes.</strong></p> }
         @if (hasRestrictedDraftChanges && !canManageRestrictedDraft) { <p class="validation-summary" role="status"><strong>Restricted draft:</strong> A global administrator must publish, discard, preview, or remove restricted changes.</p> }
     </header>
@@ -141,10 +145,19 @@
             var revoked = link.RevokedAtUtc.HasValue;
             var expired = !link.ExpiresAtUtc.HasValue || link.ExpiresAtUtc.Value <= nowUtc;
             var actions = PreviewLinkActionPolicy.For(link, nowUtc);
+            var expirationText = link.ExpiresAtUtc is { } expiration
+                ? expiration.ToString("MMM d, yyyy, h:mm tt 'UTC'", CultureInfo.InvariantCulture)
+                : null;
+            var expirationDateTime = link.ExpiresAtUtc?.ToString("o", CultureInfo.InvariantCulture);
+            var expirationLabel = expired ? "Expired" : "Expires";
             <article class="preview-link-item" aria-labelledby="preview-link-@link.PreviewLinkId-title">
               <h5 id="preview-link-@link.PreviewLinkId-title" class="preview-link-name">Preview link #@link.PreviewLinkId</h5>
               <p class="preview-link-branch">Operational branch: @(branch?.DisplayName ?? $"branch {link.OperationalBranchId}")</p>
               <p class="preview-link-status"><span class="status-badge">@(revoked ? "Revoked" : expired ? "Expired" : link.AllowLiveSubmission ? "Live" : "Safe")</span><span>— @(revoked ? "Revoked and unusable" : expired ? "Expired and unusable" : "Active")</span></p>
+              @if (expirationText is not null)
+              {
+                <span class="preview-link-expiration"><time datetime="@expirationDateTime">@expirationLabel @expirationText</time></span>
+              }
               @if (actions.Replace)
               {
                 <div class="preview-link-actions" role="group" aria-label="Actions for preview link @link.PreviewLinkId">
@@ -173,7 +186,10 @@
 <section class="settings-search" aria-labelledby="search-label">
     <label id="search-label" for="setting-search">Search settings</label>
     <input id="setting-search" type="search" autocomplete="off" placeholder="Search by setting name or description" />
-    @if (draftChangeCount > 0) { <label class="inline-check"><input id="draft-only-filter" type="checkbox" /> <span>Show shared draft changes only</span></label> }
+    <div class="settings-filter-group" role="group" aria-label="Setting filters">
+        <label class="inline-check"><input id="customized-only-filter" type="checkbox" /> <span>Show customized settings only</span></label>
+        @if (draftChangeCount > 0) { <label class="inline-check"><input id="draft-only-filter" type="checkbox" /> <span>Show shared draft changes only</span></label> }
+    </div>
     <p id="search-status" aria-live="polite"></p>
 </section>
 
@@ -226,14 +242,18 @@
 
     <div class="settings-actions" hidden>
         <strong class="pending-changes-status" role="status" aria-live="polite"></strong>
+        <span class="settings-actions-context" aria-label="Editing">
+            <span class="settings-actions-context-label">Editing</span>
+            <strong>@Model.OrganizationName</strong><span aria-hidden="true"> · </span><strong>@formDisplayName</strong>
+        </span>
         <div class="settings-action-buttons">
             @if (Model.ActiveDraft is not null) {
-                <button type="submit" formaction="@Url.Action("SaveToSharedDraft")" data-submit-kind="draft" data-label-template="Add {count} {noun} to shared draft">Add changes to shared draft</button>
-                <button type="submit" data-label-template="Save {count} {noun} live instead">Save changes live instead</button>
-                <small>Saving live does not publish or modify the existing shared draft.</small>
+                <button type="submit" class="settings-primary-action" formaction="@Url.Action("SaveToSharedDraft")" data-submit-kind="draft" data-label-template="Add {count} {noun} to shared draft" data-review-title="Add changes to shared draft" data-confirm-label="Add to shared draft">Add changes to shared draft</button>
+                <button type="submit" class="settings-secondary-action" data-label-template="Save {count} {noun} live instead" data-review-title="Save changes live" data-confirm-label="Save live">Save changes live instead</button>
+                <small>Saving live applies only changes marked <strong>Unsaved in this browser</strong>. It does not publish or modify the existing shared draft.</small>
             } else {
-                <button type="submit" formaction="@Url.Action("SaveToSharedDraft")" data-submit-kind="draft" data-label-template="Save {count} {noun} to shared draft">Save changes to shared draft</button>
-                <button type="submit" data-label-template="Save {count} {noun} live">Save changes live</button>
+                <button type="submit" formaction="@Url.Action("SaveToSharedDraft")" data-submit-kind="draft" data-label-template="Save {count} {noun} to shared draft" data-review-title="Save changes to shared draft" data-confirm-label="Save to shared draft">Save changes to shared draft</button>
+                <button type="submit" data-label-template="Save {count} {noun} live" data-review-title="Save changes live" data-confirm-label="Save live">Save changes live</button>
             }
             <button type="button" data-discard-pending>Discard unsaved changes</button>
         </div>
@@ -242,7 +262,7 @@
 
 <dialog id="save-confirm" aria-labelledby="save-confirm-title">
     <h2 id="save-confirm-title">Review changes</h2>
-    <p>Target: <strong>@Model.OrganizationName</strong>; form: <strong>@(Model.FormCode.Length == 0 ? "Default form" : Model.FormCode)</strong>.</p>
+    <p>Target: <strong>@Model.OrganizationName</strong> · <strong>@formDisplayName</strong>.</p>
     <ul></ul>
     <div class="button-row">
         <button id="confirm-save" type="button">Save changes</button>
@@ -267,14 +287,14 @@
 {
     <dialog id="publish-draft-review" aria-labelledby="publish-title">
         <h2 id="publish-title">Publish shared draft #@Model.ActiveDraft.DraftId</h2>
-        <p>Publishing makes all listed changes live for <strong>@Model.OrganizationName</strong>, <strong>@formDisplayName</strong>.</p>
+        <p>Publishing makes all listed shared-draft changes live for <strong>@Model.OrganizationName</strong> · <strong>@formDisplayName</strong>.</p>
         <ul>
             @foreach (var row in Model.Settings.Where(row => row.DraftOperation.HasValue))
             {
                 <li>
                     <strong>@row.Definition.DisplayName</strong>:
-                    current @SettingValuePresentation.Format(row.Definition, row.Resolution.EffectiveValue, row.Resolution.SourceOrganizationId.HasValue);
-                    proposed @(row.DraftOperation == DraftOperation.RemoveOverride ? "Use inherited value" : SettingValuePresentation.Format(row.Definition, row.DraftValue, true))
+                    Live: @SettingReviewPresentation.Live(row);
+                    New shared draft value: @SettingReviewPresentation.Proposed(row)
                 </li>
             }
         </ul>

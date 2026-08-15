@@ -451,7 +451,7 @@ public class SettingsAdministrationTests
         var presentation = SettingValuePresentation.ForRow(row);
         Assert.AreEqual(SettingPresentationState.DraftChange, presentation.State);
         Assert.AreEqual("Staged value", presentation.Value);
-        Assert.AreEqual("Draft change", presentation.Status);
+        Assert.AreEqual("Shared draft", presentation.Status);
     }
 
     [TestMethod]
@@ -533,7 +533,7 @@ public class SettingsAdministrationTests
         Assert.IsFalse(index.Contains("No shared draft", StringComparison.Ordinal));
         StringAssert.Contains(css, ".settings-search input[type=\"search\"]");
         Assert.IsFalse(css.Contains(".settings-search input {", StringComparison.Ordinal));
-        StringAssert.Contains(row, "$\"Draft: {imageSummary}\"");
+        StringAssert.Contains(row, "$\"Shared draft: {imageSummary}\"");
         StringAssert.Contains(row, "definition.IsSensitive ? string.Empty");
         Assert.IsFalse(row.Contains("<details class=\"setting-row\" open=", StringComparison.Ordinal));
         Assert.IsFalse(row.Contains("tabindex=\"-1\"", StringComparison.Ordinal));
@@ -550,7 +550,7 @@ public class SettingsAdministrationTests
         StringAssert.Contains(index, "id=\"draft-panel-title\">Shared draft #");
         StringAssert.Contains(index, "class=\"draft-scope\"");
         StringAssert.Contains(index, "class=\"draft-counts\"");
-        StringAssert.Contains(index, "change\" : \"changes\") stored;");
+        StringAssert.Contains(index, "change\" : \"changes\") ·");
         StringAssert.Contains(index, "active preview @(activePreviewCount == 1 ? \"link\" : \"links\")");
         StringAssert.Contains(index, "<div class=\"draft-actions\" role=\"group\" aria-label=\"Draft lifecycle actions\">");
         foreach (var action in new[] { "data-review-draft", ">Publish draft</button>", ">Discard shared draft</button>" })
@@ -583,6 +583,44 @@ public class SettingsAdministrationTests
     }
 
     [TestMethod]
+    public void SettingsView_UsesStaffStateContextFiltersAndOperationSpecificReviewCopy()
+    {
+        var root = FindRepositoryRoot();
+        var index = File.ReadAllText(Path.Combine(root, "src/Clc.PatronRegistration.Web/Views/Settings/Index.cshtml"));
+        var row = File.ReadAllText(Path.Combine(root, "src/Clc.PatronRegistration.Web/Views/Settings/_SettingRow.cshtml"));
+        var script = File.ReadAllText(Path.Combine(root, "src/Clc.PatronRegistration.Web/wwwroot/js/settings.js"));
+
+        StringAssert.Contains(index, "id=\"customized-only-filter\"");
+        StringAssert.Contains(index, "class=\"settings-actions-context\"");
+        StringAssert.Contains(index, "<strong>@Model.OrganizationName</strong>");
+        StringAssert.Contains(index, "<strong>@formDisplayName</strong>");
+        StringAssert.Contains(index, "data-review-title=\"Add changes to shared draft\"");
+        StringAssert.Contains(index, "data-review-title=\"Save changes live\"");
+        StringAssert.Contains(index, "MMM d, yyyy, h:mm tt 'UTC'");
+        StringAssert.Contains(row, "data-customized-here=\"@resolution.OwnsOverride.ToString().ToLowerInvariant()\"");
+        StringAssert.Contains(row, "data-live-summary=\"@liveSummary\"");
+        Assert.IsFalse(row.Contains(">Apply</button>", StringComparison.Ordinal));
+        StringAssert.Contains(script, "Unsaved in this browser");
+        StringAssert.Contains(script, "row.dataset.customizedHere === \"true\"");
+    }
+
+    [TestMethod]
+    public void FormsView_UsesOrganizationNamesWithIdsAsSecondaryDetails()
+    {
+        var root = FindRepositoryRoot();
+        var forms = File.ReadAllText(Path.Combine(root, "src/Clc.PatronRegistration.Web/Views/Settings/Forms.cshtml"));
+
+        StringAssert.Contains(forms, "Model.OrganizationNames");
+        StringAssert.Contains(forms, "class=\"form-owner-name\"");
+        StringAssert.Contains(forms, "Organization ID @form.OrganizationId");
+        StringAssert.Contains(forms, "Organization ID @legacy.OwnerOrganizationId");
+        StringAssert.Contains(forms, "id=\"form-owner-id\" type=\"hidden\"");
+        StringAssert.Contains(forms, "<h2 id=\"create-form-heading\">Create a named form</h2>");
+        StringAssert.Contains(forms, ">Create named form</button>");
+        Assert.IsFalse(forms.Contains("inferred owner @legacy.OwnerOrganizationId", StringComparison.Ordinal));
+    }
+
+    [TestMethod]
     public void SettingsHelp_UsesCurrentBrowserAndSharedDraftControlNames()
     {
         var root = FindRepositoryRoot();
@@ -595,7 +633,7 @@ public class SettingsAdministrationTests
         foreach (var obsolete in new[] { "Review and save now", "Save changes to draft", ">Discard draft<",
             "Allow this preview to create real patron records" })
             Assert.IsFalse(help.Contains(obsolete, StringComparison.Ordinal), obsolete);
-        StringAssert.Contains(help, "Browser changes exist only in your current browser");
+        StringAssert.Contains(help, "It is not visible to other staff");
         StringAssert.Contains(help, "Shared draft changes are visible to other authorized staff");
     }
 
@@ -1382,7 +1420,7 @@ public class SettingsAdministrationTests
         StringAssert.Contains(partial, "class=\"image-undo-pending\"");
         StringAssert.Contains(partial, "class=\"edit-setting\"");
         StringAssert.Contains(partial, ">Change</button>");
-        StringAssert.Contains(partial, "class=\"apply-setting\">Apply</button>");
+        StringAssert.Contains(partial, "class=\"apply-setting\">Keep change</button>");
         StringAssert.Contains(partial, "class=\"cancel-setting\">Cancel</button>");
         StringAssert.Contains(partial, "class=\"edit-actions\" hidden");
         StringAssert.Contains(partial, "@if (canRemoveOverride)");
@@ -1419,7 +1457,7 @@ public class SettingsAdministrationTests
         StringAssert.Contains(script, "Replace with “${row.dataset.imagePendingFileName || \"uploaded image\"}”");
         StringAssert.Contains(script, "Use inherited image (image currently missing)");
         StringAssert.Contains(partial, "data-image-inherited-missing=");
-        StringAssert.Contains(script, "operation.value === \"RemoveOverride\" ? \"Use inherited value\"");
+        StringAssert.Contains(script, "operation?.value === \"RemoveOverride\"");
     }
 
     [TestMethod]
@@ -1431,16 +1469,16 @@ public class SettingsAdministrationTests
 
         var inherited = new SettingRowViewModel("one", text, resolution, null, null, null,
             InheritedValue: "system value", HasInheritedValue: true);
-        StringAssert.Contains(SettingInheritancePresentation.MessageFor(inherited), "inherited value: system value");
+        StringAssert.Contains(SettingInheritancePresentation.MessageFor(inherited), "use “system value”");
 
         var unconfigured = inherited with { InheritedValue = null, HasInheritedValue = false };
-        StringAssert.Contains(SettingInheritancePresentation.MessageFor(unconfigured), "become unconfigured");
+        StringAssert.Contains(SettingInheritancePresentation.MessageFor(unconfigured), "No inherited value is configured");
 
         var sensitive = new SettingRowViewModel("two", secret, resolution, null, null, null,
             InheritedValue: "recognizable secret", HasInheritedValue: true);
         var message = SettingInheritancePresentation.MessageFor(sensitive);
         Assert.IsFalse(message.Contains("recognizable secret", StringComparison.Ordinal));
-        Assert.AreEqual("Applying this action will remove the override at this scope and use the inherited value.", message);
+        Assert.AreEqual("Choosing Use inherited value will remove this customization. Use the inherited value from the inherited scope.", message);
     }
 
     [TestMethod]

@@ -95,6 +95,7 @@ function rowFixture({ operation = "Upsert", dirty = false, ownsOverride = true, 
         apply: new Control(), cancel: new Control(), actions: new Control(),
         editor: new Control(), message: new Control(), operation: new Control(operation),
         value: new Control(sensitive ? "" : "server value"), index: new Control(), key: new Control(),
+        summary: new Control("Current value"), settingStatus: new Control("Live"),
         reveal: sensitive ? new Control() : null
     };
     if (sensitive) {
@@ -103,17 +104,20 @@ function rowFixture({ operation = "Upsert", dirty = false, ownsOverride = true, 
         controls.reveal.setAttribute("aria-expanded", "false");
         controls.reveal.setAttribute("aria-label", "Reveal Example");
     }
+    controls.summary.textContent = "Current value";
+    controls.settingStatus.textContent = "Live";
     const selectors = {
         ".edit-setting": controls.change, ".inherit-setting": controls.inherit,
         ".apply-setting": controls.apply, ".cancel-setting": controls.cancel,
         ".edit-actions": controls.actions, ".value-editor": controls.editor,
         ".inheritance-message": controls.message, ".operation": controls.operation,
         ".setting-value": controls.value, ".change-index": controls.index,
-        ".change-key": controls.key, ".reveal-secret": controls.reveal
+        ".change-key": controls.key, ".reveal-secret": controls.reveal,
+        ".summary-value": controls.summary, ".setting-status": controls.settingStatus
     };
     const category = { setAttribute(name) { this[name] = true; } };
     const row = {
-        dataset: { appliedOperation: operation, dirty: dirty.toString(), displayName: "Example", oldValue: "old", sensitive: sensitive.toString() },
+        dataset: { appliedOperation: operation, dirty: dirty.toString(), displayName: "Example", oldValue: "old", sensitive: sensitive.toString(), valueType: "shortstring" },
         querySelector(selector) { return selectors[selector]; },
         querySelectorAll() { return [controls.index, controls.key, controls.operation]; },
         closest() { return category; },
@@ -160,19 +164,21 @@ test("pending actions follow applied dirty rows rather than edit sessions or ser
     first.controls.change.click();
     first.controls.apply.click();
     assert.equal(fixture.actions.hidden, false);
-    assert.equal(fixture.status.textContent, "1 unsaved browser change");
+    assert.equal(fixture.status.textContent, "1 unsaved in this browser change");
+    assert.equal(first.controls.summary.textContent, "Unsaved: server value");
+    assert.equal(first.controls.settingStatus.textContent, "Unsaved in this browser");
 
     first.controls.change.click();
     first.controls.apply.click();
-    assert.equal(fixture.status.textContent, "1 unsaved browser change", "reapplying a dirty row does not increment the count");
+    assert.equal(fixture.status.textContent, "1 unsaved in this browser change", "reapplying a dirty row does not increment the count");
     first.controls.change.click();
     first.controls.cancel.click();
     assert.equal(fixture.actions.hidden, false, "cancelling a dirty row edit preserves its applied change");
-    assert.equal(fixture.status.textContent, "1 unsaved browser change");
+    assert.equal(fixture.status.textContent, "1 unsaved in this browser change");
 
     second.controls.change.click();
     second.controls.apply.click();
-    assert.equal(fixture.status.textContent, "2 unsaved browser changes");
+    assert.equal(fixture.status.textContent, "2 unsaved in this browser changes");
 });
 
 test("failed validation and server-loaded draft operations do not create browser-pending changes", () => {
@@ -186,7 +192,7 @@ test("failed validation and server-loaded draft operations do not create browser
     assert.equal(fixture.status.textContent, "");
 });
 
-test("save actions share the hidden pending region while Remove draft change stays on its row", () => {
+test("save actions share the hidden pending region while Remove shared draft change stays on its row", () => {
     const indexMarkup = readFileSync(new URL("../../Clc.PatronRegistration.Web/Views/Settings/Index.cshtml", import.meta.url), "utf8");
     const rowMarkup = readFileSync(new URL("../../Clc.PatronRegistration.Web/Views/Settings/_SettingRow.cshtml", import.meta.url), "utf8");
     const actions = indexMarkup.match(/<div class="settings-actions" hidden>[\s\S]*?<\/div>\s*<\/div>/)?.[0] ?? "";
@@ -194,8 +200,8 @@ test("save actions share the hidden pending region while Remove draft change sta
     assert.match(actions, /Add \{count\} \{noun\} to shared draft/);
     assert.match(actions, /Discard unsaved changes/);
     assert.match(actions, /role="status" aria-live="polite"/);
-    assert.doesNotMatch(actions, /Remove draft change/);
-    assert.match(rowMarkup, /Remove draft change/);
+    assert.doesNotMatch(actions, /Remove shared draft change/);
+    assert.match(rowMarkup, /Remove shared draft change/);
 });
 
 test("unsaved-work dialog offers only discard and keep editing while saves remain in settings actions", () => {
@@ -236,7 +242,7 @@ test("active edits block both save paths and cannot enter review", () => {
         const status = new Control();
         const form = { querySelector: () => fixture.row };
         assert.equal(blockActiveEdit(form, status), true);
-        assert.match(status.textContent, /Apply or Cancel/);
+        assert.match(status.textContent, /Keep or cancel/);
         assert.equal(focused, fixture.controls.apply);
         assert.equal(fixture.row.open, true);
     }
@@ -617,11 +623,11 @@ test("blocker status switches from upload to a remaining candidate edit", () => 
 
     fixture.state.candidate = true;
     fixture.synchronize();
-    assert.equal(fixture.status.textContent, "Apply or Cancel the active setting edit before saving.");
+    assert.equal(fixture.status.textContent, "Keep or cancel the active setting edit before saving.");
 
     fixture.state.uploading = false;
     fixture.synchronize();
-    assert.equal(fixture.status.textContent, "Apply or Cancel the active setting edit before saving.");
+    assert.equal(fixture.status.textContent, "Keep or cancel the active setting edit before saving.");
 
     fixture.state.candidate = false;
     fixture.synchronize();
@@ -633,11 +639,11 @@ test("blocker status switches from a resolved candidate edit to a remaining uplo
     const fixture = blockerStatusFixture();
     fixture.state.candidate = true;
     fixture.synchronize();
-    assert.equal(fixture.status.textContent, "Apply or Cancel the active setting edit before saving.");
+    assert.equal(fixture.status.textContent, "Keep or cancel the active setting edit before saving.");
 
     fixture.state.uploading = true;
     fixture.synchronize();
-    assert.equal(fixture.status.textContent, "Apply or Cancel the active setting edit before saving.");
+    assert.equal(fixture.status.textContent, "Keep or cancel the active setting edit before saving.");
 
     fixture.state.candidate = false;
     fixture.synchronize();
@@ -757,7 +763,7 @@ test("image upload focuses the chooser and immediately creates a browser-pending
     fixture.ordinaryRow.dataset.dirty = "true";
     sandbox.SettingsEditSessions.updatePendingActions(fixture.settingsForm);
     assert.equal(fixture.settingsForm.querySelector(".settings-actions").querySelector(".pending-changes-status").textContent,
-        "2 unsaved browser changes", "image and ordinary edits share the page Save workflow");
+        "2 unsaved in this browser changes", "image and ordinary edits share the page Save workflow");
 });
 
 test("a first image upload failure is visibly styled and leaves the setting clean", async () => {
@@ -904,7 +910,7 @@ test("image inheritance and removal create immediate RemoveOverride mutations wi
     assert.equal(inherited.controls.undo.textContent, "Undo image change");
     const list = { children: [], replaceChildren() { this.children = []; }, append(item) { this.children.push(item); } };
     assert.equal(populateReviewList(inherited.settingsForm, list), true);
-    assert.match(list.children[0].textContent, /Header image: Use inherited image/);
+    assert.match(list.children[0].textContent, /Header image: Live: current\.png; New: Use inherited image/);
     inherited.controls.undo.click();
     assert.equal(inherited.controls.operation.value, "Upsert");
     assert.equal(inherited.row.dataset.dirty, "false");
@@ -916,7 +922,7 @@ test("image inheritance and removal create immediate RemoveOverride mutations wi
     assert.equal(removal.controls.uploadStatus.textContent, "No image will be configured.");
     const removalList = { children: [], replaceChildren() { this.children = []; }, append(item) { this.children.push(item); } };
     assert.equal(populateReviewList(removal.settingsForm, removalList), true);
-    assert.match(removalList.children[0].textContent, /Header image: Remove image/);
+    assert.match(removalList.children[0].textContent, /Header image: Live: current\.png; New: Remove image/);
     removal.controls.undo.click();
     assert.equal(removal.controls.operation.value, "Upsert");
     assert.equal(removal.row.dataset.dirty, "false");
@@ -932,7 +938,7 @@ test("image inheritance and removal create immediate RemoveOverride mutations wi
         /The inherited uploaded image is missing\. Saving this change will use the inherited image setting\./);
     const missingList = { children: [], replaceChildren() { this.children = []; }, append(item) { this.children.push(item); } };
     assert.equal(populateReviewList(missing.settingsForm, missingList), true);
-    assert.match(missingList.children[0].textContent, /Header image: Use inherited image \(image currently missing\)/);
+    assert.match(missingList.children[0].textContent, /Header image: Live: current\.png; New: Use inherited image \(image currently missing\)/);
     missing.controls.undo.click();
     assert.equal(missing.controls.operation.value, "Upsert");
     assert.equal(missing.row.dataset.dirty, "false");
@@ -946,7 +952,7 @@ test("image review describes filenames and blocks invalid AssetIds", () => {
     initializeRow(fixture.row, fixture.settingsForm);
     const list = { children: [], replaceChildren() { this.children = []; }, append(item) { this.children.push(item); } };
     assert.equal(populateReviewList(fixture.settingsForm, list), true);
-    assert.match(list.children[0].textContent, /Header image: Replace with “replacement\.png”/);
+    assert.match(list.children[0].textContent, /Header image: Live: current\.png; New: Replace with “replacement\.png”/);
     assert.doesNotMatch(list.children[0].textContent, /91/);
 
     fixture.controls.value.value = "not-an-asset";
@@ -974,7 +980,7 @@ test("image markup uses a dedicated upload interaction without a generic edit se
     assert.doesNotMatch(script, /change\.hidden = isImage/);
 });
 
-test("server RemoveOverride can be replaced by Upsert and Apply restores focus", () => {
+test("server RemoveOverride can be replaced by Upsert and Keep change restores focus", () => {
     const fixture = rowFixture({ operation: "RemoveOverride" });
     assert.equal(fixture.controls.inherit.hidden, true);
     fixture.controls.change.click();
@@ -986,7 +992,7 @@ test("server RemoveOverride can be replaced by Upsert and Apply restores focus",
     assert.equal(focused, fixture.controls.change);
 });
 
-test("Apply and Cancel are harmless without an active session", () => {
+test("Keep change and Cancel are harmless without an active session", () => {
     const fixture = rowFixture({ operation: "Upsert" });
     fixture.controls.apply.click();
     fixture.controls.cancel.click();
@@ -1005,7 +1011,7 @@ test("review uses only an applied operation and masks sensitive values", () => {
     fixture.row.dataset.sensitive = "true";
     populateReviewList(form, list);
     assert.doesNotMatch(list.children[0].textContent, /applied value/);
-    assert.match(list.children[0].textContent, /••••••••/);
+    assert.match(list.children[0].textContent, /New value entered/);
 });
 
 test("context selectors retain committed values and can be restored when navigation is cancelled", () => {
@@ -1030,7 +1036,7 @@ test("context selectors retain committed values and can be restored when navigat
 test("guarded row action is marked separately and dirty mutations are never posted with it", () => {
     const markup = readFileSync(new URL("../../Clc.PatronRegistration.Web/Views/Settings/_SettingRow.cshtml", import.meta.url), "utf8");
     const script = readFileSync(new URL("../../Clc.PatronRegistration.Web/wwwroot/js/settings.js", import.meta.url), "utf8");
-    assert.match(markup, /Remove draft change[\s\S]*data-submit-kind="guarded"|data-submit-kind="guarded"[\s\S]*Remove draft change/);
+    assert.match(markup, /Remove shared draft change[\s\S]*data-submit-kind="guarded"|data-submit-kind="guarded"[\s\S]*Remove shared draft change/);
     assert.match(script, /kind === "guarded"/);
     assert.match(script, /disableDirtyMutations/);
     assert.match(script, /\.setting-row\[data-dirty=\\?"true\\?"\]/);
@@ -1064,8 +1070,8 @@ test("safe preview creation action precedes the live-submission action", () => {
 
 test("search result wording distinguishes settings from saved draft changes", () => {
     const script = readFileSync(new URL("../../Clc.PatronRegistration.Web/wwwroot/js/settings.js", import.meta.url), "utf8");
-    assert.match(script, /draft .*change.*found/);
-    assert.match(script, /setting.*found/);
+    assert.match(script, /shared draft .*change.*shown/);
+    assert.match(script, /settings shown/);
     assert.doesNotMatch(script, /browser.*dirty.*draft/i);
 });
 
@@ -1201,7 +1207,7 @@ test("shared draft filter markup and CSS keep the checkbox intrinsic", () => {
 
 test("draft summaries identify proposed values without automatically opening rows", () => {
     const row = readFileSync(new URL("../../Clc.PatronRegistration.Web/Views/Settings/_SettingRow.cshtml", import.meta.url), "utf8");
-    assert.match(row, /hasDraftOperation && !isImage \? \$"Draft: \{imageSummary\}"/);
+    assert.match(row, /hasDraftOperation && !isImage \? \$"Shared draft: \{imageSummary\}"/);
     assert.match(row, /definition\.IsSensitive/);
     assert.doesNotMatch(row, /<details class="setting-row"[^>]*open=/);
 });
@@ -1221,8 +1227,8 @@ test("filter sessions capture and restore disclosure state and report empty resu
     assert.match(script, /new Map\(categories\.map/);
     assert.match(script, /preFilterDisclosure\.forEach/);
     assert.match(script, /preFilterDisclosure = null/);
-    assert.match(script, /No settings match your search\./);
-    assert.match(script, /No shared draft changes match your search\./);
+    assert.match(script, /No settings match the current search and filters\./);
+    assert.match(script, /No settings match the current filters\./);
 });
 
 test("explicit browser discard uses restoration rather than reload or submission", () => {
@@ -1237,14 +1243,16 @@ test("explicit browser discard uses restoration rather than reload or submission
 function filteringWorkflowFixture() {
     const search = new Control();
     const status = new Control();
+    const customizedOnly = new Control();
+    customizedOnly.checked = false;
     const draftOnly = new Control();
     draftOnly.checked = false;
     const searchRegion = new Control();
     const review = new Control();
-    const makeRow = (searchText, draftChange) => {
+    const makeRow = (searchText, draftChange, customizedHere = false) => {
         const summary = new Control();
         return {
-            dataset: { search: searchText, draftChange: draftChange.toString() },
+            dataset: { search: searchText, draftChange: draftChange.toString(), customizedHere: customizedHere.toString() },
             hidden: false,
             focused: false,
             querySelector(selector) { return selector === "summary" ? summary : null; },
@@ -1252,8 +1260,8 @@ function filteringWorkflowFixture() {
             summary
         };
     };
-    const alpha = makeRow("alpha setting", true);
-    const beta = makeRow("beta setting", false);
+    const alpha = makeRow("alpha setting", true, true);
+    const beta = makeRow("beta setting", false, false);
     const categories = [
         { open: false, hidden: false, rows: [alpha], querySelector() { return this.rows.find((row) => !row.hidden) || null; } },
         { open: true, hidden: false, rows: [beta], querySelector() { return this.rows.find((row) => !row.hidden) || null; } }
@@ -1263,6 +1271,7 @@ function filteringWorkflowFixture() {
         querySelector(selector) {
             if (selector === "#setting-search") return search;
             if (selector === "#search-status") return status;
+            if (selector === "#customized-only-filter") return customizedOnly;
             if (selector === "#draft-only-filter") return draftOnly;
             if (selector === ".settings-search") return searchRegion;
             if (selector === "[data-review-draft]") return review;
@@ -1280,14 +1289,14 @@ function filteringWorkflowFixture() {
     sandbox.globalThis = sandbox;
     vm.runInNewContext(readFileSync(new URL("../../Clc.PatronRegistration.Web/wwwroot/js/settings.js", import.meta.url), "utf8"), sandbox);
     initialized = true;
-    return { ...sandbox.SettingsWorkflow, search, status, draftOnly, searchRegion, review, alpha, beta, categories };
+    return { ...sandbox.SettingsWorkflow, search, status, customizedOnly, draftOnly, searchRegion, review, alpha, beta, categories };
 }
 
 test("applyFilters behavior renders one live message and restores pre-filter disclosures", () => {
     const fixture = filteringWorkflowFixture();
     fixture.search.value = "missing";
     assert.equal(fixture.applyFilters(), 0);
-    assert.equal(fixture.status.textContent, "No settings match your search.");
+    assert.equal(fixture.status.textContent, "No settings match the current search and filters.");
     assert.equal(fixture.status.classList.contains("settings-filter-empty"), true);
     assert.equal(fixture.categories.every((category) => category.hidden), true);
 
@@ -1301,7 +1310,7 @@ test("applyFilters behavior renders one live message and restores pre-filter dis
     fixture.search.value = "";
     fixture.applyFilters();
     assert.deepEqual(fixture.categories.map((category) => category.open), [false, true]);
-    assert.equal(fixture.status.textContent, "");
+    assert.equal(fixture.status.textContent, "2 settings shown.");
     assert.equal(fixture.status.classList.contains("settings-filter-empty"), false);
 });
 
@@ -1320,14 +1329,41 @@ test("draft and text filters compose and review focuses the matching summary", (
 
     fixture.search.value = "beta";
     fixture.reviewDraftChanges();
-    assert.equal(fixture.status.textContent, "No shared draft changes match your search.");
+    assert.equal(fixture.status.textContent, "No settings match the current search and filters.");
     assert.equal(focused, fixture.draftOnly);
+});
+
+test("customized-only uses server ownership metadata and composes with draft and search filters", () => {
+    const fixture = filteringWorkflowFixture();
+
+    fixture.customizedOnly.checked = true;
+    assert.equal(fixture.applyFilters(), 1);
+    assert.equal(fixture.alpha.hidden, false);
+    assert.equal(fixture.beta.hidden, true);
+    assert.equal(fixture.status.textContent, "1 customized setting shown.");
+
+    fixture.draftOnly.checked = true;
+    assert.equal(fixture.applyFilters(), 1, "customized and shared draft filters use AND semantics");
+
+    fixture.search.value = "beta";
+    assert.equal(fixture.applyFilters(), 0);
+    assert.equal(fixture.status.textContent, "No settings match the current search and filters.");
+
+    fixture.search.value = "";
+    fixture.customizedOnly.checked = false;
+    assert.equal(fixture.applyFilters(), 1);
+    assert.equal(fixture.alpha.hidden, false);
+    assert.equal(fixture.beta.hidden, true, "the draft filter remains active when the customized filter is cleared");
+
+    fixture.draftOnly.checked = false;
+    assert.equal(fixture.applyFilters(), 2);
+    assert.equal(fixture.status.textContent, "2 settings shown.");
 });
 
 test("clearEditSessionStatus removes a resolved active-edit warning", () => {
     const warning = new Control();
     warning.hidden = false;
-    warning.textContent = "Apply or Cancel the active setting edit before saving.";
+    warning.textContent = "Keep or cancel the active setting edit before saving.";
     const doc = {
         querySelector(selector) { return selector === "#edit-session-status" ? warning : null; },
         querySelectorAll() { return []; },

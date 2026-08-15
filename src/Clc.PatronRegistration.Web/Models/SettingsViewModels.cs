@@ -60,11 +60,11 @@ public static class SettingValuePresentation
         if (row.DraftOperation == DraftOperation.Upsert)
         {
             return new(SettingPresentationState.DraftChange, Format(row.Definition, row.DraftValue, true),
-                "Draft change", Format(row.Definition, row.Resolution.EffectiveValue, row.Resolution.SourceOrganizationId.HasValue));
+                "Shared draft", Format(row.Definition, row.Resolution.EffectiveValue, row.Resolution.SourceOrganizationId.HasValue));
         }
         if (row.DraftOperation == DraftOperation.RemoveOverride)
         {
-            return new(SettingPresentationState.DraftChange, "Use inherited value", "Draft change",
+            return new(SettingPresentationState.DraftChange, "Use inherited value", "Shared draft",
                 Format(row.Definition, row.Resolution.EffectiveValue, row.Resolution.SourceOrganizationId.HasValue));
         }
         if (row.Resolution.OwnsOverride)
@@ -100,6 +100,7 @@ public sealed class SettingsIndexViewModel
     public string OrganizationName { get; set; } = string.Empty;
     public int LibraryId { get; set; }
     public string FormCode { get; set; } = string.Empty;
+    public string FormDisplayName { get; set; } = string.Empty;
     public long ScopeVersion { get; set; }
     public SettingDraft? ActiveDraft { get; set; }
     public bool HasRestrictedDraftChanges { get; set; }
@@ -129,20 +130,67 @@ public sealed record SettingRowViewModel(
     SettingAssetPresentation? StagedAsset = null,
     bool StagedAssetMissing = false,
     SettingAssetPresentation? InheritedAsset = null,
-    bool InheritedAssetMissing = false);
+    bool InheritedAssetMissing = false,
+    string? InheritedSourceDescription = null);
 
 public static class SettingInheritancePresentation
 {
     public static string MessageFor(SettingRowViewModel row)
     {
-        const string prefix = "Applying this action will remove the override at this scope";
+        const string prefix = "Choosing Use inherited value will remove this customization.";
+        if (!row.HasInheritedValue)
+        {
+            return $"{prefix} No inherited value is configured.";
+        }
+        var source = row.InheritedSourceDescription ?? "the inherited scope";
         if (row.Definition.IsSensitive)
         {
-            return $"{prefix} and use the inherited value.";
+            return $"{prefix} Use the inherited value from {source}.";
         }
-        return row.HasInheritedValue
-            ? $"{prefix} and use the inherited value: {SettingValuePresentation.Format(row.Definition, row.InheritedValue, true)}."
-            : $"{prefix} and the setting will become unconfigured.";
+
+        var inheritedValue = SettingValuePresentation.Format(row.Definition, row.InheritedValue, true);
+        var valueDescription = row.Definition.ValueType is SettingValueType.Html or SettingValueType.EmailTemplate
+            ? $"use the value from {source}"
+            : $"use “{inheritedValue}” from {source}";
+        return $"{prefix} The setting will {valueDescription}.";
+    }
+}
+
+public static class SettingReviewPresentation
+{
+    public static string Live(SettingRowViewModel row)
+    {
+        if (row.Definition.IsSensitive)
+        {
+            return row.Resolution.SourceOrganizationId.HasValue ? "configured" : "not configured";
+        }
+        if (!row.Resolution.SourceOrganizationId.HasValue)
+        {
+            return "not configured";
+        }
+        return row.Resolution.OwnsOverride
+            ? SettingValuePresentation.Format(row.Definition, row.Resolution.EffectiveValue, true)
+            : $"inherited from {row.SourceDescription}";
+    }
+
+    public static string Proposed(SettingRowViewModel row)
+    {
+        if (row.DraftOperation == DraftOperation.RemoveOverride)
+        {
+            if (!row.HasInheritedValue)
+            {
+                return "remove customization; no inherited value configured";
+            }
+            var source = row.InheritedSourceDescription ?? "the inherited scope";
+            return row.Definition.IsSensitive
+                ? $"use inherited value from {source}"
+                : $"use {SettingValuePresentation.Format(row.Definition, row.InheritedValue, true)} from {source}";
+        }
+        if (row.Definition.IsSensitive)
+        {
+            return "replacement value entered";
+        }
+        return SettingValuePresentation.Format(row.Definition, row.DraftValue, true);
     }
 }
 
@@ -189,10 +237,12 @@ public sealed class PreviewLinkRequest
 public sealed class FormsViewModel
 {
     public int LibraryId { get; set; }
+    public string LibraryName { get; set; } = string.Empty;
     public int SystemOrganizationId { get; set; }
     public bool IsGlobal { get; set; }
     public IReadOnlyList<FormCodeMetadata> Forms { get; set; } = [];
     public IReadOnlyList<FormCodeOption> LegacyForms { get; set; } = [];
+    public IReadOnlyDictionary<int, string> OrganizationNames { get; set; } = new Dictionary<int, string>();
 }
 
 public sealed class FormCodeRequest

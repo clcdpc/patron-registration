@@ -26,14 +26,20 @@
                 ? Model.HasInheritedValue ? "Use inherited image" : "Remove image"
                 : Model.StagedAsset?.FileName ?? (Model.StagedAssetMissing ? "Missing uploaded image" : "No image configured")
             : Model.EffectiveAsset?.FileName ?? (Model.EffectiveAssetMissing ? "Missing uploaded image" : "No image configured");
-    var collapsedValue = hasDraftOperation && !isImage ? $"Draft: {imageSummary}" : imageSummary;
+    var collapsedValue = hasDraftOperation && !isImage ? $"Shared draft: {imageSummary}" : imageSummary;
     bool isNotSet = presentation.State == SettingPresentationState.NotSet;
     bool canRemoveOverride = resolution.OwnsOverride;
     var inheritanceMessage = Clc.PatronRegistration.Web.Models.SettingInheritancePresentation.MessageFor(Model);
+    var inheritanceMessageId = $"{token}-inheritance-message";
     var imageActionLabel = imageHasValue || imageHasStagedValue ? "Replace image" : "Upload image";
     var imageSource = Model.EffectiveAsset is null
         ? Model.EffectiveAssetMissing ? "Missing uploaded image" : "No image configured"
         : resolution.OwnsOverride ? "Customized" : $"Inherited from {Model.SourceDescription}";
+    var liveState = resolution.OwnsOverride
+        ? "customized"
+        : resolution.SourceOrganizationId.HasValue ? "inherited" : "notset";
+    var liveSummary = Clc.PatronRegistration.Web.Models.SettingReviewPresentation.Live(Model);
+    var rowStatus = hasDraftOperation ? "Shared draft" : "Live";
 }
 <details class="setting-row"
          data-search="@searchText"
@@ -43,9 +49,16 @@
          data-sensitive="@definition.IsSensitive.ToString().ToLowerInvariant()"
          data-server-operation="@(Model.DraftOperation?.ToString() ?? string.Empty)"
          data-draft-change="@hasDraftOperation.ToString().ToLowerInvariant()"
+         data-customized-here="@resolution.OwnsOverride.ToString().ToLowerInvariant()"
          data-applied-operation="@(isRemoveOverride ? "RemoveOverride" : "Upsert")"
          data-value-type="@definition.ValueType.ToString().ToLowerInvariant()"
          data-presentation-state="@presentation.State.ToString().ToLowerInvariant()"
+         data-live-state="@liveState"
+         data-live-summary="@liveSummary"
+         data-source-description="@Model.SourceDescription"
+         data-inherited-summary="@(Model.Definition.IsSensitive || !Model.HasInheritedValue ? string.Empty : SettingValuePresentation.Format(Model.Definition, Model.InheritedValue, true))"
+         data-inherited-source="@(Model.InheritedSourceDescription ?? string.Empty)"
+         data-has-inherited="@Model.HasInheritedValue.ToString().ToLowerInvariant()"
          data-image-has-inherited="@Model.HasInheritedValue.ToString().ToLowerInvariant()"
          data-image-inherited-missing="@Model.InheritedAssetMissing.ToString().ToLowerInvariant()"
          data-image-inherited-preview-url="@(Model.InheritedAsset?.PreviewUrl ?? string.Empty)"
@@ -59,7 +72,7 @@
         <span class="setting-summary-content">
             <span class="setting-name">@definition.DisplayName</span>
             <span class="summary-value" title="@collapsedValue">@collapsedValue</span>
-            <span class="setting-status">@(isImage && hasDraftOperation ? "Shared draft" : isImage ? imageSource : presentation.Status)</span>
+            <span class="setting-status">@rowStatus</span>
         </span>
     </summary>
     <div class="setting-content">
@@ -80,7 +93,7 @@
         @if (hasDraftOperation && !isImage)
         {
             <div>
-                <dt>Draft change</dt>
+                <dt>Shared draft</dt>
                 <dd>@(isRemoveOverride ? "Use inherited value" : isDraftUpsert && definition.IsSensitive ? "Set a hidden value" : $"Set “{Model.DraftValue}”")</dd>
             </div>
         }
@@ -218,13 +231,13 @@
         <button type="button" class="edit-setting">Change</button>
         @if (canRemoveOverride)
         {
-            <button type="button" class="inherit-setting" hidden="@isRemoveOverride">Use inherited value</button>
+            <button type="button" class="inherit-setting" hidden="@isRemoveOverride" aria-controls="@inheritanceMessageId" aria-expanded="false">Use inherited value</button>
         }
-        <p class="inheritance-message" hidden>
+        <p id="@inheritanceMessageId" class="inheritance-message" hidden>
             @inheritanceMessage
         </p>
         <span class="edit-actions" hidden>
-            <button type="button" class="apply-setting">Apply</button>
+            <button type="button" class="apply-setting">Keep change</button>
             <button type="button" class="cancel-setting">Cancel</button>
         </span>
         </div>
@@ -237,7 +250,7 @@
                 value="@definition.Key"
                 data-submit-kind="guarded"
                 formnovalidate>
-            Remove draft change
+            Remove shared draft change
         </button>
     }
     <details class="technical-details"><summary>Technical details</summary><p>Setting key: <code>@definition.Key</code></p></details>
