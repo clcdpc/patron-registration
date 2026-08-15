@@ -6,6 +6,7 @@ using Clc.PatronRegistration.Validators;
 using System.ComponentModel.DataAnnotations;
 using System.Reflection;
 using System.Text.Json;
+using Microsoft.Extensions.DependencyInjection;
 using Moq;
 
 namespace Clc.PatronRegistration.Tests;
@@ -365,15 +366,20 @@ public class SettingsAdministrationTests
         foreach (var key in new[]
         {
             "alert.NameFirst", "label.NameFirst", "label.UseLegalName", "label.IsECard", "label.AddToMailingList",
-            "require.PhoneVoice1", "require.EmailAddress", "require.User5"
+            "require.PhoneVoice1", "require.EmailAddress", "require.User5", "require.RequestPickupBranchID"
         }) Assert.IsTrue(catalog.TryGet(key, out _), key);
-        foreach (var key in new[] { "alert.NotAField", "label.NotAField", "require.NotAField", "require.ReceiveEreceipts" })
+        foreach (var key in new[]
+        {
+            "alert.NotAField", "label.NotAField", "require.NotAField", "require.ReceiveEreceipts",
+            "legal_name_checkbox_label", "ecard_checkbox_label", "mailing_list_checkbox_label",
+            "require_preferred_pickup_location"
+        })
             Assert.IsFalse(catalog.TryGet(key, out _), key);
 
         Assert.AreEqual("First name", catalog.All.Single(x => x.Key == "alert.NameFirst").DisplayName);
         Assert.AreEqual("First name", catalog.All.Single(x => x.Key == "label.NameFirst").DisplayName);
         Assert.AreEqual("Require primary phone number", catalog.All.Single(x => x.Key == "require.PhoneVoice1").DisplayName);
-        CollectionAssert.AreEquivalent(new[] { "require.PhoneVoice1", "require.EmailAddress", "require.User5" },
+        CollectionAssert.AreEquivalent(new[] { "require.PhoneVoice1", "require.EmailAddress", "require.User5", "require.RequestPickupBranchID" },
             catalog.All.Where(x => x.Group == SettingGroup.Require).Select(x => x.Key).ToArray());
     }
 
@@ -408,9 +414,50 @@ public class SettingsAdministrationTests
             StringAssert.Contains(view, $"<input asp-for=\"{property}\" />");
             StringAssert.Contains(view, $"<label asp-for=\"{property}\"");
         }
-        foreach (var legacyProperty in new[] { "LegalNameCheckboxLabel", "ECardCheckboxLabel", "MailingListCheckboxLabel" })
-            Assert.IsFalse(view.Contains(legacyProperty, StringComparison.Ordinal), legacyProperty);
         Assert.IsFalse(view.Contains("Html.Raw(Settings.GetFieldLabel", StringComparison.Ordinal));
+    }
+
+    [TestMethod]
+    public void RetiredFieldProviderMembersAreAbsentAndReplacementLabelsResolveDynamically()
+    {
+        var retiredMembers = new[]
+        {
+            "LegalName" + "CheckboxLabel", "ECard" + "CheckboxLabel", "MailingList" + "CheckboxLabel",
+            "RequirePreferred" + "PickupLocation"
+        };
+        var interfaceProperties = typeof(ISettingProvider).GetProperties(BindingFlags.Instance | BindingFlags.Public);
+        var providerProperties = typeof(DbSettingProvider).GetProperties(BindingFlags.Instance | BindingFlags.Public);
+
+        foreach (var retiredMember in retiredMembers)
+        {
+            Assert.IsFalse(interfaceProperties.Any(property => property.Name == retiredMember), retiredMember);
+            Assert.IsFalse(providerProperties.Any(property => property.Name == retiredMember), retiredMember);
+        }
+
+        var provider = new DbSettingProvider(3, CacheWith(
+            Setting(1, "label.UseLegalName", "Use legal name"),
+            Setting(1, "label.IsECard", "E-card"),
+            Setting(1, "label.AddToMailingList", "Join mailing list")));
+
+        Assert.AreEqual("Use legal name", provider.GetFieldLabel(nameof(Registration.UseLegalName)));
+        Assert.AreEqual("E-card", provider.GetFieldLabel(nameof(Registration.IsECard)));
+        Assert.AreEqual("Join mailing list", provider.GetFieldLabel(nameof(Registration.AddToMailingList)));
+
+        var services = new Microsoft.Extensions.DependencyInjection.ServiceCollection()
+            .AddSingleton<ISettingProvider>(provider)
+            .BuildServiceProvider();
+        new Microsoft.AspNetCore.Http.HttpContextAccessor().HttpContext =
+            new Microsoft.AspNetCore.Http.DefaultHttpContext { RequestServices = services };
+        try
+        {
+            Assert.AreEqual("Use legal name", new DbConfiguredDisplayNameAttribute(nameof(Registration.UseLegalName)).DisplayName);
+            Assert.AreEqual("E-card", new DbConfiguredDisplayNameAttribute(nameof(Registration.IsECard)).DisplayName);
+            Assert.AreEqual("Join mailing list", new DbConfiguredDisplayNameAttribute(nameof(Registration.AddToMailingList)).DisplayName);
+        }
+        finally
+        {
+            new Microsoft.AspNetCore.Http.HttpContextAccessor().HttpContext = null;
+        }
     }
 
     [TestMethod]
@@ -775,7 +822,7 @@ public class SettingsAdministrationTests
             .OrderBy(name => name)
             .ToArray();
 
-        CollectionAssert.AreEqual(new[] { "EmailAddress", "PhoneVoice1", "User5" }, metadataFields);
+        CollectionAssert.AreEqual(new[] { "EmailAddress", "PhoneVoice1", "RequestPickupBranchID", "User5" }, metadataFields);
         CollectionAssert.AreEqual(metadataFields, catalogFields);
         Assert.IsFalse(catalog.TryGet("require.ReceiveEreceipts", out _));
         Assert.IsTrue(catalog.TryGet("label.ReceiveEreceipts", out _));

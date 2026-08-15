@@ -62,9 +62,41 @@ public sealed class RegistrationMvcValidationTests
         var settings = new Mock<ISettingProvider>();
         settings.Setup(value => value.GetFieldRequired(nameof(Registration.User5))).Returns(required);
         settings.Setup(value => value.GetFieldLabel(nameof(Registration.User5))).Returns("Responsible person");
+        settings.SetupGet(value => value.DisplayResponsiblePersonField).Returns(true);
         registration = ValidRegistration(settings.Object);
         registration.User5 = user5;
         return ValidateModel(registration, settings.Object);
+    }
+
+    [DataTestMethod]
+    [DataRow(false, true, null)]
+    [DataRow(false, true, 12)]
+    [DataRow(true, false, null)]
+    [DataRow(true, true, null)]
+    [DataRow(true, true, 12)]
+    public void PreferredPickup_RequirednessDependsOnDisplayApplicability(bool display, bool required, int? value)
+    {
+        var settings = new Mock<ISettingProvider>();
+        settings.Setup(value => value.GetFieldRequired(nameof(Registration.RequestPickupBranchID))).Returns(required);
+        settings.Setup(value => value.GetFieldLabel(nameof(Registration.RequestPickupBranchID))).Returns("Preferred pickup location");
+        settings.SetupGet(value => value.DisplayPreferredPickupLocation).Returns(display);
+        var registration = ValidRegistration(settings.Object);
+        registration.RequestPickupBranchID = value;
+
+        var modelState = ValidateModel(registration, settings.Object);
+        var errors = modelState.ContainsKey(nameof(Registration.RequestPickupBranchID))
+            ? modelState[nameof(Registration.RequestPickupBranchID)]!.Errors.ToArray()
+            : Array.Empty<ModelError>();
+
+        if (display && required && value is null)
+        {
+            CollectionAssert.AreEqual(new[] { "Preferred pickup location is required." },
+                errors.Select(error => error.ErrorMessage).ToArray());
+        }
+        else
+        {
+            Assert.AreEqual(0, errors.Length);
+        }
     }
 
     private static ModelStateDictionary ValidateModel(Registration registration, ISettingProvider settings)
