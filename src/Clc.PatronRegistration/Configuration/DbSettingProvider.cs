@@ -156,7 +156,6 @@ namespace Clc.PatronRegistration.Configuration
         public string RegistrationHeader => GetPropertySetting<string>();
         public string DuplicatePatronMessageHtml => GetPropertySetting<string>();
         public bool EnableLegalNameCheckbox => GetPropertySetting<bool>();
-        public string LegalNameCheckboxLabel => GetSetting<string>("legal_name_checkbox_label");
         public bool UseLegalNameOnNotices => GetPropertySetting<bool>();
         public string DriversLicenseButtonText => GetPropertySetting<string>();
         public string DriversLicensePromptText => GetPropertySetting<string>();
@@ -166,10 +165,8 @@ namespace Clc.PatronRegistration.Configuration
         public string KioskRegistrationHeader => GetPropertySetting<string>();
         public string SchoolInfoFieldLegend => GetPropertySetting<string>();
         public bool DisplayECardCheckbox => GetPropertySetting<bool>();
-        public string ECardCheckboxLabel => GetSetting<string>("ecard_checkbox_label");
         public string MailingListDescriptionHtml => GetPropertySetting<string>();
         public bool DisplayMailingListCheckbox => GetPropertySetting<bool>();
-        public string MailingListCheckboxLabel => GetSetting<string>("mailing_list_checkbox_label");
         public int MailingListRecordSetId => GetLegacySafeInteger();
         public int RegistrationLogonUserId => GetLegacySafeInteger();
         public int EcardPatronCodeId => GetLegacySafeInteger();
@@ -191,7 +188,6 @@ namespace Clc.PatronRegistration.Configuration
         [JsonIgnore]
         public string PostmarkApiKey => GetPropertySetting<string>();
         public bool DisplayPreferredPickupLocation => GetPropertySetting<bool>();
-        public bool RequirePreferredPickupLocation => GetPropertySetting<bool>();
         public bool DisplayResponsiblePersonField => GetPropertySetting<bool>();
         public bool PerformPapiDupeBypass => GetPropertySetting<bool>();
         public bool UseFirstNameForDuplicateWorkaround => GetPropertySetting<bool>();

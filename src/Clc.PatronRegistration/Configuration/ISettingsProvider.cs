@@ -59,15 +59,9 @@ namespace Clc.PatronRegistration.Configuration
         [AdminSetting(SettingCategory.FormBehaviorAndFields, "School-information heading", "Displays as the heading above the school, student, teacher, and card-delivery fields.")]
         [JsonIgnore]
         string SchoolInfoFieldLegend { get; }
-        [JsonIgnore]
-        string LegalNameCheckboxLabel { get; }
-        [JsonIgnore]
-        string ECardCheckboxLabel { get; }
         [AdminSetting(SettingCategory.PageAppearanceAndInstructions, "CSS file", "Loads this stylesheet on the public registration page.")]
         [JsonIgnore]
         string CssFile { get; }
-        [JsonIgnore]
-        string MailingListCheckboxLabel { get; }
         [AdminSetting(SettingCategory.EmailAndNotices, "Mailing-list description", "Renders this explanatory HTML beside the mailing-list option when that option is displayed.", ValueType = SettingValueType.Html)]
         [JsonIgnore]
         string MailingListDescriptionHtml { get; }
@@ -164,7 +158,6 @@ namespace Clc.PatronRegistration.Configuration
         bool DisplayMailingListCheckbox { get; }
         [AdminSetting(SettingCategory.BranchAndPatronDefaults, "Show preferred pickup location", "Displays the preferred-pickup-location selector on the registration form.")]
         bool DisplayPreferredPickupLocation { get; }
-        bool RequirePreferredPickupLocation { get; }
         [AdminSetting(SettingCategory.FormBehaviorAndFields, "Show responsible-person field", "Displays the responsible-person section on the registration form when enabled.")]
         bool DisplayResponsiblePersonField { get; }
         [AdminSetting(SettingCategory.DuplicateChecking, "Apply duplicate workaround to first name", "Adds the duplicate-workaround suffix to the first name when enabled; otherwise it is added to the last name.")]

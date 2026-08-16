@@ -16,7 +16,8 @@ namespace Clc.PatronRegistration.Validators
             if (reg == null) { return new ValidationResult("invalid model object"); }
 
             var memberName = context.MemberName ?? string.Empty;
-            return settings.GetFieldRequired(memberName) && string.IsNullOrWhiteSpace(value?.ToString())
+            return IsApplicable(settings, memberName) &&
+                settings.GetFieldRequired(memberName) && string.IsNullOrWhiteSpace(value?.ToString())
                 ? new ValidationResult($"{settings.GetFieldLabel(memberName)} is required.")
                 : ValidationResult.Success!;
         }
@@ -30,8 +31,20 @@ namespace Clc.PatronRegistration.Validators
                 throw new ArgumentNullException(nameof(context));
             }
 
+            if (!IsApplicable(settings, context.ModelMetadata.Name ?? string.Empty))
+            {
+                return;
+            }
+
             context.Attributes.TryAdd("data-val", "true");
             context.Attributes.TryAdd("data-val-dbrequired", $"{settings.GetFieldLabel(context.ModelMetadata.Name ?? "")} is required.");
         }
+
+        private static bool IsApplicable(ISettingProvider settings, string propertyName) => propertyName switch
+        {
+            nameof(Registration.RequestPickupBranchID) => settings.DisplayPreferredPickupLocation,
+            nameof(Registration.User5) => settings.DisplayResponsiblePersonField,
+            _ => true
+        };
     }
 }

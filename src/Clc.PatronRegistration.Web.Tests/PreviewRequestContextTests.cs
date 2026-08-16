@@ -424,6 +424,40 @@ public class PreviewRequestContextTests
         Assert.AreEqual("Preview alert", context.Settings.GetFieldErrorMessage(nameof(Registration.NameFirst)));
     }
 
+    [TestMethod]
+    public void PreviewProvider_UsesStagedPreferredPickupRequirednessOnlyWhenDisplayed()
+    {
+        var hiddenContext = CreateResolver(draft: ActiveDraft(
+            new SettingMutation("require.RequestPickupBranchID", DraftOperation.Upsert, "true"))).Resolve("token")!;
+        var hiddenServices = new ServiceCollection()
+            .AddSingleton<ISettingProvider>(hiddenContext.Settings)
+            .BuildServiceProvider();
+        var hiddenValidation = new DbConfiguredRequired().GetValidationResult(
+            null,
+            new ValidationContext(new Registration(hiddenContext.Settings), hiddenServices, null)
+            {
+                MemberName = nameof(Registration.RequestPickupBranchID)
+            });
+        Assert.AreEqual(ValidationResult.Success, hiddenValidation);
+
+        var displayedContext = CreateResolver(draft: ActiveDraft(
+            new SettingMutation("display_preferred_pickup_location", DraftOperation.Upsert, "true"),
+            new SettingMutation("label.RequestPickupBranchID", DraftOperation.Upsert, "Preferred pickup location"),
+            new SettingMutation("require.RequestPickupBranchID", DraftOperation.Upsert, "true"))).Resolve("token")!;
+        var displayedServices = new ServiceCollection()
+            .AddSingleton<ISettingProvider>(displayedContext.Settings)
+            .BuildServiceProvider();
+        var displayedValidation = new DbConfiguredRequired().GetValidationResult(
+            null,
+            new ValidationContext(new Registration(displayedContext.Settings), displayedServices, null)
+            {
+                MemberName = nameof(Registration.RequestPickupBranchID)
+            });
+
+        Assert.IsNotNull(displayedValidation);
+        StringAssert.Contains(displayedValidation!.ErrorMessage, "Preferred pickup location");
+    }
+
     private static PreviewContextResolver CreateResolver(
         SettingDraft? draft = null,
         PreviewLinkRecord? link = null,
