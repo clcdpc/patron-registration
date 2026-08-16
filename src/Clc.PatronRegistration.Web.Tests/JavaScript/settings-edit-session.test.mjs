@@ -1408,7 +1408,7 @@ function sessionStorageFixture(initialValue = null, { getThrows = false, setThro
     };
 }
 
-function settingsUiStateFixture({ initialState = null, includeDraft = true, storage: suppliedStorage, rowRect } = {}) {
+function settingsUiStateFixture({ initialState = null, includeDraft = true, storage: suppliedStorage, rowRect, rowRects = {}, reducedMotion = false } = {}) {
     const storage = suppliedStorage === undefined ? sessionStorageFixture(initialState) : suppliedStorage;
     const search = new Control();
     const status = new Control();
@@ -1452,7 +1452,7 @@ function settingsUiStateFixture({ initialState = null, includeDraft = true, stor
             querySelector() { return null; },
             querySelectorAll() { return []; },
             closest() { return category; },
-            getBoundingClientRect() { return rowRect || { bottom: 100 }; }
+            getBoundingClientRect() { return rowRects[key] || rowRect || { top: 100, bottom: 100 }; }
         };
         return row;
     });
@@ -1482,7 +1482,7 @@ function settingsUiStateFixture({ initialState = null, includeDraft = true, stor
         innerHeight: 600,
         requestAnimationFrame(callback) { callback(); },
         scrollBy(options) { scrollCalls.push(options); },
-        matchMedia() { return { matches: false }; }
+        matchMedia() { return { matches: reducedMotion }; }
     };
     sandbox.globalThis = sandbox;
     vm.runInNewContext(readFileSync(new URL("../../Clc.PatronRegistration.Web/wwwroot/js/settings.js", import.meta.url), "utf8"), sandbox);
@@ -1546,14 +1546,28 @@ test("opening and closing a setting persists its stable setting key", () => {
     alpha.open = true;
     alpha.listeners.toggle();
     assert.deepEqual(JSON.parse(fixture.storage.raw).openSettingKeys, ["alpha"]);
+    assert.equal(JSON.parse(fixture.storage.raw).lastOpenedSettingKey, "alpha");
 
     beta.open = true;
     beta.listeners.toggle();
     assert.deepEqual(new Set(JSON.parse(fixture.storage.raw).openSettingKeys), new Set(["alpha", "beta"]));
+    assert.equal(JSON.parse(fixture.storage.raw).lastOpenedSettingKey, "beta");
 
     alpha.open = false;
     alpha.listeners.toggle();
     assert.deepEqual(JSON.parse(fixture.storage.raw).openSettingKeys, ["beta"]);
+    assert.equal(JSON.parse(fixture.storage.raw).lastOpenedSettingKey, "beta", "closing a row does not select another setting");
+});
+
+test("malformed last-opened setting keys are ignored during restoration", () => {
+    const fixture = settingsUiStateFixture({
+        initialState: { lastOpenedSettingKey: { key: "alpha" }, openSettingKeys: ["alpha"] },
+        rowRect: { top: 400, bottom: 700 }
+    });
+
+    assert.equal(fixture.sandbox.SettingsWorkflow.readUiState().lastOpenedSettingKey, undefined);
+    assert.equal(fixture.rows[0].open, true);
+    assert.equal(fixture.scrollCalls.length, 0);
 });
 
 test("filtered-out restored settings stay hidden while retaining their open state", () => {
@@ -1579,7 +1593,7 @@ test("restored rows do not change the existing filter-session category restorati
 test("initial restored opens skip auto-scroll while later user opens retain the bottom margin behavior", () => {
     const fixture = settingsUiStateFixture({
         initialState: { openSettingKeys: ["alpha"] },
-        rowRect: { bottom: 700 }
+        rowRect: { top: 400, bottom: 700 }
     });
     const alpha = fixture.rows[0];
 
@@ -1594,6 +1608,93 @@ test("initial restored opens skip auto-scroll while later user opens retain the 
     assert.equal(fixture.scrollCalls[0].top, 132);
     assert.equal(fixture.scrollCalls[0].left, 0);
     assert.equal(fixture.scrollCalls[0].behavior, "smooth");
+});
+
+test("restoration uses the last opened restored row as one instant scroll anchor", () => {
+    const fixture = settingsUiStateFixture({
+        initialState: {
+            openSettingKeys: ["alpha", "beta"],
+            lastOpenedSettingKey: "beta"
+        },
+        rowRects: {
+            alpha: { top: 40, bottom: 500 },
+            beta: { top: 400, bottom: 700 }
+        }
+    });
+
+    assert.equal(fixture.rows[0].open, true);
+    assert.equal(fixture.rows[1].open, true);
+    assert.equal(fixture.scrollCalls.length, 1, "all restored rows share one restoration adjustment");
+    assert.equal(fixture.scrollCalls[0].top, 132);
+    assert.equal(fixture.scrollCalls[0].left, 0);
+    assert.equal(fixture.scrollCalls[0].behavior, "auto");
+});
+
+test("unknown, filtered, or non-open last settings do not trigger restoration scrolling", () => {
+    const unknown = settingsUiStateFixture({
+        initialState: { openSettingKeys: ["alpha"], lastOpenedSettingKey: "missing" },
+        rowRect: { top: 400, bottom: 700 }
+    });
+    assert.equal(unknown.scrollCalls.length, 0);
+
+    const filtered = settingsUiStateFixture({
+        initialState: { search: "beta", openSettingKeys: ["alpha", "beta"], lastOpenedSettingKey: "alpha" },
+        rowRects: {
+            alpha: { top: 400, bottom: 700 },
+            beta: { top: 40, bottom: 500 }
+        }
+    });
+    assert.equal(filtered.rows[0].hidden, true);
+    assert.equal(filtered.rows[0].open, true);
+    assert.equal(filtered.scrollCalls.length, 0);
+
+    const notOpen = settingsUiStateFixture({
+        initialState: { openSettingKeys: ["alpha"], lastOpenedSettingKey: "beta" },
+        rowRects: { beta: { top: 400, bottom: 700 } }
+    });
+    assert.equal(notOpen.rows[1].open, false);
+    assert.equal(notOpen.scrollCalls.length, 0);
+});
+
+test("ensureSettingVisible applies only the required downward, upward, or no delta", () => {
+    const below = settingsUiStateFixture({ rowRect: { top: 400, bottom: 580 } });
+    below.rows[0].open = true;
+    below.sandbox.SettingsWorkflow.ensureSettingVisible(below.rows[0]);
+    assert.equal(below.scrollCalls.length, 1);
+    assert.equal(below.scrollCalls[0].top, 12);
+    assert.equal(below.scrollCalls[0].left, 0);
+    assert.equal(below.scrollCalls[0].behavior, "smooth");
+
+    const above = settingsUiStateFixture({ rowRect: { top: -20, bottom: 200 } });
+    above.rows[0].open = true;
+    above.sandbox.SettingsWorkflow.ensureSettingVisible(above.rows[0]);
+    assert.equal(above.scrollCalls.length, 1);
+    assert.equal(above.scrollCalls[0].top, -52);
+    assert.equal(above.scrollCalls[0].left, 0);
+    assert.equal(above.scrollCalls[0].behavior, "smooth");
+
+    const visible = settingsUiStateFixture({ rowRect: { top: 40, bottom: 500 } });
+    visible.rows[0].open = true;
+    visible.sandbox.SettingsWorkflow.ensureSettingVisible(visible.rows[0]);
+    assert.equal(visible.scrollCalls.length, 0);
+});
+
+test("user opening honors reduced motion while restoration remains instant", () => {
+    const reduced = settingsUiStateFixture({ rowRect: { top: 400, bottom: 580 }, reducedMotion: true });
+    reduced.rows[0].open = true;
+    reduced.rows[0].listeners.toggle();
+    assert.equal(reduced.scrollCalls.length, 1);
+    assert.equal(reduced.scrollCalls[0].top, 12);
+    assert.equal(reduced.scrollCalls[0].behavior, "auto");
+
+    const restored = settingsUiStateFixture({
+        initialState: { openSettingKeys: ["alpha"], lastOpenedSettingKey: "alpha" },
+        rowRect: { top: 400, bottom: 700 },
+        reducedMotion: false
+    });
+    assert.equal(restored.scrollCalls.length, 1);
+    assert.equal(restored.scrollCalls[0].top, 132);
+    assert.equal(restored.scrollCalls[0].behavior, "auto");
 });
 
 test("malformed or unavailable session storage does not break settings initialization or interaction", () => {
@@ -1636,9 +1737,12 @@ test("persisted UI state excludes unsaved values and edit-session state", () => 
     row.listeners.toggle();
 
     const state = JSON.parse(fixture.storage.raw);
-    assert.deepEqual(Object.keys(state).sort(), ["customizedOnly", "draftOnly", "openSettingKeys", "search"]);
+    assert.deepEqual(Object.keys(state).sort(), ["customizedOnly", "draftOnly", "lastOpenedSettingKey", "openSettingKeys", "search"]);
+    assert.equal(state.lastOpenedSettingKey, "alpha");
     assert.equal(state.value, undefined);
     assert.equal(state.dirty, undefined);
     assert.equal(state.candidateOperation, undefined);
     assert.equal(state.editSession, undefined);
+    assert.equal(state.scrollY, undefined);
+    assert.equal(state.scrollTop, undefined);
 });

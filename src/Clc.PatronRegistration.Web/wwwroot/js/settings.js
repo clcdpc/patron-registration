@@ -31,6 +31,7 @@
             if (typeof parsed.search === "string") state.search = parsed.search;
             if (typeof parsed.customizedOnly === "boolean") state.customizedOnly = parsed.customizedOnly;
             if (typeof parsed.draftOnly === "boolean") state.draftOnly = parsed.draftOnly;
+            if (typeof parsed.lastOpenedSettingKey === "string") state.lastOpenedSettingKey = parsed.lastOpenedSettingKey;
             if (Array.isArray(parsed.openSettingKeys)) {
                 state.openSettingKeys = [...new Set(parsed.openSettingKeys.filter((key) => typeof key === "string"))];
             }
@@ -47,6 +48,9 @@
             const state = { ...readUiState(), ...changes };
             if (Array.isArray(state.openSettingKeys)) {
                 state.openSettingKeys = [...new Set(state.openSettingKeys.filter((key) => typeof key === "string"))];
+            }
+            if ("lastOpenedSettingKey" in state && typeof state.lastOpenedSettingKey !== "string") {
+                delete state.lastOpenedSettingKey;
             }
             storage.setItem(settingsUiStateStorageKey, JSON.stringify(state));
         } catch {
@@ -75,7 +79,11 @@
             restoredSettingRows.delete(row);
             if (row.open) return;
         }
-        scrollOpenedSettingIntoView(row);
+        if (row.open) {
+            const settingKey = row.dataset?.settingKey;
+            if (typeof settingKey === "string") writeUiState({ lastOpenedSettingKey: settingKey });
+            scrollOpenedSettingIntoView(row);
+        }
     }
 
     let navigationGuard = null;
@@ -624,19 +632,45 @@
         showNormalState();
     }
 
+    function ensureSettingVisible(row, options = {}) {
+        if (!row?.open || row.hidden) return false;
+        const category = row.closest?.(".setting-category, .dynamic-settings");
+        if (category?.hidden) return false;
+        const rect = row.getBoundingClientRect?.();
+        const viewportHeight = globalThis.innerHeight || document.documentElement?.clientHeight || 0;
+        if (!rect || !Number.isFinite(rect.top) || !Number.isFinite(rect.bottom) || !viewportHeight) return false;
+
+        const margin = Number.isFinite(options.margin) ? options.margin : 32;
+        const topMargin = Number.isFinite(options.topMargin) ? options.topMargin : margin;
+        const bottomMargin = Number.isFinite(options.bottomMargin) ? options.bottomMargin : margin;
+        const availableHeight = viewportHeight - topMargin - bottomMargin;
+        const drawerHeight = rect.bottom - rect.top;
+        let scrollDelta = 0;
+
+        if (drawerHeight > availableHeight) {
+            // A drawer taller than the viewport cannot fit. Keep its important top portion usable
+            // with one deterministic correction instead of chasing both edges.
+            if (rect.top < topMargin || rect.top > viewportHeight - topMargin) {
+                scrollDelta = rect.top - topMargin;
+            }
+        } else {
+            const bottomOverflow = rect.bottom + bottomMargin - viewportHeight;
+            if (bottomOverflow > 0) scrollDelta = bottomOverflow;
+            else if (rect.top < topMargin) scrollDelta = rect.top - topMargin;
+        }
+
+        if (!scrollDelta) return false;
+        const behavior = options.behavior || (globalThis.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches ? "auto" : "smooth");
+        globalThis.scrollBy?.({ top: scrollDelta, left: 0, behavior });
+        return true;
+    }
+
     function scrollOpenedSettingIntoView(row) {
         if (!row?.open) return;
         const schedule = globalThis.requestAnimationFrame || ((callback) => callback());
         schedule(() => {
             if (!row.open) return;
-            const rect = row.getBoundingClientRect?.();
-            const viewportHeight = globalThis.innerHeight || document.documentElement?.clientHeight || 0;
-            if (!rect || !viewportHeight) return;
-            const bottomMargin = 32;
-            const overflow = rect.bottom + bottomMargin - viewportHeight;
-            if (overflow <= 0) return;
-            const reducedMotion = globalThis.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches;
-            globalThis.scrollBy?.({ top: overflow, left: 0, behavior: reducedMotion ? "auto" : "smooth" });
+            ensureSettingVisible(row);
         });
     }
 
@@ -842,8 +876,10 @@
 
     function restoreOpenSettingRows(openSettingKeys) {
         const openKeys = new Set(openSettingKeys || []);
+        const restoredRows = new Set();
         document.querySelectorAll(".setting-row").forEach((row) => {
             if (!openKeys.has(row.dataset?.settingKey)) return;
+            restoredRows.add(row);
             if (!row.open) {
                 restoredSettingRows.add(row);
                 row.open = true;
@@ -854,6 +890,20 @@
                 category.setAttribute?.("open", "");
             }
         });
+        return restoredRows;
+    }
+
+    function restoreLastOpenedSetting(lastOpenedSettingKey, restoredRows) {
+        if (typeof lastOpenedSettingKey !== "string") return;
+        const schedule = globalThis.requestAnimationFrame || ((callback) => callback());
+        schedule(() => {
+            const row = [...(document.querySelectorAll(".setting-row") || [])]
+                .find((candidate) => restoredRows.has(candidate) && candidate.dataset?.settingKey === lastOpenedSettingKey);
+            if (!row?.open || row.hidden) return;
+            const category = row.closest?.(".setting-category, .dynamic-settings");
+            if (category?.hidden) return;
+            ensureSettingVisible(row, { behavior: "auto" });
+        });
     }
 
     function restoreUiState() {
@@ -862,7 +912,8 @@
         if (customizedOnly && typeof state.customizedOnly === "boolean") customizedOnly.checked = state.customizedOnly;
         if (draftOnly && typeof state.draftOnly === "boolean") draftOnly.checked = state.draftOnly;
         applyFilters();
-        restoreOpenSettingRows(state.openSettingKeys);
+        const restoredRows = restoreOpenSettingRows(state.openSettingKeys);
+        restoreLastOpenedSetting(state.lastOpenedSettingKey, restoredRows);
         return state;
     }
 
@@ -1124,7 +1175,7 @@
     globalThis.SettingsWorkflow = {
         continuePipeline, lifecycleSubmit, needsLiveConfirmation, disableDirtyMutations, discardPendingChanges, clearEditSessionStatus, hasImageUpload,
         restoreContextControl, applyFilters, reviewDraftChanges, copyPreviewUrl, unsavedMessage, setUnsavedDialogMode, cancelWorkflowDialog, bindDialogCancellation,
-        readUiState, writeUiState, captureOpenSettingKeys, restoreUiState,
+        readUiState, writeUiState, captureOpenSettingKeys, restoreUiState, ensureSettingVisible,
         workflowState: () => ({ pending, submitting, approved }),
         setWorkflowState: (state) => { pending = state.pending; submitting = state.submitting; approved = state.approved; }
     };
