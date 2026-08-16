@@ -733,6 +733,12 @@
         });
         categories.forEach((category) => {
             const hasMatch = category.querySelector(".setting-row:not([hidden])") !== null;
+            if (category.querySelectorAll) {
+                const count = category.querySelector("summary span");
+                const shown = category.querySelectorAll(".setting-row:not([hidden])").length;
+                const total = category.querySelectorAll(".setting-row").length;
+                if (count) count.textContent = `(${filtering ? shown : total})`;
+            }
             category.hidden = filtering && !hasMatch;
             if (filtering) category.open = hasMatch;
         });
@@ -786,7 +792,7 @@
     const unsavedDialog = document.querySelector("#unsaved-changes-dialog");
     const liveDialog = document.querySelector("#live-preview-confirm");
 
-    const dirtyCount = () => form?.querySelectorAll('.setting-row[data-dirty="true"]').length || 0;
+    const dirtyCount = () => form?.querySelectorAll('.setting-row[data-dirty="true"]')?.length || 0;
     const hasCandidate = () => Boolean(form?.querySelector('.setting-row[data-candidate-operation]'));
     function restoreContextControl(trigger) {
         if (trigger?.dataset?.committedValue !== undefined) trigger.value = trigger.dataset.committedValue;
