@@ -1390,3 +1390,246 @@ test("clearEditSessionStatus removes a resolved active-edit warning", () => {
     assert.equal(warning.hidden, false);
     assert.equal(warning.textContent, "Choose a valid uploaded image before saving.");
 });
+
+function sessionStorageFixture(initialValue = null, { getThrows = false, setThrows = false } = {}) {
+    let raw = initialValue === null || initialValue === undefined
+        ? null
+        : typeof initialValue === "string" ? initialValue : JSON.stringify(initialValue);
+    return {
+        getItem() {
+            if (getThrows) throw new Error("sessionStorage unavailable");
+            return raw;
+        },
+        setItem(_key, value) {
+            if (setThrows) throw new Error("sessionStorage unavailable");
+            raw = String(value);
+        },
+        get raw() { return raw; }
+    };
+}
+
+function settingsUiStateFixture({ initialState = null, includeDraft = true, storage: suppliedStorage, rowRect } = {}) {
+    const storage = suppliedStorage === undefined ? sessionStorageFixture(initialState) : suppliedStorage;
+    const search = new Control();
+    const status = new Control();
+    const customizedOnly = new Control();
+    customizedOnly.checked = false;
+    const draftOnly = includeDraft ? new Control() : null;
+    if (draftOnly) draftOnly.checked = false;
+    const searchRegion = new Control();
+    const count = new Control();
+    const category = {
+        open: false,
+        hidden: false,
+        setAttribute(name) { if (name === "open") this.open = true; },
+        querySelector(selector) {
+            if (selector === ".setting-row:not([hidden])") return rows.find((row) => !row.hidden) || null;
+            if (selector === "summary span") return count;
+            return null;
+        },
+        querySelectorAll(selector) {
+            if (selector === ".setting-row:not([hidden])") return rows.filter((row) => !row.hidden);
+            if (selector === ".setting-row") return rows;
+            return [];
+        }
+    };
+    const rows = [
+        { key: "alpha", search: "alpha setting", customized: true, draft: true },
+        { key: "beta", search: "beta setting", customized: false, draft: false }
+    ].map(({ key, search: searchText, customized, draft }) => {
+        const row = {
+            open: false,
+            hidden: false,
+            dataset: {
+                valueType: "image",
+                settingKey: key,
+                search: searchText,
+                customizedHere: customized.toString(),
+                draftChange: draft.toString()
+            },
+            listeners: {},
+            addEventListener(name, callback) { this.listeners[name] = callback; },
+            querySelector() { return null; },
+            querySelectorAll() { return []; },
+            closest() { return category; },
+            getBoundingClientRect() { return rowRect || { bottom: 100 }; }
+        };
+        return row;
+    });
+    const documentStub = {
+        documentElement: { clientHeight: 600 },
+        querySelector(selector) {
+            if (selector === "#setting-search") return search;
+            if (selector === "#search-status") return status;
+            if (selector === "#customized-only-filter") return customizedOnly;
+            if (selector === "#draft-only-filter") return draftOnly;
+            if (selector === ".settings-search") return searchRegion;
+            return null;
+        },
+        querySelectorAll(selector) {
+            if (selector === ".setting-row") return rows;
+            if (selector === ".setting-category, .dynamic-settings") return [category];
+            return [];
+        },
+        createElement() { return new Control(); }
+    };
+    const scrollCalls = [];
+    const sandbox = {
+        document: documentStub,
+        window: { sessionStorage: storage, addEventListener() {} },
+        globalThis: {},
+        Event, Map, Set,
+        innerHeight: 600,
+        requestAnimationFrame(callback) { callback(); },
+        scrollBy(options) { scrollCalls.push(options); },
+        matchMedia() { return { matches: false }; }
+    };
+    sandbox.globalThis = sandbox;
+    vm.runInNewContext(readFileSync(new URL("../../Clc.PatronRegistration.Web/wwwroot/js/settings.js", import.meta.url), "utf8"), sandbox);
+    return { sandbox, storage, search, status, customizedOnly, draftOnly, category, rows, scrollCalls };
+}
+
+test("settings UI state restores search, filters, matching rows, and known open setting keys", () => {
+    const fixture = settingsUiStateFixture({
+        initialState: {
+            search: "alpha",
+            customizedOnly: true,
+            draftOnly: true,
+            openSettingKeys: ["alpha", "missing"]
+        }
+    });
+
+    assert.equal(fixture.search.value, "alpha");
+    assert.equal(fixture.customizedOnly.checked, true);
+    assert.equal(fixture.draftOnly.checked, true);
+    assert.equal(fixture.rows[0].hidden, false);
+    assert.equal(fixture.rows[1].hidden, true);
+    assert.equal(fixture.rows[0].open, true);
+    assert.equal(fixture.rows[1].open, false);
+    assert.equal(fixture.category.open, true, "the containing category opens with the restored row");
+    assert.equal(fixture.status.textContent, "1 settings match the current search and filters.");
+});
+
+test("missing draft filter controls ignore persisted draft state without throwing", () => {
+    const fixture = settingsUiStateFixture({
+        includeDraft: false,
+        initialState: { search: "alpha", customizedOnly: true, draftOnly: true, openSettingKeys: [] }
+    });
+
+    assert.equal(fixture.draftOnly, null);
+    assert.equal(fixture.search.value, "alpha");
+    assert.equal(fixture.customizedOnly.checked, true);
+    assert.equal(fixture.rows[0].hidden, false);
+    assert.equal(JSON.parse(fixture.storage.raw).draftOnly, true, "a missing control does not erase its session value");
+});
+
+test("search and filter changes update the persisted UI state", () => {
+    const fixture = settingsUiStateFixture();
+
+    fixture.search.value = "alpha";
+    fixture.search.dispatchEvent(new Event("input"));
+    assert.equal(JSON.parse(fixture.storage.raw).search, "alpha");
+
+    fixture.customizedOnly.checked = true;
+    fixture.customizedOnly.dispatchEvent(new Event("change"));
+    assert.equal(JSON.parse(fixture.storage.raw).customizedOnly, true);
+
+    fixture.draftOnly.checked = true;
+    fixture.draftOnly.dispatchEvent(new Event("change"));
+    assert.equal(JSON.parse(fixture.storage.raw).draftOnly, true);
+});
+
+test("opening and closing a setting persists its stable setting key", () => {
+    const fixture = settingsUiStateFixture();
+    const [alpha, beta] = fixture.rows;
+
+    alpha.open = true;
+    alpha.listeners.toggle();
+    assert.deepEqual(JSON.parse(fixture.storage.raw).openSettingKeys, ["alpha"]);
+
+    beta.open = true;
+    beta.listeners.toggle();
+    assert.deepEqual(new Set(JSON.parse(fixture.storage.raw).openSettingKeys), new Set(["alpha", "beta"]));
+
+    alpha.open = false;
+    alpha.listeners.toggle();
+    assert.deepEqual(JSON.parse(fixture.storage.raw).openSettingKeys, ["beta"]);
+});
+
+test("filtered-out restored settings stay hidden while retaining their open state", () => {
+    const fixture = settingsUiStateFixture({ initialState: { search: "beta", openSettingKeys: ["alpha"] } });
+
+    assert.equal(fixture.rows[0].hidden, true);
+    assert.equal(fixture.rows[0].open, true);
+    fixture.rows[0].listeners.toggle();
+    assert.equal(fixture.scrollCalls.length, 0, "restoration must not invoke the drawer auto-scroll");
+});
+
+test("restored rows do not change the existing filter-session category restoration", () => {
+    const fixture = settingsUiStateFixture({ initialState: { search: "alpha", openSettingKeys: ["alpha"] } });
+    assert.equal(fixture.category.open, true);
+    assert.equal(fixture.rows[0].open, true);
+
+    fixture.search.value = "";
+    fixture.search.dispatchEvent(new Event("input"));
+    assert.equal(fixture.category.open, false, "clearing filters restores the pre-filter category disclosure");
+    assert.equal(fixture.rows[0].open, true, "the individual setting disclosure remains open");
+});
+
+test("initial restored opens skip auto-scroll while later user opens retain the bottom margin behavior", () => {
+    const fixture = settingsUiStateFixture({
+        initialState: { openSettingKeys: ["alpha"] },
+        rowRect: { bottom: 700 }
+    });
+    const alpha = fixture.rows[0];
+
+    alpha.listeners.toggle();
+    assert.equal(fixture.scrollCalls.length, 0);
+
+    alpha.open = false;
+    alpha.listeners.toggle();
+    alpha.open = true;
+    alpha.listeners.toggle();
+    assert.equal(fixture.scrollCalls.length, 1);
+    assert.equal(fixture.scrollCalls[0].top, 132);
+    assert.equal(fixture.scrollCalls[0].left, 0);
+    assert.equal(fixture.scrollCalls[0].behavior, "smooth");
+});
+
+test("malformed or unavailable session storage does not break settings initialization or interaction", () => {
+    assert.doesNotThrow(() => settingsUiStateFixture({ initialState: "not-json" }));
+
+    const throwingStorage = sessionStorageFixture(null, { getThrows: true, setThrows: true });
+    const throwingFixture = settingsUiStateFixture({ storage: throwingStorage });
+    assert.doesNotThrow(() => {
+        throwingFixture.search.value = "alpha";
+        throwingFixture.search.dispatchEvent(new Event("input"));
+        throwingFixture.rows[0].open = true;
+        throwingFixture.rows[0].listeners.toggle();
+    });
+
+    const unavailableFixture = settingsUiStateFixture({ storage: null });
+    assert.doesNotThrow(() => {
+        unavailableFixture.search.value = "alpha";
+        unavailableFixture.search.dispatchEvent(new Event("input"));
+    });
+});
+
+test("persisted UI state excludes unsaved values and edit-session state", () => {
+    const fixture = settingsUiStateFixture();
+    const row = fixture.rows[0];
+    row.dataset.dirty = "true";
+    row.dataset.candidateOperation = "Upsert";
+    row.dataset.value = "unsaved secret";
+    fixture.search.value = "alpha";
+    fixture.search.dispatchEvent(new Event("input"));
+    row.open = true;
+    row.listeners.toggle();
+
+    const state = JSON.parse(fixture.storage.raw);
+    assert.deepEqual(Object.keys(state).sort(), ["customizedOnly", "draftOnly", "openSettingKeys", "search"]);
+    assert.equal(state.value, undefined);
+    assert.equal(state.dirty, undefined);
+    assert.equal(state.candidateOperation, undefined);
+    assert.equal(state.editSession, undefined);
+});

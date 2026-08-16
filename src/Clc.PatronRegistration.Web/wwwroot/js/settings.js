@@ -6,8 +6,77 @@
     const editStatus = document.querySelector("#edit-session-status");
     const candidateEditBlockedMessage = "Keep or cancel the active setting edit before saving.";
     const imageUploadBlockedMessage = "Wait for the image upload to finish or undo the image change before continuing.";
+    const settingsUiStateStorageKey = "patron-registration.settings-admin.ui-state";
+    const restoredSettingRows = new Set();
     let approved = false;
     let submitter = null;
+
+    function settingsUiStateStorage() {
+        try {
+            return globalThis.sessionStorage || globalThis.window?.sessionStorage || null;
+        } catch {
+            return null;
+        }
+    }
+
+    function readUiState() {
+        const storage = settingsUiStateStorage();
+        if (!storage?.getItem) return {};
+        try {
+            const raw = storage.getItem(settingsUiStateStorageKey);
+            if (!raw) return {};
+            const parsed = JSON.parse(raw);
+            if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+            const state = {};
+            if (typeof parsed.search === "string") state.search = parsed.search;
+            if (typeof parsed.customizedOnly === "boolean") state.customizedOnly = parsed.customizedOnly;
+            if (typeof parsed.draftOnly === "boolean") state.draftOnly = parsed.draftOnly;
+            if (Array.isArray(parsed.openSettingKeys)) {
+                state.openSettingKeys = [...new Set(parsed.openSettingKeys.filter((key) => typeof key === "string"))];
+            }
+            return state;
+        } catch {
+            return {};
+        }
+    }
+
+    function writeUiState(changes = {}) {
+        const storage = settingsUiStateStorage();
+        if (!storage?.setItem) return;
+        try {
+            const state = { ...readUiState(), ...changes };
+            if (Array.isArray(state.openSettingKeys)) {
+                state.openSettingKeys = [...new Set(state.openSettingKeys.filter((key) => typeof key === "string"))];
+            }
+            storage.setItem(settingsUiStateStorageKey, JSON.stringify(state));
+        } catch {
+            // Session storage is optional; settings administration remains usable without it.
+        }
+    }
+
+    function captureOpenSettingKeys() {
+        return [...(document.querySelectorAll(".setting-row") || [])]
+            .filter((row) => row.open && row.dataset?.settingKey)
+            .map((row) => row.dataset.settingKey);
+    }
+
+    function persistOpenSettingState() {
+        const rows = [...(document.querySelectorAll(".setting-row") || [])];
+        const openKeys = new Set(captureOpenSettingKeys());
+        const knownKeys = rows.map((row) => row.dataset?.settingKey).filter(Boolean);
+        const storedKeys = new Set(readUiState().openSettingKeys || []);
+        knownKeys.forEach((key) => openKeys.has(key) ? storedKeys.add(key) : storedKeys.delete(key));
+        writeUiState({ openSettingKeys: [...storedKeys] });
+    }
+
+    function handleSettingRowToggle(row) {
+        persistOpenSettingState();
+        if (restoredSettingRows.has(row)) {
+            restoredSettingRows.delete(row);
+            if (row.open) return;
+        }
+        scrollOpenedSettingIntoView(row);
+    }
 
     let navigationGuard = null;
     function setNavigationGuard(guard) { navigationGuard = guard; }
@@ -572,7 +641,7 @@
     }
 
     function initializeRow(row, settingsForm) {
-        row.addEventListener?.("toggle", () => scrollOpenedSettingIntoView(row));
+        row.addEventListener?.("toggle", () => handleSettingRowToggle(row));
         if (row.dataset.valueType === "image") {
             initializeImageRow(row, settingsForm);
             return;
@@ -714,6 +783,15 @@
     const draftOnly = document.querySelector("#draft-only-filter");
     const searchRegion = document.querySelector(".settings-search");
     let preFilterDisclosure = null;
+
+    function persistFilterState() {
+        const changes = {};
+        if (search) changes.search = String(search.value ?? "");
+        if (customizedOnly) changes.customizedOnly = Boolean(customizedOnly.checked);
+        if (draftOnly) changes.draftOnly = Boolean(draftOnly.checked);
+        writeUiState(changes);
+    }
+
     function applyFilters() {
         const query = search?.value.trim().toLowerCase() || "";
         const customized = Boolean(customizedOnly?.checked);
@@ -761,12 +839,40 @@
         }
         return visible;
     }
-    search?.addEventListener("input", applyFilters);
-    customizedOnly?.addEventListener("change", applyFilters);
-    draftOnly?.addEventListener("change", applyFilters);
+
+    function restoreOpenSettingRows(openSettingKeys) {
+        const openKeys = new Set(openSettingKeys || []);
+        document.querySelectorAll(".setting-row").forEach((row) => {
+            if (!openKeys.has(row.dataset?.settingKey)) return;
+            if (!row.open) {
+                restoredSettingRows.add(row);
+                row.open = true;
+            }
+            const category = row.closest?.(".setting-category, .dynamic-settings");
+            if (category) {
+                category.open = true;
+                category.setAttribute?.("open", "");
+            }
+        });
+    }
+
+    function restoreUiState() {
+        const state = readUiState();
+        if (search && typeof state.search === "string") search.value = state.search;
+        if (customizedOnly && typeof state.customizedOnly === "boolean") customizedOnly.checked = state.customizedOnly;
+        if (draftOnly && typeof state.draftOnly === "boolean") draftOnly.checked = state.draftOnly;
+        applyFilters();
+        restoreOpenSettingRows(state.openSettingKeys);
+        return state;
+    }
+
+    search?.addEventListener("input", () => { persistFilterState(); applyFilters(); });
+    customizedOnly?.addEventListener("change", () => { persistFilterState(); applyFilters(); });
+    draftOnly?.addEventListener("change", () => { persistFilterState(); applyFilters(); });
     function reviewDraftChanges() {
         if (!draftOnly) return;
         draftOnly.checked = true;
+        persistFilterState();
         const visible = applyFilters();
         searchRegion?.scrollIntoView?.({ behavior: "smooth", block: "start" });
         const firstRow = visible ? document.querySelector('.setting-row[data-draft-change="true"]:not([hidden])') : null;
@@ -774,7 +880,7 @@
         (firstSummary || draftOnly || search)?.focus?.();
     }
     document.querySelector("[data-review-draft]")?.addEventListener("click", reviewDraftChanges);
-    applyFilters();
+    restoreUiState();
 
     document.querySelectorAll(".html-preview").forEach((frame) => {
         const source = frame.previousElementSibling;
@@ -1018,6 +1124,7 @@
     globalThis.SettingsWorkflow = {
         continuePipeline, lifecycleSubmit, needsLiveConfirmation, disableDirtyMutations, discardPendingChanges, clearEditSessionStatus, hasImageUpload,
         restoreContextControl, applyFilters, reviewDraftChanges, copyPreviewUrl, unsavedMessage, setUnsavedDialogMode, cancelWorkflowDialog, bindDialogCancellation,
+        readUiState, writeUiState, captureOpenSettingKeys, restoreUiState,
         workflowState: () => ({ pending, submitting, approved }),
         setWorkflowState: (state) => { pending = state.pending; submitting = state.submitting; approved = state.approved; }
     };
