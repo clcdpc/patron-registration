@@ -111,6 +111,7 @@ namespace Clc.PatronRegistration
         public string Password2 { get; set; } = string.Empty;
 
         [DbConfiguredDisplayName]
+        [DbConfiguredRequired]
         public int? RequestPickupBranchID { get; set; }
 
         [DbConfiguredDisplayName]

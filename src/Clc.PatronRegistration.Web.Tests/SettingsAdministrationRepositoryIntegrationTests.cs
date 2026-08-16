@@ -105,13 +105,14 @@ public sealed class SettingsAdministrationRepositoryIntegrationTests
             using var database = new SqlConnection(candidateConnectionString);
             database.Open();
             DeployExistingRegistrationSettingsSchema(database);
-            foreach (var file in new[] { "001-settings-administration.sql", "002-preview-operational-branch.sql", "003-expand-audit-setting-values.sql", "004-registration-form-assets.sql", "005-registration-form-asset-scope.sql", "006-register-header-image-asset-setting.sql", "007-remove-legacy-header-image-url.sql" })
+            foreach (var file in new[] { "001-settings-administration.sql", "002-preview-operational-branch.sql", "003-expand-audit-setting-values.sql", "004-registration-form-assets.sql", "005-registration-form-asset-scope.sql", "006-register-header-image-asset-setting.sql", "007-remove-legacy-header-image-url.sql", "008-migrate-legacy-registration-field-settings.sql" })
             {
                 Execute(database, File.ReadAllText(Path.Combine(RepositoryRoot(), "database", file)), 30);
             }
-            // Exercise both header-image migrations' repeatability during fixture deployment.
+            // Exercise the incremental migrations' repeatability during fixture deployment.
             Execute(database, File.ReadAllText(Path.Combine(RepositoryRoot(), "database", "006-register-header-image-asset-setting.sql")), 30);
             Execute(database, File.ReadAllText(Path.Combine(RepositoryRoot(), "database", "007-remove-legacy-header-image-url.sql")), 30);
+            Execute(database, File.ReadAllText(Path.Combine(RepositoryRoot(), "database", "008-migrate-legacy-registration-field-settings.sql")), 30);
             databaseConnectionString = candidateConnectionString;
             schemaReady = true;
         }
@@ -287,6 +288,84 @@ update dbo.RegistrationSettingsCacheGeneration set Generation=0,ModifiedAtUtc=SY
         Assert.AreEqual(DraftStatus.Committed, repository.GetDraft(activeDraft)!.Status);
         Assert.AreEqual(1L, repository.GetVersion(101, "form"));
         Assert.AreEqual(0, Scalar<int>("select count(*) from dbo.RegistrationFormSettings where Setting='header_image_url'"));
+    }
+
+    [TestMethod]
+    public void Migration008_MigratesOwnedRowsDraftsAndSettingTypesIdempotently()
+    {
+        var migration = File.ReadAllText(Path.Combine(RepositoryRoot(), "database", "008-migrate-legacy-registration-field-settings.sql"));
+        using (var connection = Open())
+        {
+            SeedLegacyRegistrationFieldSetting(connection, 3, "legal_name_checkbox_label", "branch-form", "Branch legal name");
+            SeedLegacyRegistrationFieldSetting(connection, 3, "ecard_checkbox_label", string.Empty, "Branch e-card");
+            SeedLegacyRegistrationFieldSetting(connection, 2, "mailing_list_checkbox_label", "library-form", "Library mailing list");
+            SeedLegacyRegistrationFieldSetting(connection, 1, "require_preferred_pickup_location", "system-form", "true");
+            SeedLegacyRegistrationFieldSetting(connection, 2, "ecard_checkbox_label", string.Empty, "Library e-card");
+            SeedLegacyRegistrationFieldSetting(connection, 1, "mailing_list_checkbox_label", string.Empty, "System mailing list");
+            SeedLegacyRegistrationFieldSetting(connection, 3, "require_preferred_pickup_location", "branch-require", "true");
+            SeedLegacyRegistrationFieldSetting(connection, 3, "legal_name_checkbox_label", "conflict", "legacy value");
+            SeedLegacyRegistrationFieldSetting(connection, 3, "label.UseLegalName", "conflict", "replacement value");
+        }
+
+        var activeDraftId = SeedDraftAtScope(101, "form", "Active");
+        SeedRawDraftMutation(activeDraftId, "legal_name_checkbox_label", "Upsert", "draft legal name");
+        SeedRawDraftMutation(activeDraftId, "ecard_checkbox_label", "RemoveOverride", null);
+        SeedRawDraftMutation(activeDraftId, "mailing_list_checkbox_label", "Upsert", "legacy draft mailing list");
+        SeedRawDraftMutation(activeDraftId, "label.AddToMailingList", "Upsert", "replacement draft mailing list");
+        SeedRawDraftMutation(activeDraftId, "require_preferred_pickup_location", "Upsert", "true");
+
+        var committedDraftId = SeedDraftAtScope(101, "historical", "Committed");
+        SeedRawDraftMutation(committedDraftId, "legal_name_checkbox_label", "Upsert", "historical legal name");
+
+        using (var connection = Open())
+        {
+            Execute(connection, migration, 30);
+            Execute(connection, migration, 30);
+        }
+
+        foreach (var key in new[]
+        {
+            "legal_name_checkbox_label", "ecard_checkbox_label", "mailing_list_checkbox_label",
+            "require_preferred_pickup_location"
+        })
+        {
+            Assert.AreEqual(0, Scalar<int>($"select count(*) from dbo.RegistrationFormSettingTypes where Setting='{key}'"), key);
+            Assert.AreEqual(0, Scalar<int>($"select count(*) from dbo.RegistrationFormSettings where Setting='{key}'"), key);
+            Assert.AreEqual(0, Scalar<int>($"select count(*) from dbo.RegistrationSettingDraftChanges where SettingKey='{key}' and DraftId in (select DraftId from dbo.RegistrationSettingDrafts where Status='Active')"), key);
+        }
+
+        foreach (var key in new[]
+        {
+            "label.UseLegalName", "label.IsECard", "label.AddToMailingList", "require.RequestPickupBranchID"
+        })
+        {
+            Assert.AreEqual(1, Scalar<int>($"select count(*) from dbo.RegistrationFormSettingTypes where Setting='{key}'"), key);
+        }
+
+        Assert.AreEqual("Branch legal name", ReadSettingValue(3, "branch-form", "label.UseLegalName"));
+        Assert.AreEqual("Branch e-card", ReadSettingValue(3, string.Empty, "label.IsECard"));
+        Assert.AreEqual("Library mailing list", ReadSettingValue(2, "library-form", "label.AddToMailingList"));
+        Assert.AreEqual("true", ReadSettingValue(1, "system-form", "require.RequestPickupBranchID"));
+        Assert.AreEqual("Library e-card", ReadSettingValue(2, string.Empty, "label.IsECard"));
+        Assert.AreEqual("System mailing list", ReadSettingValue(1, string.Empty, "label.AddToMailingList"));
+        Assert.AreEqual("true", ReadSettingValue(3, "branch-require", "require.RequestPickupBranchID"));
+        Assert.AreEqual("replacement value", ReadSettingValue(3, "conflict", "label.UseLegalName"));
+        Assert.AreEqual(0, Scalar<int>("select count(*) from dbo.RegistrationFormSettings where Setting='label.UseLegalName' and OrganizationID=2 and FormCode='conflict'"));
+        Assert.AreEqual(0, Scalar<int>("select count(*) from dbo.RegistrationFormSettings where Setting='label.UseLegalName' and OrganizationID=1 and FormCode='branch-form'"));
+
+        CollectionAssert.AreEquivalent(
+            new[]
+            {
+                "label.AddToMailingList|Upsert|replacement draft mailing list",
+                "label.UseLegalName|Upsert|draft legal name",
+                "require.RequestPickupBranchID|Upsert|true",
+                "label.IsECard|RemoveOverride|"
+            },
+            ReadChanges(activeDraftId).ToArray());
+        CollectionAssert.AreEquivalent(
+            new[] { "legal_name_checkbox_label|Upsert|historical legal name" },
+            ReadChanges(committedDraftId).ToArray());
+        Assert.AreEqual(0, Scalar<int>("select count(*) from dbo.RegistrationSettingDraftChanges where DraftId in (select DraftId from dbo.RegistrationSettingDrafts where Status='Active') and SettingKey in ('legal_name_checkbox_label','ecard_checkbox_label','mailing_list_checkbox_label','require_preferred_pickup_location')"));
     }
 
     [TestMethod]
@@ -849,16 +928,48 @@ values(@draftId,@hash,0,101,'legacy','legacy',null)", parameters: command =>
         Execute(connection, "insert dbo.RegistrationFormSettings(OrganizationID,Setting,FormCode,Value) values(101,'header_image_url','form','https://example.test/legacy.png');");
     }
 
+    private static void SeedLegacyRegistrationFieldSetting(SqlConnection connection, int organizationId, string settingKey, string formCode, string value)
+    {
+        Execute(connection, @"
+if not exists (select 1 from dbo.RegistrationFormSettingTypes where Setting=@settingKey)
+    insert dbo.RegistrationFormSettingTypes(Setting) values(@settingKey);
+insert dbo.RegistrationFormSettings(OrganizationID,Setting,FormCode,Value)
+values(@organizationId,@settingKey,@formCode,@value);", parameters: command =>
+        {
+            command.Parameters.AddWithValue("@organizationId", organizationId);
+            command.Parameters.AddWithValue("@settingKey", settingKey);
+            command.Parameters.AddWithValue("@formCode", formCode);
+            command.Parameters.AddWithValue("@value", value);
+        });
+    }
+
     private void SeedRawDraftChange(long draftId, string settingKey, string value)
+    {
+        SeedRawDraftMutation(draftId, settingKey, "Upsert", value);
+    }
+
+    private void SeedRawDraftMutation(long draftId, string settingKey, string operation, string? value)
     {
         using var connection = Open();
         Execute(connection, @"insert dbo.RegistrationSettingDraftChanges(DraftId,SettingKey,Operation,Value,ModifiedBy)
-values(@draftId,@settingKey,'Upsert',@value,'migration-test')", parameters: command =>
+values(@draftId,@settingKey,@operation,@value,'migration-test')", parameters: command =>
         {
             command.Parameters.AddWithValue("@draftId", draftId);
             command.Parameters.AddWithValue("@settingKey", settingKey);
-            command.Parameters.AddWithValue("@value", value);
+            command.Parameters.AddWithValue("@operation", operation);
+            command.Parameters.AddWithValue("@value", (object?)value ?? DBNull.Value);
         });
+    }
+
+    private long SeedDraftAtScope(int organizationId, string formCode, string status)
+    {
+        using var connection = Open();
+        using var command = Command(connection, @"insert dbo.RegistrationSettingDrafts(OrganizationId,FormCode,BaselineVersion,Status,CreatedBy,ModifiedBy)
+output inserted.DraftId values(@organizationId,@formCode,0,@status,'other','other')");
+        command.Parameters.AddWithValue("@organizationId", organizationId);
+        command.Parameters.AddWithValue("@formCode", formCode);
+        command.Parameters.AddWithValue("@status", status);
+        return (long)command.ExecuteScalar()!;
     }
 
     private long SeedActiveDraft(long baselineVersion, SettingDefinition definition, string value)
@@ -900,6 +1011,14 @@ output inserted.PreviewLinkId values(@draftId,@hash,0,101,'other','other',@expir
         command => command.Parameters.AddWithValue("@id", draftId), reader => new DraftState(reader.GetInt64(0), reader.GetDateTime(1), reader.GetString(2)));
     private List<string> ReadChanges(long draftId) => Query("select SettingKey,Operation,Value from dbo.RegistrationSettingDraftChanges where DraftId=@id order by SettingKey",
         command => command.Parameters.AddWithValue("@id", draftId), reader => $"{reader.GetString(0)}|{reader.GetString(1)}|{(reader.IsDBNull(2) ? "" : reader.GetString(2))}");
+    private string ReadSettingValue(int organizationId, string formCode, string settingKey) => QuerySingle(
+        "select Value from dbo.RegistrationFormSettings where OrganizationID=@organizationId and FormCode=@formCode and Setting=@settingKey",
+        command =>
+        {
+            command.Parameters.AddWithValue("@organizationId", organizationId);
+            command.Parameters.AddWithValue("@formCode", formCode);
+            command.Parameters.AddWithValue("@settingKey", settingKey);
+        }, reader => reader.IsDBNull(0) ? string.Empty : reader.GetString(0));
     private List<AuditState> ReadAudits() => Query("select EventType,MetadataJson,FailureReason,PreviousValue,NewValue,IsSensitive from dbo.RegistrationSettingAuditEvents order by AuditEventId", null,
         reader => new AuditState(reader.GetString(0), Text(reader, 1), Text(reader, 2), Text(reader, 3), Text(reader, 4), reader.GetBoolean(5)));
     private DateTime ReadPreviewExpiration(long previewLinkId) => QuerySingle("select ExpiresAtUtc from dbo.RegistrationSettingPreviewLinks where PreviewLinkId=@id",
