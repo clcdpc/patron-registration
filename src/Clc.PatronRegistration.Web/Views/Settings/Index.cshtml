@@ -30,9 +30,9 @@
 }
 
 <header class="settings-header">
-    <div>
+    <div class="settings-header-content">
         <h1>Registration settings</h1>
-        <p>Choose a library or branch and form, then review or change its registration settings. Settings not customized here continue to use the value provided by the next applicable level.</p>
+        <p>Choose a scope and form. Uncustomized values inherit from the next applicable level.</p>
     </div>
     <nav class="settings-navigation" aria-label="Settings administration">
         <a asp-action="Index" asp-route-organizationId="@Model.OrganizationId" asp-route-formCode="@Model.FormCode" aria-current="page">Settings</a>
@@ -50,39 +50,51 @@
     <div class="validation-summary" role="alert">@settingsError</div>
 }
 
-<form method="get" class="settings-context" aria-label="Choose settings context">
-        <strong>Settings for</strong>
-        <div class="context-organization">
-            <label for="organization-scope">System, library, or branch</label>
-            <select id="organization-scope" name="organizationId">
-                @foreach (var optionGroup in Enum.GetValues<Clc.PatronRegistration.Web.Models.ScopeOptionGroup>())
-                {
-                    var options = Model.Scopes.Where(scope => scope.Group == optionGroup).ToList();
-                    @if (options.Count > 0)
+<section class="settings-search settings-controls" aria-label="Settings controls">
+    <form method="get" class="settings-context" aria-label="Choose settings context">
+        <div class="settings-context-row settings-context-primary">
+            <div class="context-organization">
+                <label for="organization-scope">Scope <span class="visually-hidden">(system, library, or branch)</span></label>
+                <select id="organization-scope" name="organizationId">
+                    @foreach (var optionGroup in Enum.GetValues<Clc.PatronRegistration.Web.Models.ScopeOptionGroup>())
                     {
-                        <optgroup label="@optionGroup.ToString()">
-                        @foreach (var scope in options)
+                        var options = Model.Scopes.Where(scope => scope.Group == optionGroup).ToList();
+                        @if (options.Count > 0)
                         {
-                            bool isSelectedScope = scope.OrganizationId == Model.OrganizationId;
-                            <option value="@scope.OrganizationId" selected="@isSelectedScope">@scope.DisplayName</option>
+                            <optgroup label="@optionGroup.ToString()">
+                            @foreach (var scope in options)
+                            {
+                                bool isSelectedScope = scope.OrganizationId == Model.OrganizationId;
+                                <option value="@scope.OrganizationId" selected="@isSelectedScope">@scope.DisplayName</option>
+                            }
+                            </optgroup>
                         }
-                        </optgroup>
                     }
-                }
-            </select>
+                </select>
+            </div>
+            <div class="context-form">
+                <label for="form-code-scope">Form</label>
+                <select id="form-code-scope" name="formCode">
+                    @foreach (var form in Model.FormCodes)
+                    {
+                        bool isSelectedForm = form.FormCode == Model.FormCode;
+                        <option value="@form.FormCode" selected="@isSelectedForm">@form.DisplayName</option>
+                    }
+                </select>
+            </div>
+            <div class="settings-filter-group" role="group" aria-label="Setting filters">
+                <label class="inline-check"><input id="customized-only-filter" type="checkbox" /> <span>Customized only</span></label>
+                @if (draftChangeCount > 0) { <label class="inline-check"><input id="draft-only-filter" type="checkbox" /> <span>Show shared draft changes only</span></label> }
+            </div>
+            <noscript><button type="submit">View settings</button></noscript>
         </div>
-        <div class="context-form">
-            <label for="form-code-scope">Form</label>
-            <select id="form-code-scope" name="formCode">
-                @foreach (var form in Model.FormCodes)
-                {
-                    bool isSelectedForm = form.FormCode == Model.FormCode;
-                    <option value="@form.FormCode" selected="@isSelectedForm">@form.DisplayName</option>
-                }
-            </select>
+        <div class="settings-context-row settings-search-row">
+            <label id="search-label" for="setting-search">Search</label>
+            <input id="setting-search" type="search" autocomplete="off" placeholder="Search by setting name or description" />
+            <p id="search-status" aria-live="polite">@Model.Settings.Count settings</p>
         </div>
-        <noscript><button type="submit">View settings</button></noscript>
-</form>
+    </form>
+</section>
 
 @if (Model.ActiveDraft is not null)
 {
@@ -183,16 +195,6 @@
     </section>}
 </section>
 }
-<section class="settings-search" aria-labelledby="search-label">
-    <label id="search-label" for="setting-search">Search settings</label>
-    <input id="setting-search" type="search" autocomplete="off" placeholder="Search by setting name or description" />
-    <div class="settings-filter-group" role="group" aria-label="Setting filters">
-        <label class="inline-check"><input id="customized-only-filter" type="checkbox" /> <span>Show customized settings only</span></label>
-        @if (draftChangeCount > 0) { <label class="inline-check"><input id="draft-only-filter" type="checkbox" /> <span>Show shared draft changes only</span></label> }
-    </div>
-    <p id="search-status" aria-live="polite"></p>
-</section>
-
 <form asp-action="DirectSave" method="post" id="settings-form">
     @Html.AntiForgeryToken()
     <input type="hidden" name="OrganizationId" value="@Model.OrganizationId" />
@@ -201,23 +203,20 @@
     @if (Model.ActiveDraft is not null) { <input type="hidden" name="ExpectedDraftId" value="@Model.ActiveDraft.DraftId" /> }
     <p id="edit-session-status" class="validation-summary" role="alert" tabindex="-1" hidden></p>
 
-    <section aria-labelledby="ordinary-heading">
-        <h2 id="ordinary-heading">Settings</h2>
-        @foreach (var category in SettingCategoryPresentation.Ordered)
-        {
-            var rows = Model.Settings.Where(row => row.Definition.Group == SettingGroup.Ordinary && row.Definition.Category == category)
-                .OrderBy(row => row.Definition.DisplayName, StringComparer.OrdinalIgnoreCase).ToList();
-            if (rows.Count == 0) { continue; }
-            bool categoryOpen = rows.Any(row => row.DraftOperation is not null);
-            <details class="setting-category" open="@categoryOpen">
-                <summary>@category.DisplayName() <span>(@rows.Count)</span></summary>
-                <div class="settings-column-headings"><span>Setting</span><span>Value</span><span>Status</span></div>
-                <div class="settings-list">
-                @foreach (var row in rows) { <partial name="_SettingRow" model="row" /> }
-                </div>
-            </details>
-        }
-    </section>
+    @foreach (var category in SettingCategoryPresentation.Ordered)
+    {
+        var rows = Model.Settings.Where(row => row.Definition.Group == SettingGroup.Ordinary && row.Definition.Category == category)
+            .OrderBy(row => row.Definition.DisplayName, StringComparer.OrdinalIgnoreCase).ToList();
+        if (rows.Count == 0) { continue; }
+        bool categoryOpen = rows.Any(row => row.DraftOperation is not null);
+        <details class="setting-category" open="@categoryOpen">
+            <summary>@category.DisplayName() <span>(@rows.Count)</span></summary>
+            <div class="settings-column-headings"><span>Setting</span><span>Value</span><span>Status</span></div>
+            <div class="settings-list">
+            @foreach (var row in rows) { <partial name="_SettingRow" model="row" /> }
+            </div>
+        </details>
+    }
 
     @foreach (var group in groups)
     {

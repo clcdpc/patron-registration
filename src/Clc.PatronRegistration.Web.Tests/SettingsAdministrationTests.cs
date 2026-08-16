@@ -559,6 +559,33 @@ public class SettingsAdministrationTests
     }
 
     [TestMethod]
+    public void SettingsView_UsesCompactHeaderAndTwoRowControlPanel()
+    {
+        var root = FindRepositoryRoot();
+        var index = File.ReadAllText(Path.Combine(root, "src/Clc.PatronRegistration.Web/Views/Settings/Index.cshtml"));
+        var css = File.ReadAllText(Path.Combine(root, "src/Clc.PatronRegistration.Web/wwwroot/css/settings.css"));
+
+        StringAssert.Contains(index, "Choose a scope and form. Uncustomized values inherit from the next applicable level.");
+        Assert.IsFalse(index.Contains("Settings for", StringComparison.Ordinal));
+        StringAssert.Contains(index, "<section class=\"settings-search settings-controls\" aria-label=\"Settings controls\">");
+        StringAssert.Contains(index, "<div class=\"settings-context-row settings-context-primary\">");
+        StringAssert.Contains(index, "<label for=\"organization-scope\">Scope <span class=\"visually-hidden\">(system, library, or branch)</span></label>");
+        StringAssert.Contains(index, "<span>Customized only</span>");
+        StringAssert.Contains(index, "<div class=\"settings-context-row settings-search-row\">");
+        StringAssert.Contains(index, "<label id=\"search-label\" for=\"setting-search\">Search</label>");
+        StringAssert.Contains(index, "<p id=\"search-status\" aria-live=\"polite\">@Model.Settings.Count settings</p>");
+        Assert.IsFalse(index.Contains("id=\"ordinary-heading\"", StringComparison.Ordinal));
+        Assert.IsFalse(index.Contains(">Settings</h2>", StringComparison.Ordinal));
+
+        StringAssert.Contains(css, "justify-content: space-between");
+        StringAssert.Contains(css, "background: transparent");
+        StringAssert.Contains(css, "--settings-scope-field-width");
+        StringAssert.Contains(css, "--settings-form-field-width");
+        StringAssert.Contains(css, ".settings-search-row");
+        StringAssert.Contains(css, "grid-template-columns: var(--settings-control-label-width) minmax(0, 1fr)");
+    }
+
+    [TestMethod]
     public void SettingsSharedDraftMarkup_HasOneLiveResultRegionAndAccessibleReviewContracts()
     {
         var root = FindRepositoryRoot();

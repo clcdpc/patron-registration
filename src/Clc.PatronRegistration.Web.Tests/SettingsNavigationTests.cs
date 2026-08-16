@@ -55,7 +55,7 @@ public class SettingsNavigationTests
     }
 
     [TestMethod]
-    public void NavigationCss_IsCompactWrappingLeftAlignedAndAvoidsWidthHacks()
+    public void NavigationCss_IsSimpleWrappingRightAlignedTextLinksAndAvoidsWidthHacks()
     {
         var css = ReadWebFile("wwwroot", "css", "settings.css");
         var navigation = Rule(css, ".settings-navigation");
@@ -64,13 +64,16 @@ public class SettingsNavigationTests
 
         StringAssert.Contains(navigation, "flex-wrap: wrap");
         StringAssert.Contains(navigation, "width: fit-content");
+        StringAssert.Contains(navigation, "background: transparent");
+        StringAssert.Contains(navigation, "border: 0");
         StringAssert.Contains(header, "align-items: flex-start");
-        StringAssert.Contains(header, "flex-direction: column");
+        StringAssert.Contains(header, "justify-content: space-between");
         StringAssert.Contains(body, "padding-inline: clamp(.75rem, 1vw, 1.25rem)");
         StringAssert.Contains(body, "max-width: none");
         Assert.IsFalse(css.Contains("100vw", StringComparison.OrdinalIgnoreCase));
         Assert.IsFalse(css.Contains("float:", StringComparison.OrdinalIgnoreCase));
         Assert.IsFalse(navigation.Contains("position: absolute", StringComparison.OrdinalIgnoreCase));
+        Assert.IsFalse(navigation.Contains("background: #f3f3f3", StringComparison.OrdinalIgnoreCase));
         Assert.IsFalse(css.Contains("margin-left: -", StringComparison.OrdinalIgnoreCase));
         Assert.IsFalse(css.Contains("margin-right: -", StringComparison.OrdinalIgnoreCase));
     }

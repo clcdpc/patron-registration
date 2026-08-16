@@ -103,43 +103,49 @@ body.settings-administration-page #regFormContainer {
 
 .settings-header {
     align-items: flex-start;
-    flex-direction: column;
-    justify-content: flex-start;
-    margin-bottom: .5rem
+    justify-content: space-between;
+    margin-bottom: .35rem
 }
 
+    .settings-header > div, .settings-header > h1 {
+        flex: 1 1 32rem;
+        min-width: 0
+    }
+
     .settings-header h1, .settings-panel h2 {
-        margin-block: .25rem
+        margin-block: .15rem
     }
 
     .settings-header p {
-        margin: .25rem 0;
+        margin: .15rem 0;
         max-width: 70rem
     }
 
     .settings-navigation {
         align-items: center;
-        background: #f3f3f3;
-        border: 1px solid #c8c8c8;
-        border-radius: .35rem;
+        background: transparent;
+        border: 0;
+        border-radius: 0;
         box-sizing: border-box;
         display: flex;
+        flex: 0 0 auto;
         flex-wrap: wrap;
-        gap: .2rem;
+        gap: .25rem .9rem;
+        margin-left: auto;
         max-width: 100%;
-        padding: .25rem;
+        padding: .15rem 0;
         width: fit-content
     }
 
     .settings-navigation a {
-        border-radius: .25rem;
+        border-radius: 0;
         color: inherit;
-        padding: .4rem .65rem;
+        padding: .15rem 0;
         text-decoration: none
     }
 
     .settings-navigation a:hover {
-        background: #fff;
+        background: transparent;
         text-decoration: underline
     }
 
@@ -149,16 +155,22 @@ body.settings-administration-page #regFormContainer {
     }
 
     .settings-navigation a[aria-current="page"] {
-        background: #fff;
-        box-shadow: inset 0 0 0 1px #777;
-        font-weight: 700
+        background: transparent;
+        box-shadow: none;
+        font-weight: 700;
+        text-decoration: underline;
+        text-underline-offset: .15em
     }
 
 .settings-panel, .settings-search {
     border: 1px solid #c8c8c8;
     border-radius: .35rem;
-    margin-block: .65rem;
-    padding: .65rem
+    margin-block: .45rem;
+    padding: .55rem .65rem
+}
+
+.settings-controls {
+    margin-block: .35rem .5rem
 }
 
 .scope-form > div, .setting-editor > div {
@@ -625,36 +637,119 @@ body.settings-administration-page #regFormContainer {
 }
 
 .settings-context {
-    align-items: end;
+    --settings-control-gap: .65rem;
+    --settings-control-label-width: 4.25rem;
+    --settings-form-field-width: clamp(13rem, 20vw, 18rem);
+    --settings-scope-field-width: clamp(20rem, 36vw, 32rem);
+    --settings-search-width: calc(var(--settings-scope-field-width) + var(--settings-form-field-width) - var(--settings-control-label-width));
     display: grid;
-    gap: .5rem;
-    grid-template-columns: auto minmax(18rem,2fr) minmax(10rem,1fr) auto;
-    margin: .5rem 0;
-    padding: .25rem 0
+    gap: .45rem;
+    margin: 0;
+    padding: 0
 }
 
-    .settings-context > strong {
-        align-self: center;
-        font-size: 1.05rem
-    }
+.settings-context-row {
+    min-width: 0
+}
 
-    .settings-context > div {
-        display: grid;
-        gap: .15rem;
-        min-width: 0
-    }
+.settings-context-primary {
+    align-items: center;
+    display: flex;
+    flex-wrap: wrap;
+    gap: .45rem var(--settings-control-gap)
+}
 
-    .settings-context label {
-        font-size: .8rem;
-        font-weight: 600
-    }
+.settings-context-primary > .context-organization,
+.settings-context-primary > .context-form {
+    align-items: center;
+    display: grid;
+    flex: 0 1 var(--settings-scope-field-width);
+    gap: var(--settings-control-gap);
+    grid-template-columns: var(--settings-control-label-width) minmax(0, 1fr);
+    min-width: 0
+}
 
-    .settings-context select {
-        box-sizing: border-box;
-        min-height: 2.25rem;
-        min-width: 0;
-        width: 100%
-    }
+.settings-context-primary > .context-form {
+    flex-basis: var(--settings-form-field-width)
+}
+
+.settings-context label {
+    font-size: .85rem;
+    font-weight: 600
+}
+
+.settings-context-primary > .context-organization > label,
+.settings-context-primary > .context-form > label,
+.settings-search-row > label {
+    white-space: nowrap
+}
+
+.settings-context select {
+    box-sizing: border-box;
+    min-height: 2.3rem;
+    min-width: 0;
+    width: 100%
+}
+
+.settings-controls .settings-filter-group {
+    align-items: center;
+    display: flex;
+    flex: 0 1 auto;
+    flex-wrap: wrap;
+    gap: .3rem .8rem;
+    margin: 0;
+    min-width: 0
+}
+
+.settings-controls .inline-check {
+    align-items: center;
+    display: inline-flex;
+    gap: .35rem;
+    margin: 0;
+    max-width: 100%;
+    white-space: normal;
+    vertical-align: middle
+}
+
+.settings-controls .inline-check input[type="checkbox"] {
+    flex: 0 0 auto;
+    height: auto;
+    margin: 0;
+    min-height: 0;
+    width: auto
+}
+
+.settings-controls .inline-check input[type="checkbox"]:focus-visible {
+    outline: 3px solid #1b65a7;
+    outline-offset: 2px
+}
+
+.settings-search-row {
+    align-items: center;
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--settings-control-gap);
+    min-width: 0
+}
+
+.settings-search-row > label {
+    flex: 0 0 var(--settings-control-label-width)
+}
+
+.settings-search-row input[type="search"] {
+    flex: 0 1 var(--settings-search-width);
+    margin: 0;
+    max-width: 100%;
+    min-width: 12rem;
+    width: var(--settings-search-width)
+}
+
+.settings-controls .settings-search-row > p {
+    flex: 0 0 auto;
+    margin: 0 0 0 auto;
+    min-height: 0;
+    white-space: nowrap
+}
 
 .setting-row[data-presentation-state="notset"] .summary-value, .setting-row[data-presentation-state="notset"] .setting-status {
     color: #666
@@ -676,18 +771,57 @@ body.settings-administration-page #regFormContainer {
 }
 
 @media(max-width:52rem) {
-    .settings-context {
+    .settings-context-primary > .context-organization,
+    .settings-context-primary > .context-form {
+        flex-basis: calc(50% - (var(--settings-control-gap) / 2));
+        flex-grow: 1
+    }
+
+    .settings-context-primary > .settings-filter-group {
+        flex-basis: 100%
+    }
+
+    .settings-search-row input[type="search"] {
+        flex-basis: var(--settings-search-width)
+    }
+}
+
+@media(max-width:40rem) {
+    .settings-context-primary {
         align-items: stretch;
+        flex-direction: column
+    }
+
+    .settings-context-primary > .context-organization,
+    .settings-context-primary > .context-form {
+        flex-basis: auto;
+        width: 100%
+    }
+
+    .settings-context-primary > .settings-filter-group {
+        flex-basis: auto
+    }
+
+    .settings-search-row {
+        align-items: stretch;
+        display: grid;
+        gap: .35rem;
         grid-template-columns: 1fr
     }
 
-        .settings-context > strong {
-            margin-bottom: .1rem
-        }
+    .settings-search-row > label {
+        flex: none
+    }
 
-        .settings-context button {
-            width: 100%
-        }
+    .settings-search-row input[type="search"] {
+        flex: none;
+        min-width: 0;
+        width: 100%
+    }
+
+    .settings-controls .settings-search-row > p {
+        margin: 0
+    }
 }
 
 /* Settings audit disclosure list */
