@@ -555,7 +555,24 @@
         showNormalState();
     }
 
+    function scrollOpenedSettingIntoView(row) {
+        if (!row?.open) return;
+        const schedule = globalThis.requestAnimationFrame || ((callback) => callback());
+        schedule(() => {
+            if (!row.open) return;
+            const rect = row.getBoundingClientRect?.();
+            const viewportHeight = globalThis.innerHeight || document.documentElement?.clientHeight || 0;
+            if (!rect || !viewportHeight) return;
+            const bottomMargin = 32;
+            const overflow = rect.bottom + bottomMargin - viewportHeight;
+            if (overflow <= 0) return;
+            const reducedMotion = globalThis.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches;
+            globalThis.scrollBy?.({ top: overflow, left: 0, behavior: reducedMotion ? "auto" : "smooth" });
+        });
+    }
+
     function initializeRow(row, settingsForm) {
+        row.addEventListener?.("toggle", () => scrollOpenedSettingIntoView(row));
         if (row.dataset.valueType === "image") {
             initializeImageRow(row, settingsForm);
             return;
