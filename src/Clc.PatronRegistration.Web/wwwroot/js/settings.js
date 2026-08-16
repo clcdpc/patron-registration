@@ -650,7 +650,7 @@
         if (drawerHeight > availableHeight) {
             // A drawer taller than the viewport cannot fit. Keep its important top portion usable
             // with one deterministic correction instead of chasing both edges.
-            if (rect.top < topMargin || rect.top > viewportHeight - topMargin) {
+            if (rect.top !== topMargin) {
                 scrollDelta = rect.top - topMargin;
             }
         } else {

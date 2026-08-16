@@ -1679,6 +1679,36 @@ test("ensureSettingVisible applies only the required downward, upward, or no del
     assert.equal(visible.scrollCalls.length, 0);
 });
 
+test("ensureSettingVisible positions oversized drawers at the top margin", () => {
+    const low = settingsUiStateFixture({ rowRect: { top: 400, bottom: 1100 } });
+    low.rows[0].open = true;
+    low.sandbox.SettingsWorkflow.ensureSettingVisible(low.rows[0]);
+    assert.equal(low.scrollCalls.length, 1);
+    assert.equal(low.scrollCalls[0].top, 368);
+
+    const above = settingsUiStateFixture({ rowRect: { top: -50, bottom: 700 } });
+    above.rows[0].open = true;
+    above.sandbox.SettingsWorkflow.ensureSettingVisible(above.rows[0]);
+    assert.equal(above.scrollCalls.length, 1);
+    assert.equal(above.scrollCalls[0].top, -82);
+
+    const aligned = settingsUiStateFixture({ rowRect: { top: 32, bottom: 800 } });
+    aligned.rows[0].open = true;
+    aligned.sandbox.SettingsWorkflow.ensureSettingVisible(aligned.rows[0]);
+    assert.equal(aligned.scrollCalls.length, 0);
+});
+
+test("restoration positions an oversized last-opened setting at the top margin instantly", () => {
+    const fixture = settingsUiStateFixture({
+        initialState: { openSettingKeys: ["alpha"], lastOpenedSettingKey: "alpha" },
+        rowRect: { top: 400, bottom: 1100 }
+    });
+
+    assert.equal(fixture.scrollCalls.length, 1);
+    assert.equal(fixture.scrollCalls[0].top, 368);
+    assert.equal(fixture.scrollCalls[0].behavior, "auto");
+});
+
 test("user opening honors reduced motion while restoration remains instant", () => {
     const reduced = settingsUiStateFixture({ rowRect: { top: 400, bottom: 580 }, reducedMotion: true });
     reduced.rows[0].open = true;
