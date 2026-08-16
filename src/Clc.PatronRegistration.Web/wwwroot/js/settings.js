@@ -21,8 +21,8 @@
 
     function readUiState() {
         const storage = settingsUiStateStorage();
-        if (!storage?.getItem) return {};
         try {
+            if (!storage || typeof storage.getItem !== "function") return {};
             const raw = storage.getItem(settingsUiStateStorageKey);
             if (!raw) return {};
             const parsed = JSON.parse(raw);
@@ -42,8 +42,8 @@
 
     function writeUiState(changes = {}) {
         const storage = settingsUiStateStorage();
-        if (!storage?.setItem) return;
         try {
+            if (!storage || typeof storage.setItem !== "function") return;
             const state = { ...readUiState(), ...changes };
             if (Array.isArray(state.openSettingKeys)) {
                 state.openSettingKeys = [...new Set(state.openSettingKeys.filter((key) => typeof key === "string"))];

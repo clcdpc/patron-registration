@@ -1613,6 +1613,15 @@ test("malformed or unavailable session storage does not break settings initializ
         unavailableFixture.search.value = "alpha";
         unavailableFixture.search.dispatchEvent(new Event("input"));
     });
+
+    const throwingPropertyStorage = {};
+    Object.defineProperty(throwingPropertyStorage, "getItem", {
+        get() { throw new Error("sessionStorage unavailable"); }
+    });
+    Object.defineProperty(throwingPropertyStorage, "setItem", {
+        get() { throw new Error("sessionStorage unavailable"); }
+    });
+    assert.doesNotThrow(() => settingsUiStateFixture({ storage: throwingPropertyStorage }));
 });
 
 test("persisted UI state excludes unsaved values and edit-session state", () => {
