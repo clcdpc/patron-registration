@@ -10,6 +10,7 @@
     bool hasDraftOperation = Model.DraftOperation.HasValue;
     bool isRemoveOverride = Model.DraftOperation == DraftOperation.RemoveOverride;
     bool isDraftUpsert = Model.DraftOperation == DraftOperation.Upsert;
+    bool preservesFullValueFormatting = definition.ValueType is SettingValueType.LongString or SettingValueType.Html or SettingValueType.EmailTemplate;
     var editorValue = definition.IsSensitive ? string.Empty : isDraftUpsert
         ? Model.DraftValue
         : resolution.OwnsOverride ? resolution.CurrentOverrideValue : resolution.EffectiveValue;
@@ -17,6 +18,24 @@
     var safeEffective = definition.IsSensitive ? string.Empty : resolution.EffectiveValue;
     var searchText = $"{definition.DisplayName} {definition.Key} {definition.Description} {safeEffective}".ToLowerInvariant();
     var presentation = Clc.PatronRegistration.Web.Models.SettingValuePresentation.ForRow(Model);
+    var expandedCurrentValue = presentation.CurrentValue;
+    if (preservesFullValueFormatting && !definition.IsSensitive)
+    {
+        expandedCurrentValue = !resolution.SourceOrganizationId.HasValue
+            ? "Not configured"
+            : resolution.EffectiveValue is { Length: 0 } ? "Blank" : resolution.EffectiveValue ?? "Not configured";
+    }
+    var expandedDraftValue = string.Empty;
+    if (hasDraftOperation)
+    {
+        expandedDraftValue = isRemoveOverride
+            ? "Use inherited value"
+            : definition.IsSensitive
+                ? "Set a hidden value"
+                : preservesFullValueFormatting
+                    ? Model.DraftValue is { Length: 0 } ? "Blank" : Model.DraftValue ?? "Not configured"
+                    : Clc.PatronRegistration.Web.Models.SettingValuePresentation.Format(definition, Model.DraftValue, true);
+    }
     var imageHasValue = Model.EffectiveAsset is not null || Model.EffectiveAssetMissing;
     var imageHasStagedValue = Model.StagedAsset is not null || Model.StagedAssetMissing;
     var imageSummary = !isImage
@@ -83,18 +102,42 @@
         </span>
     </summary>
     <div class="setting-content">
-    <p>@definition.Description</p>
-    <div class="setting-facts" aria-label="Current setting details">
-        @if (!isImage)
+    <p class="setting-description">@definition.Description</p>
+
+    @if (!isImage)
+    {
+        <section class="setting-value-panel" aria-label="Current value">
+            <div class="setting-value-panel-heading">
+                <strong>Current value</strong>
+                <span class="setting-value-source">Source: @(isNotSet ? "Not configured" : Model.SourceDescription)</span>
+            </div>
+            @if (preservesFullValueFormatting)
+            {
+                <pre class="setting-current-value setting-current-value-full">@expandedCurrentValue</pre>
+            }
+            else
+            {
+                <div class="setting-current-value">@expandedCurrentValue</div>
+            }
+        </section>
+
+        @if (hasDraftOperation)
         {
-            <span class="setting-fact"><strong>Value:</strong> <span>@presentation.CurrentValue</span></span>
+            <section class="setting-value-panel setting-draft-value-panel" aria-label="Shared draft value">
+                <div class="setting-value-panel-heading">
+                    <strong>Shared draft</strong>
+                </div>
+                @if (preservesFullValueFormatting && !isRemoveOverride && !definition.IsSensitive)
+                {
+                    <pre class="setting-current-value setting-current-value-full">@expandedDraftValue</pre>
+                }
+                else
+                {
+                    <div class="setting-current-value">@expandedDraftValue</div>
+                }
+            </section>
         }
-        <span class="setting-fact"><strong>Source:</strong> <span>@(isNotSet ? "Not configured" : Model.SourceDescription)</span></span>
-        @if (hasDraftOperation && !isImage)
-        {
-            <span class="setting-fact"><strong>Shared draft:</strong> <span>@(isRemoveOverride ? "Use inherited value" : isDraftUpsert && definition.IsSensitive ? "Set a hidden value" : $"Set “{Model.DraftValue}”")</span></span>
-        }
-    </div>
+    }
 
     @if (isImage)
     {
