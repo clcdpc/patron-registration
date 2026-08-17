@@ -35,30 +35,62 @@
 }
 
 .setting-content {
-    padding-block: .25rem .55rem
+    padding-block: .35rem .65rem
 }
 
-.setting-content > p {
-    margin: .2rem 0 .35rem
+.setting-description {
+    color: #333;
+    margin: .2rem 0 .55rem;
+    max-width: 72rem
 }
 
-.setting-facts {
+.setting-value-panel {
+    background: #f7f9fb;
+    border: 1px solid #c9d2da;
+    border-radius: .3rem;
+    margin: 0 0 .55rem;
+    max-width: 72rem;
+    overflow: hidden
+}
+
+.setting-value-panel-heading {
     align-items: baseline;
-    color: #454545;
+    border-bottom: 1px solid #d7dee4;
     display: flex;
     flex-wrap: wrap;
-    gap: .2rem 1.25rem;
-    margin: 0 0 .4rem
+    gap: .2rem .85rem;
+    justify-content: space-between;
+    padding: .35rem .55rem
 }
 
-.setting-fact {
-    display: inline-flex;
-    gap: .3rem;
-    min-width: 0
+.setting-value-source {
+    color: #555;
+    font-size: .9rem
 }
 
-.setting-fact span {
-    overflow-wrap: anywhere
+.setting-current-value {
+    background: #fff;
+    box-sizing: border-box;
+    overflow-wrap: anywhere;
+    padding: .5rem .6rem
+}
+
+.setting-current-value-full {
+    font-family: inherit;
+    margin: 0;
+    max-height: none;
+    overflow-x: auto;
+    white-space: pre-wrap;
+    word-break: break-word
+}
+
+.setting-draft-value-panel {
+    background: #f4f8fc;
+    border-color: #9bb8d1
+}
+
+.setting-draft-value-panel .setting-value-panel-heading {
+    border-bottom-color: #bfd0df
 }
 
 .setting-editor {
@@ -106,9 +138,9 @@
 }
 
 @media(max-width:40rem) {
-    .setting-facts {
+    .setting-value-panel-heading {
         display: grid;
-        gap: .2rem
+        gap: .15rem
     }
 
     .image-card-has-preview {
