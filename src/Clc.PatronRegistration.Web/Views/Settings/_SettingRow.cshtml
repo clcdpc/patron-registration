@@ -7,7 +7,9 @@
     var inputId = $"{token}-value";
     var operationId = $"{token}-operation";
     bool isImage = definition.ValueType == SettingValueType.Image;
-    bool isHtml = definition.ValueType == SettingValueType.Html;
+    bool isHtml = definition.ValueType == SettingValueType.Html || definition.Key is
+        "registration_text" or "kiosk_registration_text" or "ecard_registration_text" or
+        "valid_address_registration_text" or "valid_address_plus_name_registration_text";
     bool hasDraftOperation = Model.DraftOperation.HasValue;
     bool isRemoveOverride = Model.DraftOperation == DraftOperation.RemoveOverride;
     bool isDraftUpsert = Model.DraftOperation == DraftOperation.Upsert;
@@ -272,7 +274,7 @@
             else if (definition.ValueType is SettingValueType.LongString or SettingValueType.Html or SettingValueType.EmailTemplate)
             {
                 <textarea id="@inputId" class="setting-value" name="Changes[@token].Value" rows="4" disabled>@editorValue</textarea>
-                @if (definition.ValueType is SettingValueType.Html or SettingValueType.EmailTemplate)
+                @if (isHtml || definition.ValueType == SettingValueType.EmailTemplate)
                 {
                     <iframe sandbox="" title="Isolated preview for @definition.DisplayName" class="html-preview"></iframe>
                 }
