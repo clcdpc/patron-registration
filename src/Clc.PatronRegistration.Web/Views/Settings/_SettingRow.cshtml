@@ -7,10 +7,13 @@
     var inputId = $"{token}-value";
     var operationId = $"{token}-operation";
     bool isImage = definition.ValueType == SettingValueType.Image;
+    bool isHtml = definition.ValueType == SettingValueType.Html;
     bool hasDraftOperation = Model.DraftOperation.HasValue;
     bool isRemoveOverride = Model.DraftOperation == DraftOperation.RemoveOverride;
     bool isDraftUpsert = Model.DraftOperation == DraftOperation.Upsert;
     bool preservesFullValueFormatting = definition.ValueType is SettingValueType.LongString or SettingValueType.Html or SettingValueType.EmailTemplate;
+    bool hasCurrentHtmlValue = isHtml && resolution.SourceOrganizationId.HasValue && !string.IsNullOrEmpty(resolution.EffectiveValue);
+    bool hasDraftHtmlValue = isHtml && isDraftUpsert && !definition.IsSensitive && !string.IsNullOrEmpty(Model.DraftValue);
     var editorValue = definition.IsSensitive ? string.Empty : isDraftUpsert
         ? Model.DraftValue
         : resolution.OwnsOverride ? resolution.CurrentOverrideValue : resolution.EffectiveValue;
@@ -111,7 +114,11 @@
                 <strong>Current value</strong>
                 <span class="setting-value-source">Source: @(isNotSet ? "Not configured" : Model.SourceDescription)</span>
             </div>
-            @if (preservesFullValueFormatting)
+            @if (hasCurrentHtmlValue)
+            {
+                <iframe sandbox="" class="setting-html-value-preview" title="Formatted current value for @definition.DisplayName" srcdoc="@resolution.EffectiveValue"></iframe>
+            }
+            else if (preservesFullValueFormatting)
             {
                 <pre class="setting-current-value setting-current-value-full">@expandedCurrentValue</pre>
             }
@@ -127,7 +134,11 @@
                 <div class="setting-value-panel-heading">
                     <strong>Shared draft</strong>
                 </div>
-                @if (preservesFullValueFormatting && !isRemoveOverride && !definition.IsSensitive)
+                @if (hasDraftHtmlValue)
+                {
+                    <iframe sandbox="" class="setting-html-value-preview" title="Formatted shared draft value for @definition.DisplayName" srcdoc="@Model.DraftValue"></iframe>
+                }
+                else if (preservesFullValueFormatting && !isRemoveOverride && !definition.IsSensitive)
                 {
                     <pre class="setting-current-value setting-current-value-full">@expandedDraftValue</pre>
                 }
