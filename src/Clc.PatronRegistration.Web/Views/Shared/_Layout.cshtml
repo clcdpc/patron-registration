@@ -4,6 +4,7 @@
 @{
     var bodyClass = ViewData["BodyClass"] as string;
     var pageStylesheet = ViewData["PageStylesheet"] as string;
+    var pageStylesheetSupplement = ViewData["PageStylesheetSupplement"] as string;
     var headerImageRoute = Settings?.HeaderImageAssetId is int selectedAssetId
         ? PreviewContext.IsPreviewRequest && !string.IsNullOrWhiteSpace(PreviewContext.PlaintextToken)
             ? Url?.RouteUrl("PreviewRegistrationFormAsset", new { token = PreviewContext.PlaintextToken, id = selectedAssetId })
@@ -36,6 +37,10 @@
         @if (!string.IsNullOrWhiteSpace(pageStylesheet))
         {
             <link rel="stylesheet" href="@pageStylesheet" asp-append-version="true" />
+        }
+        @if (!string.IsNullOrWhiteSpace(pageStylesheetSupplement))
+        {
+            <link rel="stylesheet" href="@pageStylesheetSupplement" asp-append-version="true" />
         }
         @RenderBody()
     </div>
