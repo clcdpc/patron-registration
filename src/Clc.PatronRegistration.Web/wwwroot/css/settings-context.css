@@ -33,3 +33,89 @@
         white-space: normal
     }
 }
+
+.setting-content {
+    padding-block: .25rem .55rem
+}
+
+.setting-content > p {
+    margin: .2rem 0 .35rem
+}
+
+.setting-facts {
+    align-items: baseline;
+    color: #454545;
+    display: flex;
+    flex-wrap: wrap;
+    gap: .2rem 1.25rem;
+    margin: 0 0 .4rem
+}
+
+.setting-fact {
+    display: inline-flex;
+    gap: .3rem;
+    min-width: 0
+}
+
+.setting-fact span {
+    overflow-wrap: anywhere
+}
+
+.setting-editor {
+    gap: .4rem
+}
+
+.image-setting {
+    gap: .4rem;
+    max-width: 44rem
+}
+
+.image-card {
+    max-width: 40rem;
+    padding: .4rem .5rem
+}
+
+.image-card-has-preview {
+    align-items: center;
+    display: grid;
+    gap: .5rem .75rem;
+    grid-template-columns: minmax(10rem, 22rem) minmax(10rem, 1fr)
+}
+
+.image-card-copy {
+    display: grid;
+    gap: .15rem;
+    min-width: 0
+}
+
+.image-card-has-preview .setting-image-preview {
+    max-height: 7rem;
+    width: 100%
+}
+
+.image-actions {
+    margin-top: .05rem
+}
+
+.technical-details {
+    margin-top: .3rem
+}
+
+.setting-status {
+    min-width: 9rem
+}
+
+@media(max-width:40rem) {
+    .setting-facts {
+        display: grid;
+        gap: .2rem
+    }
+
+    .image-card-has-preview {
+        grid-template-columns: 1fr
+    }
+
+    .image-card-has-preview .setting-image-preview {
+        width: fit-content
+    }
+}
