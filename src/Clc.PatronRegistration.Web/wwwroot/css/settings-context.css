@@ -1,0 +1,31 @@
+@media(min-width:52.01rem) {
+    .settings-context {
+        --settings-right-rail-width: 12rem
+    }
+
+    .settings-context-primary > .context-organization {
+        flex: 1 1 var(--settings-scope-field-width)
+    }
+
+    .settings-context-primary > .context-form {
+        flex: 0 0 var(--settings-form-field-width)
+    }
+
+    .settings-controls .settings-filter-group {
+        box-sizing: border-box;
+        flex: 0 0 var(--settings-right-rail-width);
+        justify-content: flex-start
+    }
+
+    .settings-search-row input[type="search"] {
+        flex: 1 1 12rem;
+        width: auto
+    }
+
+    .settings-controls .settings-search-row > p {
+        box-sizing: border-box;
+        flex: 0 0 var(--settings-right-rail-width);
+        margin: 0;
+        text-align: left
+    }
+}
