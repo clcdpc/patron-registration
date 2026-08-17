@@ -84,6 +84,15 @@
     word-break: break-word
 }
 
+.setting-html-value-preview {
+    background: #fff;
+    border: 0;
+    box-sizing: border-box;
+    display: block;
+    min-height: 8rem;
+    width: 100%
+}
+
 .setting-draft-value-panel {
     background: #f4f8fc;
     border-color: #9bb8d1
