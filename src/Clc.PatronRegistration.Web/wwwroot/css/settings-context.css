@@ -26,6 +26,9 @@
         box-sizing: border-box;
         flex: 0 0 var(--settings-right-rail-width);
         margin: 0;
-        text-align: left
+        min-width: 0;
+        overflow-wrap: anywhere;
+        text-align: left;
+        white-space: normal
     }
 }
