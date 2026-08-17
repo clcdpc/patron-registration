@@ -15,6 +15,8 @@ public interface IRequestSettingProviderResolver
 public sealed class RequestSettingProviderResolver(
     IPreviewRequestContextAccessor previewContext,
     ISettingsPageBrandingContextAccessor settingsPageBrandingContext,
+    ISettingsAuthorizationService settingsAuthorization,
+    IFormCodeAvailabilityService formCodeAvailability,
     ICache cache,
     IOptions<SettingsAdministrationOptions> options,
     IRegistrationConfiguration registrationConfiguration) : IRequestSettingProviderResolver
@@ -29,17 +31,23 @@ public sealed class RequestSettingProviderResolver(
 
         if (settingsPageBrandingContext.Current is { } branding)
         {
-            var organizationId = branding.LibraryId;
+            var organizationId = branding.OrganizationId;
+            var formCode = string.Empty;
             if (int.TryParse(httpContext.Request.Query["organizationId"].ToString(), out var selectedOrganizationId) &&
+                settingsAuthorization.CanManage(httpContext.User, selectedOrganizationId) &&
                 cache.OrganizationCache.Any(organization => organization.OrganizationID == selectedOrganizationId))
             {
-                organizationId = selectedOrganizationId;
+                var selectedFormCode = httpContext.Request.Query["formCode"].ToString();
+                if (formCodeAvailability.IsAvailable(selectedOrganizationId, selectedFormCode))
+                {
+                    organizationId = selectedOrganizationId;
+                    formCode = selectedFormCode;
+                }
             }
 
             var libraryId = organizationId == options.Value.SystemOrganizationId
                 ? options.Value.SystemOrganizationId
                 : cache.OrganizationCache.GetLibrary(organizationId).OrganizationID;
-            var formCode = httpContext.Request.Query["formCode"].ToString();
 
             return new DbSettingProvider(
                 organizationId,
