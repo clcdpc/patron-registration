@@ -1,10 +1,11 @@
 @media(min-width:52.01rem) {
     .settings-context {
-        --settings-right-rail-width: 12rem
+        --settings-right-rail-width: 12rem;
+        --settings-scope-field-width: clamp(18rem, 28vw, 26rem)
     }
 
     .settings-context-primary > .context-organization {
-        flex: 1 1 var(--settings-scope-field-width)
+        flex: 0 1 var(--settings-scope-field-width)
     }
 
     .settings-context-primary > .context-form {
@@ -18,8 +19,8 @@
     }
 
     .settings-search-row input[type="search"] {
-        flex: 1 1 12rem;
-        width: auto
+        flex: 0 1 var(--settings-search-width);
+        width: var(--settings-search-width)
     }
 
     .settings-controls .settings-search-row > p {
