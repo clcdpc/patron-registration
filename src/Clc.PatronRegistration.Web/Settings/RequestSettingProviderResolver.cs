@@ -1,6 +1,7 @@
 using Clc.PatronRegistration.Configuration;
 using Clc.PatronRegistration;
 using Clc.PatronRegistration.Helpers;
+using Clc.Polaris.Api;
 using Microsoft.Extensions.Options;
 
 namespace Clc.PatronRegistration.Web.Settings;
@@ -28,12 +29,24 @@ public sealed class RequestSettingProviderResolver(
 
         if (settingsPageBrandingContext.Current is { } branding)
         {
+            var organizationId = branding.LibraryId;
+            if (int.TryParse(httpContext.Request.Query["organizationId"].ToString(), out var selectedOrganizationId) &&
+                cache.OrganizationCache.Any(organization => organization.OrganizationID == selectedOrganizationId))
+            {
+                organizationId = selectedOrganizationId;
+            }
+
+            var libraryId = organizationId == options.Value.SystemOrganizationId
+                ? options.Value.SystemOrganizationId
+                : cache.OrganizationCache.GetLibrary(organizationId).OrganizationID;
+            var formCode = httpContext.Request.Query["formCode"].ToString();
+
             return new DbSettingProvider(
-                branding.OrganizationId,
+                organizationId,
                 cache,
-                string.Empty,
+                formCode,
                 options.Value.SystemOrganizationId,
-                branding.LibraryId);
+                libraryId);
         }
 
         var routeValues = httpContext.Request.RouteValues;
