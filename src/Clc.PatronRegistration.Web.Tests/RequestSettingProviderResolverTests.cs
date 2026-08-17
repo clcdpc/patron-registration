@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using Clc.PatronRegistration.Configuration;
+using Clc.PatronRegistration.Helpers;
 using Clc.PatronRegistration.Web.Settings;
 using Clc.Polaris.Api.Configuration;
 using Microsoft.AspNetCore.Http;
@@ -73,7 +74,7 @@ public class RequestSettingProviderResolverTests
     }
 
     private static RequestSettingProviderResolver CreateResolver(
-        IClcCache cache,
+        ICache cache,
         ISettingsPageBrandingContextAccessor branding,
         ISettingsAuthorizationService authorization,
         IFormCodeAvailabilityService forms)
