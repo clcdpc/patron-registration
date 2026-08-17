@@ -31,7 +31,7 @@ public sealed class RequestSettingProviderResolver(
 
         if (settingsPageBrandingContext.Current is { } branding)
         {
-            var organizationId = branding.OrganizationId;
+            var brandingOrganizationId = branding.OrganizationId;
             var formCode = string.Empty;
             if (int.TryParse(httpContext.Request.Query["organizationId"].ToString(), out var selectedOrganizationId) &&
                 settingsAuthorization.CanManage(httpContext.User, selectedOrganizationId) &&
@@ -40,17 +40,17 @@ public sealed class RequestSettingProviderResolver(
                 var selectedFormCode = httpContext.Request.Query["formCode"].ToString();
                 if (formCodeAvailability.IsAvailable(selectedOrganizationId, selectedFormCode))
                 {
-                    organizationId = selectedOrganizationId;
+                    brandingOrganizationId = selectedOrganizationId;
                     formCode = selectedFormCode;
                 }
             }
 
-            var libraryId = organizationId == options.Value.SystemOrganizationId
+            var libraryId = brandingOrganizationId == options.Value.SystemOrganizationId
                 ? options.Value.SystemOrganizationId
-                : cache.OrganizationCache.GetLibrary(organizationId).OrganizationID;
+                : cache.OrganizationCache.GetLibrary(brandingOrganizationId).OrganizationID;
 
             return new DbSettingProvider(
-                organizationId,
+                brandingOrganizationId,
                 cache,
                 formCode,
                 options.Value.SystemOrganizationId,
