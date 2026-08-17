@@ -34,12 +34,19 @@
     var imageActionLabel = imageHasValue || imageHasStagedValue ? "Replace image" : "Upload image";
     var imageSource = Model.EffectiveAsset is null
         ? Model.EffectiveAssetMissing ? "Missing uploaded image" : "No image configured"
-        : resolution.OwnsOverride ? "Customized" : $"Inherited from {Model.SourceDescription}";
+        : resolution.OwnsOverride ? "Customized here" : $"Inherited from {Model.SourceDescription}";
+    var imageCurrentClass = Model.EffectiveAsset is not null
+        ? "image-card image-current image-card-has-preview"
+        : "image-card image-current";
     var liveState = resolution.OwnsOverride
         ? "customized"
         : resolution.SourceOrganizationId.HasValue ? "inherited" : "notset";
     var liveSummary = Clc.PatronRegistration.Web.Models.SettingReviewPresentation.Live(Model);
-    var rowStatus = hasDraftOperation ? "Shared draft" : "Live";
+    var rowStatus = hasDraftOperation
+        ? "Draft change"
+        : resolution.OwnsOverride
+            ? "Customized here"
+            : resolution.SourceOrganizationId.HasValue ? "Inherited" : "Not configured";
 }
 <details class="setting-row"
          data-search="@searchText"
@@ -77,48 +84,46 @@
     </summary>
     <div class="setting-content">
     <p>@definition.Description</p>
-    <dl class="setting-source">
-        <div>
-            <dt>Current value</dt>
-            <dd>@presentation.CurrentValue</dd>
-        </div>
-        <div>
-            <dt>Comes from</dt>
-            <dd>@(isNotSet ? "No value configured" : Model.SourceDescription)</dd>
-        </div>
-        <div>
-            <dt>Status</dt>
-            <dd>@(isNotSet ? "Not configured at the system, library, or branch level" : presentation.Status)</dd>
-        </div>
+    <div class="setting-facts" aria-label="Current setting details">
+        @if (!isImage)
+        {
+            <span class="setting-fact"><strong>Value:</strong> <span>@presentation.CurrentValue</span></span>
+        }
+        <span class="setting-fact"><strong>Source:</strong> <span>@(isNotSet ? "Not configured" : Model.SourceDescription)</span></span>
         @if (hasDraftOperation && !isImage)
         {
-            <div>
-                <dt>Shared draft</dt>
-                <dd>@(isRemoveOverride ? "Use inherited value" : isDraftUpsert && definition.IsSensitive ? "Set a hidden value" : $"Set “{Model.DraftValue}”")</dd>
-            </div>
+            <span class="setting-fact"><strong>Shared draft:</strong> <span>@(isRemoveOverride ? "Use inherited value" : isDraftUpsert && definition.IsSensitive ? "Set a hidden value" : $"Set “{Model.DraftValue}”")</span></span>
         }
-    </dl>
+    </div>
 
     @if (isImage)
     {
         <div class="image-setting" aria-labelledby="@inputId-label">
             <span id="@inputId-label" class="visually-hidden">@definition.DisplayName image controls</span>
-            <div class="image-card image-current" data-image-current>
-                <strong>Current</strong>
+            <div class="@imageCurrentClass" data-image-current>
                 @if (Model.EffectiveAsset is not null)
                 {
                     <img class="setting-image-preview" src="@Model.EffectiveAsset.PreviewUrl" alt="Current header image" />
-                    <small>@Model.EffectiveAsset.FileName</small>
-                    <span class="image-source-status">@imageSource</span>
+                    <div class="image-card-copy">
+                        <strong>Current image</strong>
+                        <small>@Model.EffectiveAsset.FileName</small>
+                        <span class="image-source-status">@imageSource</span>
+                    </div>
                 }
                 else if (Model.EffectiveAssetMissing)
                 {
-                    <p class="setting-missing-asset" role="status">The configured uploaded image is missing.</p>
-                    <span class="image-source-status">@imageSource</span>
+                    <div class="image-card-copy">
+                        <strong>Current image</strong>
+                        <p class="setting-missing-asset" role="status">The configured uploaded image is missing.</p>
+                        <span class="image-source-status">@imageSource</span>
+                    </div>
                 }
                 else
                 {
-                    <p>No image configured.</p>
+                    <div class="image-card-copy">
+                        <strong>Current image</strong>
+                        <span>No image configured.</span>
+                    </div>
                 }
             </div>
 
