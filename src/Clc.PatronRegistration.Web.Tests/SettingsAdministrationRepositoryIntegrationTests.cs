@@ -157,7 +157,8 @@ public sealed class SettingsAdministrationRepositoryIntegrationTests
         repository = new SettingsAdministrationRepository(databaseConnectionString!, clock);
         assetRepository = new RegistrationFormAssetRepository(databaseConnectionString!);
         using var connection = Open();
-        Execute(connection, @"delete dbo.RegistrationFormSettings;
+        Execute(connection, @"delete dbo.RegistrationFormCodeMetadata;
+delete dbo.RegistrationFormSettings;
 delete dbo.RegistrationFormAssets;
 delete dbo.RegistrationSettingAuditEvents;
 delete dbo.RegistrationSettingPreviewLinks;
@@ -1207,6 +1208,57 @@ update dbo.RegistrationSettingsCacheGeneration set Generation=0,ModifiedAtUtc=SY
         Assert.IsTrue(audits.All(row => !row.IsSensitive));
     }
 
+    [TestMethod]
+    public void SaveToSharedDraft_OrdinaryEditRevokesLivePreviewFromOlderRevision()
+    {
+        SeedVersion(1);
+        var draftId = SeedActiveDraft(1, First, "draft");
+        var hash = Enumerable.Repeat((byte)31, 32).ToArray();
+        var linkId = repository.CreatePreviewLink(draftId, hash, true, 101, 1, Catalog, true, Audit());
+        Assert.IsNotNull(repository.ResolvePreviewContext(hash));
+
+        repository.SaveToSharedDraft(101, "form", 1, draftId,
+            [Upsert(Second, "ordinary edit")], Catalog, Audit());
+
+        Assert.IsNull(repository.ResolvePreviewContext(hash));
+        Assert.IsNotNull(repository.GetPreviewLink(linkId)!.RevokedAtUtc);
+        Assert.AreEqual("ordinary edit", ReadChanges(draftId).Single(change => change.StartsWith("test.second|", StringComparison.Ordinal)).Split('|')[2]);
+    }
+
+    [TestMethod]
+    public void RemoveDraftChange_RevokesLivePreviewFromOlderRevision()
+    {
+        SeedVersion(1);
+        var draftId = SeedActiveDraft(1, First, "draft");
+        var hash = Enumerable.Repeat((byte)32, 32).ToArray();
+        var linkId = repository.CreatePreviewLink(draftId, hash, true, 101, 1, Catalog, true, Audit());
+        Assert.IsNotNull(repository.ResolvePreviewContext(hash));
+
+        repository.RemoveDraftChange(draftId, First.Key, Catalog, true, Audit());
+
+        Assert.IsNull(repository.ResolvePreviewContext(hash));
+        Assert.IsNotNull(repository.GetPreviewLink(linkId)!.RevokedAtUtc);
+        Assert.AreEqual(0, ReadChanges(draftId).Count);
+    }
+
+    [TestMethod]
+    public void SaveFormCode_StaleModifiedAtRejectsSecondMetadataEdit()
+    {
+        var originalModifiedAtUtc = new DateTime(2020, 1, 2, 3, 4, 5, DateTimeKind.Utc);
+        SeedFormCodeMetadata("kids", "Original", originalModifiedAtUtc);
+        var firstEdit = new FormCodeMetadata(101, "kids", "First edit", "Description", originalModifiedAtUtc,
+            "first", originalModifiedAtUtc, "first");
+
+        repository.SaveFormCode(firstEdit, false, Audit(), originalModifiedAtUtc);
+        Assert.AreEqual("First edit", ReadFormCodeMetadata("kids").DisplayName);
+
+        var staleEdit = firstEdit with { DisplayName = "Stale edit" };
+        Assert.ThrowsException<DBConcurrencyException>(() => repository.SaveFormCode(staleEdit, false, Audit(), originalModifiedAtUtc));
+
+        Assert.AreEqual("First edit", ReadFormCodeMetadata("kids").DisplayName);
+        AssertAuditCount("ConcurrencyConflict", 1);
+    }
+
     [DataTestMethod]
     [DataRow(1)]
     [DataRow(24)]
@@ -1634,6 +1686,23 @@ output inserted.PreviewLinkId values(@draftId,@hash,0,101,'other','other',@expir
         command.Parameters.AddWithValue("@revokedBy", revoked ? "other" : DBNull.Value);
         return (long)command.ExecuteScalar()!;
     }
+    private void SeedFormCodeMetadata(string formCode, string displayName, DateTime modifiedAtUtc)
+    {
+        using var connection = Open();
+        Execute(connection, @"insert dbo.RegistrationFormCodeMetadata(
+OrganizationId,FormCode,DisplayName,Description,CreatedAtUtc,CreatedBy,ModifiedAtUtc,ModifiedBy)
+values(101,@formCode,@displayName,'seed',@modifiedAtUtc,'seed',@modifiedAtUtc,'seed')", parameters: command =>
+        {
+            command.Parameters.AddWithValue("@formCode", formCode);
+            command.Parameters.AddWithValue("@displayName", displayName);
+            command.Parameters.AddWithValue("@modifiedAtUtc", modifiedAtUtc);
+        });
+    }
+    private FormCodeMetadata ReadFormCodeMetadata(string formCode) => QuerySingle(
+        "select OrganizationId,FormCode,DisplayName,Description,CreatedAtUtc,CreatedBy,ModifiedAtUtc,ModifiedBy from dbo.RegistrationFormCodeMetadata where OrganizationId=101 and FormCode=@formCode",
+        command => command.Parameters.AddWithValue("@formCode", formCode),
+        reader => new FormCodeMetadata(reader.GetInt32(0), reader.GetString(1), reader.GetString(2), Text(reader, 3),
+            reader.GetDateTime(4), reader.GetString(5), reader.GetDateTime(6), reader.GetString(7)));
     private long ReadScopeVersion() => Scalar<long>("select Version from dbo.RegistrationSettingScopeVersions where OrganizationId=101 and FormCode='form'");
     private int CountActiveDrafts() => Scalar<int>("select count(*) from dbo.RegistrationSettingDrafts where OrganizationId=101 and FormCode='form' and Status='Active'");
     private DraftState ReadDraft(long draftId) => QuerySingle("select BaselineVersion,ModifiedAtUtc,ModifiedBy from dbo.RegistrationSettingDrafts where DraftId=@id",

@@ -807,10 +807,19 @@ public sealed class SettingsController(
         }
         var actor = User.Identity?.Name ?? "unknown";
         var existing = repository.GetFormCodes(request.OrganizationId, settingsOptions.SystemOrganizationId)
-            .Any(form => form.OrganizationId == request.OrganizationId && form.FormCode.Equals(formCode, StringComparison.OrdinalIgnoreCase));
+            .FirstOrDefault(form => form.OrganizationId == request.OrganizationId && form.FormCode.Equals(formCode, StringComparison.OrdinalIgnoreCase));
+        if (existing is not null && !request.ExpectedModifiedAtUtc.HasValue)
+        {
+            return DraftConflictResult(request.OrganizationId, formCode);
+        }
         try
         {
-            repository.SaveFormCode(new(request.OrganizationId, formCode, request.DisplayName, request.Description, DateTime.UtcNow, actor, DateTime.UtcNow, actor), !existing, CreateAudit(request.OrganizationId, formCode));
+            repository.SaveFormCode(new(request.OrganizationId, formCode, request.DisplayName, request.Description, DateTime.UtcNow, actor, DateTime.UtcNow, actor), existing is null,
+                CreateAudit(request.OrganizationId, formCode), request.ExpectedModifiedAtUtc);
+        }
+        catch (DBConcurrencyException)
+        {
+            return DraftConflictResult(request.OrganizationId, formCode);
         }
         catch (InvalidOperationException exception)
         {
@@ -834,10 +843,19 @@ public sealed class SettingsController(
         {
             return View("Forms", BuildFormsViewModel(request.OrganizationId, principal.IsGlobal));
         }
+        if (!request.ExpectedModifiedAtUtc.HasValue)
+        {
+            return DraftConflictResult(request.OrganizationId, formCode);
+        }
         var actor = User.Identity?.Name ?? "unknown";
         try
         {
-            repository.SaveFormCode(new(request.OrganizationId, formCode, request.DisplayName, request.Description, DateTime.UtcNow, actor, DateTime.UtcNow, actor), false, CreateAudit(request.OrganizationId, formCode));
+            repository.SaveFormCode(new(request.OrganizationId, formCode, request.DisplayName, request.Description, DateTime.UtcNow, actor, DateTime.UtcNow, actor), false,
+                CreateAudit(request.OrganizationId, formCode), request.ExpectedModifiedAtUtc);
+        }
+        catch (DBConcurrencyException)
+        {
+            return DraftConflictResult(request.OrganizationId, formCode);
         }
         catch (InvalidOperationException exception)
         {

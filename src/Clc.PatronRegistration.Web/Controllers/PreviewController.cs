@@ -210,7 +210,13 @@ public sealed class PreviewController(
         {
             return Json(string.Empty);
         }
-        return Json(context.Settings.DriversLicenseFormat.Equals("barcode", StringComparison.OrdinalIgnoreCase)
+        var format = DriversLicenseFormatSettingParser.Parse(context.Settings.DriversLicenseFormat);
+        if (format.State == DriversLicenseFormatSettingState.Invalid)
+        {
+            return BadRequest("Driver’s-license scanner format is not configured with a supported value.");
+        }
+
+        return Json(format.State == DriversLicenseFormatSettingState.Barcode
             ? DriverLicenseHelper.ProcessDlBarcode(dlinfo)
             : DriverLicenseHelper.ProcessDlMagstripe(dlinfo));
     }

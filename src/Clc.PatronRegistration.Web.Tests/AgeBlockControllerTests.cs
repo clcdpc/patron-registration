@@ -7,6 +7,7 @@ using Clc.PatronRegistration.Web.Settings;
 using Clc.Polaris.Api;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc.ModelBinding.Validation;
 using Moq;
 using System.Reflection;
 
@@ -22,8 +23,9 @@ public sealed class AgeBlockControllerTests
     {
         var settings = Settings(true, "Live block");
         var controller = new RegistrationController(
-            Mock.Of<IPapiClient>(), Mock.Of<IMelissaRestClient>(), Mock.Of<IDbHelper>(), settings.Object,
-            Mock.Of<IEmailSender>(), Mock.Of<IRegistrationScopeResolver>());
+            Mock.Of<IPapiClient>(), Mock.Of<IDbHelper>(), settings.Object,
+            Mock.Of<IEmailSenderFactory>(), Mock.Of<IMelissaClientFactory>(), Mock.Of<IObjectModelValidator>(),
+            Mock.Of<IRegistrationScopeResolver>());
 
         var result = controller.AgeBlockCheck(UnderageBirthdate);
         var decision = (AgeBlockResult)((JsonResult)result).Value!;

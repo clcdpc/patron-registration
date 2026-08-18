@@ -1414,7 +1414,8 @@ public class SettingsControllerTests
             OrganizationId = ownerOrganizationId,
             FormCode = "kids",
             DisplayName = "Updated kids form",
-            Description = "Updated description"
+            Description = "Updated description",
+            ExpectedModifiedAtUtc = new DateTime(2030, 1, 2, 3, 4, 5, DateTimeKind.Utc)
         };
 
         var result = controller.EditForm("kids", request);
@@ -1426,7 +1427,31 @@ public class SettingsControllerTests
                 metadata.FormCode == "kids" &&
                 metadata.DisplayName == "Updated kids form"),
             false,
-            It.IsAny<AuditContext>()), Times.Once);
+            It.IsAny<AuditContext>(),
+            It.IsAny<DateTime?>()), Times.Once);
+    }
+
+    [TestMethod]
+    public void EditForm_StaleMetadataTokenUsesExistingSettingsConflictRecovery()
+    {
+        var repository = new Mock<ISettingsAdministrationRepository>();
+        repository.Setup(service => service.SaveFormCode(
+                It.IsAny<FormCodeMetadata>(), false, It.IsAny<AuditContext>(), It.IsAny<DateTime?>()))
+            .Throws(new System.Data.DBConcurrencyException("stale metadata"));
+        var authorization = GlobalAuthorization();
+        var controller = CreateController(repository, authorization);
+
+        var result = controller.EditForm("kids", new FormCodeRequest
+        {
+            OrganizationId = 1,
+            FormCode = "kids",
+            DisplayName = "Updated",
+            ExpectedModifiedAtUtc = new DateTime(2030, 1, 2, 3, 4, 5, DateTimeKind.Utc)
+        });
+
+        Assert.IsInstanceOfType<RedirectToActionResult>(result);
+        Assert.AreEqual(nameof(SettingsController.Index), ((RedirectToActionResult)result).ActionName);
+        StringAssert.Contains(controller.TempData["SettingsError"]?.ToString(), "shared draft changed");
     }
 
     [TestMethod]
@@ -1436,7 +1461,7 @@ public class SettingsControllerTests
         repository.Setup(service => service.GetFormCodes(2, 1)).Returns(
         [
             new FormCodeMetadata(1, "kids", "System name", null, DateTime.UtcNow, "a", DateTime.UtcNow, "a"),
-            new FormCodeMetadata(2, "kids", "Local name", "Local description", DateTime.UtcNow, "a", DateTime.UtcNow, "a")
+            new FormCodeMetadata(2, "kids", "Local name", "Local description", DateTime.UtcNow, "a", new DateTime(2030, 1, 2, 3, 4, 5, DateTimeKind.Utc), "a")
         ]);
         var authorization = new Mock<ISettingsAuthorizationService>();
         authorization.Setup(service => service.Describe(It.IsAny<ClaimsPrincipal>()))
@@ -1449,14 +1474,16 @@ public class SettingsControllerTests
             OrganizationId = 2,
             FormCode = "kids",
             DisplayName = "Changed local name",
-            Description = "Changed locally"
+            Description = "Changed locally",
+            ExpectedModifiedAtUtc = new DateTime(2030, 1, 2, 3, 4, 5, DateTimeKind.Utc)
         });
 
         Assert.IsInstanceOfType<RedirectToActionResult>(result);
         repository.Verify(service => service.SaveFormCode(
             It.Is<FormCodeMetadata>(metadata => metadata.DisplayName == "Changed local name"),
             false,
-            It.IsAny<AuditContext>()), Times.Once);
+            It.IsAny<AuditContext>(),
+            It.IsAny<DateTime?>()), Times.Once);
     }
 
     [TestMethod]
@@ -1511,7 +1538,8 @@ public class SettingsControllerTests
         repository.Verify(service => service.SaveFormCode(
             It.Is<FormCodeMetadata>(metadata => metadata.OrganizationId == 2 && metadata.FormCode == "kiosk"),
             true,
-            It.IsAny<AuditContext>()), Times.Once);
+            It.IsAny<AuditContext>(),
+            It.IsAny<DateTime?>()), Times.Once);
         repository.Verify(service => service.DirectSave(
             It.IsAny<int>(), It.IsAny<string>(), It.IsAny<long>(), It.IsAny<IReadOnlyList<SettingMutation>>(),
             It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), It.IsAny<AuditContext>()), Times.Never);

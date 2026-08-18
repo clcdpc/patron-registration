@@ -23,7 +23,7 @@ namespace Clc.PatronRegistration.Configuration
         [AdminSetting(SettingCategory.DuplicateChecking, "Duplicate patron message", "Displays when the preliminary duplicate check finds a patron; [branch_phone] and [branch_id] placeholders are replaced with the selected branch’s values.", ValueType = SettingValueType.Html)]
         [JsonIgnore]
         string DuplicatePatronMessageHtml { get; }
-        [AdminSetting(SettingCategory.FormBehaviorAndFields, "N/A gender option text", "Provides the text for the registration form’s not-applicable gender choice.", ValueType = SettingValueType.LongString)]
+        /// <summary>Compatibility-only. The current public form has no gender field.</summary>
         [JsonIgnore]
         string NaGenderText { get; }
         [AdminSetting(SettingCategory.PageAppearanceAndInstructions, "Default success message", "Displays this default message after successful registration when no on-site, e-card, or address-verification message takes precedence.", ValueType = SettingValueType.LongString)]
@@ -124,13 +124,14 @@ namespace Clc.PatronRegistration.Configuration
         int ResetSeconds { get; }
         [AdminSetting(SettingCategory.FormBehaviorAndFields, "Enable driver’s license scanner", "Enables the driver’s-license input button for requests whose IP address is recognized as on-site.", Key = "show_dl")]
         bool EnableDriversLicenseSwipe { get; }
-        [AdminSetting(SettingCategory.FormBehaviorAndFields, "Hide gender field", "Removes the gender field from the public registration form when enabled.")]
+        /// <summary>Compatibility-only. The current public form has no gender field to hide.</summary>
+        [JsonIgnore]
         bool HideGender { get; }
         [AdminSetting(SettingCategory.FormBehaviorAndFields, "Hide e-receipt option", "Removes the e-receipt preference from the public registration form when enabled.")]
         bool HideEreceipt { get; }
         [AdminSetting(SettingCategory.FormBehaviorAndFields, "Convert registration data to uppercase", "Converts supported name, email, and address values to uppercase before patron creation.")]
         bool NormalizeToUppercase { get; }
-        [AdminSetting(SettingCategory.FormBehaviorAndFields, "Driver’s license scanner format", "Selects barcode or magnetic-stripe parsing for scanned driver’s-license data.", Key = "dl_format")]
+        [AdminSetting(SettingCategory.FormBehaviorAndFields, "Driver’s license scanner format", "Selects barcode or magnetic-stripe parsing for scanned driver’s-license data.", Key = "dl_format", ValueType = SettingValueType.Enumeration, AllowedValues = new[] { "barcode", "magstripe" })]
         string DriversLicenseFormat { get; }
         [AdminSetting(SettingCategory.DuplicateChecking, "Skip preliminary duplicate check", "Skips the application’s preliminary duplicate check before patron creation; Polaris may still perform its own duplicate checking.")]
         bool BypassDupeCheck { get; }

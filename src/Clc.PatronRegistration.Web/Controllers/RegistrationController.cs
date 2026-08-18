@@ -15,6 +15,7 @@ using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Filters;
 using Microsoft.AspNetCore.Mvc.ModelBinding;
+using Microsoft.AspNetCore.Mvc.ModelBinding.Validation;
 using Microsoft.AspNetCore.Mvc.Rendering;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -28,10 +29,11 @@ namespace Clc.PatronRegistration.Web.Controllers
 {
     public class RegistrationController(
         IPapiClient papi,
-        IMelissaRestClient melissa,
         IDbHelper db,
         ISettingProvider settings,
-        IEmailSender emailSender,
+        IEmailSenderFactory emailSenderFactory,
+        IMelissaClientFactory melissaClientFactory,
+        IObjectModelValidator objectModelValidator,
         IRegistrationScopeResolver registrationScopeResolver) : Controller
     {
         private static readonly NLog.ILogger logger = LogManager.GetCurrentClassLogger();
@@ -84,6 +86,18 @@ namespace Clc.PatronRegistration.Web.Controllers
             }
 
             ApplyRegistrationScope(p, resolution.Settings);
+            if (resolution.Settings.DisableBranch)
+            {
+                return new RegistrationAttempt
+                {
+                    Status = RegistrationStatus.Disabled,
+                    Message = Registration.RegistrationUnavailableMessage
+                };
+            }
+
+            RevalidateAgainstSelectedBranch(p, resolution.Settings);
+            var melissa = RegistrationClientProvider.CreateMelissa(resolution.Settings, melissaClientFactory);
+            var emailSender = RegistrationClientProvider.CreateEmail(resolution.Settings, emailSenderFactory);
             return p.CreateRegistration(Request.GetTrueClientIP(), ModelState, resolution.Settings, db, papi, melissa, emailSender);
         }
 
@@ -107,7 +121,7 @@ namespace Clc.PatronRegistration.Web.Controllers
             return p.DupeCheck(db, papi);
         }
 
-        public JsonResult dl(string dlinfo, int? patronBranchId = null)
+        public IActionResult dl(string dlinfo, int? patronBranchId = null)
         {
             if (string.IsNullOrWhiteSpace(dlinfo) || dlinfo == "null")
             {
@@ -116,7 +130,13 @@ namespace Clc.PatronRegistration.Web.Controllers
 
             logger.Trace(dlinfo);
 
-            if (ResolveEndpointSettings(patronBranchId).DriversLicenseFormat.Equals("barcode", StringComparison.OrdinalIgnoreCase))
+            var format = DriversLicenseFormatSettingParser.Parse(ResolveEndpointSettings(patronBranchId).DriversLicenseFormat);
+            if (format.State == DriversLicenseFormatSettingState.Invalid)
+            {
+                return BadRequest("Driver’s-license scanner format is not configured with a supported value.");
+            }
+
+            if (format.State == DriversLicenseFormatSettingState.Barcode)
             {
                 return Json(DriverLicenseHelper.ProcessDlBarcode(dlinfo));
             }
@@ -139,6 +159,56 @@ namespace Clc.PatronRegistration.Web.Controllers
         {
             registration.UseSettings(effectiveSettings);
             registration.LibraryId = effectiveSettings.LibraryId;
+        }
+
+        private void RevalidateAgainstSelectedBranch(Registration registration, ISettingProvider effectiveSettings)
+        {
+            var bindingErrors = ModelState
+                .SelectMany(pair => pair.Value?.Errors.Select(error => (pair.Key, error)) ?? [])
+                .Where(item => item.error.Exception is not null)
+                .ToList();
+            var selectedModelState = new ModelStateDictionary();
+            var originalRequestServices = HttpContext.RequestServices;
+            HttpContext.RequestServices = new SettingProviderServiceProvider(originalRequestServices, effectiveSettings);
+            try
+            {
+                var actionContext = new ActionContext(
+                    HttpContext,
+                    ControllerContext.RouteData ?? new Microsoft.AspNetCore.Routing.RouteData(),
+                    ControllerContext.ActionDescriptor ?? new Microsoft.AspNetCore.Mvc.Abstractions.ActionDescriptor(),
+                    selectedModelState);
+                objectModelValidator.Validate(actionContext, null, string.Empty, registration);
+            }
+            finally
+            {
+                HttpContext.RequestServices = originalRequestServices;
+            }
+
+            ModelState.Clear();
+            foreach (var (key, error) in bindingErrors)
+            {
+                ModelState.AddModelError(key, error.Exception?.Message ?? "The supplied value is invalid.");
+            }
+            foreach (var pair in selectedModelState)
+            {
+                foreach (var error in pair.Value.Errors)
+                {
+                    if (error.Exception is not null)
+                    {
+                        ModelState.AddModelError(pair.Key, error.Exception.Message);
+                    }
+                    else if (!string.IsNullOrEmpty(error.ErrorMessage))
+                    {
+                        ModelState.AddModelError(pair.Key, error.ErrorMessage);
+                    }
+                }
+            }
+        }
+
+        private sealed class SettingProviderServiceProvider(IServiceProvider inner, ISettingProvider effectiveSettings) : IServiceProvider
+        {
+            public object? GetService(Type serviceType) =>
+                serviceType == typeof(ISettingProvider) ? effectiveSettings : inner.GetService(serviceType);
         }
 
         private IActionResult RegistrationUnavailableView()

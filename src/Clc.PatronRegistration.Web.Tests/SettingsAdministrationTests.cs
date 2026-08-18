@@ -19,7 +19,7 @@ public class SettingsAdministrationTests
     private static readonly string[] ExpectedOrdinaryKeys =
     [
         "header_image_asset_id", "css_file", "warning_text", "custom_form_footer_html", "registration_text", "registration_form_header",
-        "show_dl", "hide_gender", "enable_age_warning", "age_warning_text", "enable_age_block", "age_block_text", "hide_ereceipt", "na_gender_text",
+        "show_dl", "enable_age_warning", "age_warning_text", "enable_age_block", "age_block_text", "hide_ereceipt",
         "normalize_to_uppercase", "dl_format", "enable_legal_name_checkbox", "drivers_license_button_text",
         "drivers_license_prompt_text", "agreement_confirm_button_text", "agreement_cancel_button_text", "school_info_field_legend",
         "school_info_format", "responsible_person_disclaimer", "display_responsible_person_field", "phone_number_format",
@@ -48,7 +48,6 @@ public class SettingsAdministrationTests
             ["custom_form_footer_html"] = SettingValueType.Html,
             ["age_warning_text"] = SettingValueType.LongString,
             ["age_block_text"] = SettingValueType.Html,
-            ["na_gender_text"] = SettingValueType.LongString,
             ["drivers_license_button_text"] = SettingValueType.LongString,
             ["drivers_license_prompt_text"] = SettingValueType.LongString,
             ["agreement_confirm_button_text"] = SettingValueType.LongString,
@@ -128,6 +127,68 @@ public class SettingsAdministrationTests
     {
         var definition = new SettingCatalog().All.Single(item => item.Key == "expiration_date_years");
         Assert.AreEqual(valid, definition.Validate(value ?? string.Empty) is null);
+    }
+
+    [DataTestMethod]
+    [DataRow("", true)]
+    [DataRow("10.0.0.", true)]
+    [DataRow("10.0.0.;", false)]
+    [DataRow(";10.0.0.", false)]
+    [DataRow("10.0.0.;;192.168.", false)]
+    [DataRow("10.0.0.; ;192.168.", false)]
+    public void DriversLicenseIpPrefixes_RejectEmptySemicolonSegments(string value, bool valid)
+    {
+        var definition = new SettingCatalog().All.Single(item => item.Key == "show_dl_ips");
+
+        Assert.AreEqual(valid, definition.Validate(value) is null);
+    }
+
+    [DataTestMethod]
+    [DataRow("0", true)]
+    [DataRow("86400", true)]
+    [DataRow("-1", false)]
+    [DataRow("86401", false)]
+    [DataRow("2147483647", false)]
+    [DataRow("999999999999999999999", false)]
+    public void ResetSeconds_UsesBoundedNonnegativeRange(string value, bool valid)
+    {
+        var definition = new SettingCatalog().All.Single(item => item.Key == "reset_seconds");
+
+        Assert.AreEqual(valid, definition.Validate(value) is null);
+    }
+
+    [TestMethod]
+    public void DriversLicenseFormat_IsAnExplicitSupportedEnumeration()
+    {
+        var definition = new SettingCatalog().All.Single(item => item.Key == "dl_format");
+
+        Assert.AreEqual(SettingValueType.Enumeration, definition.ValueType);
+        CollectionAssert.AreEquivalent(new[] { "barcode", "magstripe" }, definition.AllowedValues!.ToArray());
+        Assert.IsNull(definition.Validate("barcode"));
+        Assert.IsNull(definition.Validate("MAGSTRIPE"));
+        Assert.IsNotNull(definition.Validate("magnetic-stripe"));
+    }
+
+    [TestMethod]
+    public void GenderCompatibilitySettings_AreNotPresentedAsActiveControls()
+    {
+        var catalog = new SettingCatalog();
+
+        Assert.IsFalse(catalog.TryGet("hide_gender", out _));
+        Assert.IsFalse(catalog.TryGet("na_gender_text", out _));
+    }
+
+    [TestMethod]
+    public void DbSettingProvider_NormalizesDriverLicenseIpPrefixesAndMalformedResetSeconds()
+    {
+        var provider = new DbSettingProvider(3, CacheWith(
+            Setting(3, "show_dl_ips", " 10.0.; ;192.168.;; "),
+            Setting(3, "reset_seconds", "2147483647")));
+
+        CollectionAssert.AreEqual(new[] { "10.0.", "192.168." }, provider.DriversLicenseButtonEnabledIpAddresses.ToArray());
+        Assert.AreEqual(0, provider.ResetSeconds);
+        Assert.AreEqual(BoundedIntegerSettingState.Invalid, provider.GetResetSecondsState().State);
+        Assert.IsTrue(Registration.CheckIp("127.0.0.1", provider.DriversLicenseButtonEnabledIpAddresses));
     }
 
     [TestMethod]
@@ -416,6 +477,21 @@ public class SettingsAdministrationTests
             StringAssert.Contains(view, $"<label asp-for=\"{property}\"");
         }
         Assert.IsFalse(view.Contains("Html.Raw(Settings.GetFieldLabel", StringComparison.Ordinal));
+    }
+
+    [TestMethod]
+    public void RegistrationView_RendersSupportedFooterAndSafeBranchAndResetBehavior()
+    {
+        var root = FindRepositoryRoot();
+        var view = File.ReadAllText(Path.Combine(root, "src/Clc.PatronRegistration.Web/Views/Registration/Create.cshtml"));
+
+        StringAssert.Contains(view, "Settings.CustomFormFooterHtml");
+        StringAssert.Contains(view, "@Html.Raw(Settings.CustomFormFooterHtml)");
+        StringAssert.Contains(view, "branchReloadUrlPattern");
+        StringAssert.Contains(view, "resetDelayMilliseconds");
+        Assert.IsFalse(view.Contains("Settings.ResetSeconds * 1000", StringComparison.Ordinal));
+        Assert.IsFalse(view.Contains("HideGender", StringComparison.Ordinal));
+        Assert.IsFalse(view.Contains("NaGenderText", StringComparison.Ordinal));
     }
 
     [TestMethod]
@@ -1715,7 +1791,7 @@ public class SettingsAdministrationTests
         var interfaceProperties = typeof(ISettingProvider).GetProperties(BindingFlags.Instance | BindingFlags.Public);
         var providerProperties = typeof(DbSettingProvider).GetProperties(BindingFlags.Instance | BindingFlags.Public);
 
-        Assert.AreEqual(78, AdministrationProperties().Length);
+        Assert.AreEqual(76, AdministrationProperties().Length);
         Assert.IsFalse(providerProperties.Any(property => property.GetCustomAttribute<AdminSettingAttribute>() is not null));
         Assert.IsTrue(SettingPropertyMetadataCache.GetAll().Where(metadata => metadata.Administration is not null)
             .All(metadata => metadata.Property.DeclaringType == typeof(ISettingProvider)));

@@ -289,6 +289,7 @@ public sealed class FormCodeRequest
     public string FormCode { get => formCode; set => formCode = FormCodeNormalizer.Normalize(value); }
     public string DisplayName { get; set; } = string.Empty;
     public string? Description { get; set; }
+    public DateTime? ExpectedModifiedAtUtc { get; set; }
 }
 
 public sealed class DeleteFormCodeViewModel

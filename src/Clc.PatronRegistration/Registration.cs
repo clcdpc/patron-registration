@@ -387,7 +387,7 @@ namespace Clc.PatronRegistration
 
         public void HandleECardSettings()
         {
-            if (Settings.DisplayECardCheckbox && IsECard)
+            if (IsECard)
             {
                 Barcode = $"{Settings.EcardBarcodePrefix}{DateTimeOffset.Now.ToUnixTimeSeconds()}";
                 PatronCode = PositivePatronCodeOrCurrent(Settings.EcardPatronCodeId, "ecard_patron_code_id");
@@ -743,8 +743,11 @@ namespace Clc.PatronRegistration
 
         public static bool CheckIp(string ipToCheck, IEnumerable<string> whitelist)
         {
-            whitelist = whitelist.Concat(["127", "::1"]);
-            return whitelist.Any(i => ipToCheck.StartsWith(i));
+            var prefixes = (whitelist ?? [])
+                .Where(prefix => !string.IsNullOrWhiteSpace(prefix))
+                .Select(prefix => prefix.Trim())
+                .Concat(["127", "::1"]);
+            return prefixes.Any(prefix => ipToCheck.StartsWith(prefix, StringComparison.Ordinal));
         }
 
         public void HandleAddToMailingList(IPapiClient papi, int patronId)

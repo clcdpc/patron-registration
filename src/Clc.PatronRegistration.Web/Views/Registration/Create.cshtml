@@ -7,6 +7,13 @@
     var registrationDisabled = ViewData["RegistrationDisabled"] as bool? == true;
     var previewToken = ViewData["PreviewToken"] as string;
     var previewOperationalBranchName = ViewData["PreviewOperationalBranchName"] as string;
+    var resetSeconds = Settings is IResetSecondsSettingStateProvider resetStateProvider
+        ? resetStateProvider.GetResetSecondsState().Value.GetValueOrDefault()
+        : ResetSecondsSettingParser.Normalize(Settings.ResetSeconds);
+    var resetDelayMilliseconds = ResetSecondsSettingParser.ToJavaScriptMilliseconds(resetSeconds);
+    var branchReloadUrlPattern = !isSettingsPreview && Settings.EnablePatronBranchSelectOption
+        ? Url.Action("Create", "Registration", new { orgId = "__BRANCH__", formCode = Settings.FormCode })
+        : null;
     var submitUrl = isSettingsPreview
         ? Url.Action("Submit", "Preview", new { token = previewToken })
         : this.BuildAction("Submit");
@@ -340,6 +347,13 @@ else
 
         <button id="registerButton" type="button">Submit Registration</button>
     </form>
+
+    @if (!string.IsNullOrWhiteSpace(Settings.CustomFormFooterHtml))
+    {
+        <div id="registration-form-footer">
+            @Html.Raw(Settings.CustomFormFooterHtml)
+        </div>
+    }
 </div>
 
 <script type="text/javascript">
@@ -351,6 +365,13 @@ else
     const wrapperDiv = q('#regFormWrapper');
     const theform = document.forms.regform;
     const patronBranchId = q('#PatronBranchID');
+    const branchReloadUrlPattern = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(branchReloadUrlPattern));
+    if (branchReloadUrlPattern && patronBranchId) {
+        patronBranchId.addEventListener("change", () => {
+            if (!patronBranchId.value) return;
+            window.location.assign(branchReloadUrlPattern.replace("__BRANCH__", encodeURIComponent(patronBranchId.value)));
+        });
+    }
     const nameFirst = q('#NameFirst');
     const nameMiddle = q('#NameMiddle');
     const nameLast = q('#NameLast');
@@ -728,7 +749,7 @@ else
             hide(wrapperDiv);
             showInfoMessage(data.message);
             if (@Model.ShouldAutoReset(ViewContext.HttpContext!.GetTrueClientIp()).ToJavascriptBool()) {
-                setTimeout(function() { location = '@this.BuildAction("Create")'; }, @(Settings.ResetSeconds * 1000));
+                setTimeout(function() { location = '@this.BuildAction("Create")'; }, @resetDelayMilliseconds);
             }
             return;
         }

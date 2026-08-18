@@ -464,6 +464,29 @@ public class PreviewRequestContextTests
         StringAssert.Contains(displayedValidation!.ErrorMessage, "Preferred pickup location");
     }
 
+    [TestMethod]
+    public void PreviewDriverLicense_RejectsInvalidConfiguredFormatInsteadOfUsingMagstripe()
+    {
+        var draft = ActiveDraft(new SettingMutation("dl_format", DraftOperation.Upsert, "unsupported"));
+        var settings = new PreviewSettingProvider(draft, 3, new TestCache(), 1);
+        var accessor = new PreviewRequestContextAccessor
+        {
+            IsPreviewRequest = true,
+            PlaintextToken = "preview-token",
+            Current = new PreviewRequestContext(Link("Active"), draft, settings)
+        };
+        var controller = new PreviewController(
+            Mock.Of<ISettingsAdministrationRepository>(), accessor, new TestCache(), Mock.Of<IDbHelper>(),
+            Mock.Of<IPapiClient>(), Mock.Of<IMelissaRestClient>(), Mock.Of<IEmailSender>())
+        {
+            ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() }
+        };
+
+        var result = controller.DriverLicense("preview-token", "$unsupported");
+
+        Assert.IsInstanceOfType<BadRequestObjectResult>(result);
+    }
+
     private static PreviewContextResolver CreateResolver(
         SettingDraft? draft = null,
         PreviewLinkRecord? link = null,

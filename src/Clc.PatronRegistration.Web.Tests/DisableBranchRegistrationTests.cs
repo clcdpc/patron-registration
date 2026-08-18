@@ -12,6 +12,7 @@ using Clc.Rest;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.ModelBinding;
+using Microsoft.AspNetCore.Mvc.ModelBinding.Validation;
 using Microsoft.Extensions.Options;
 using Moq;
 
@@ -386,10 +387,18 @@ public sealed class DisableBranchRegistrationTests
         IPapiClient papi,
         IMelissaRestClient melissa,
         IDbHelper db,
-        IEmailSender email) => new(papi, melissa, db, settings, email, scopeResolver)
+        IEmailSender email)
+    {
+        var melissaFactory = new Mock<IMelissaClientFactory>();
+        melissaFactory.Setup(factory => factory.Create(It.IsAny<string>())).Returns(melissa);
+        var emailFactory = new Mock<IEmailSenderFactory>();
+        emailFactory.Setup(factory => factory.Create(It.IsAny<string>())).Returns(email);
+        return new(papi, db, settings, emailFactory.Object, melissaFactory.Object,
+            Mock.Of<IObjectModelValidator>(), scopeResolver)
         {
             ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() }
         };
+    }
 
     private static OrganizationsGetRow Organization(int id, int? parentId, int code = 3) => new()
     {

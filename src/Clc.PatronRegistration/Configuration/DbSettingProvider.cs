@@ -10,7 +10,8 @@ using System.Globalization;
 
 namespace Clc.PatronRegistration.Configuration
 {
-    public class DbSettingProvider : ISettingProvider, IIdentifierSettingStateProvider, IExpirationDateYearsSettingStateProvider
+    public class DbSettingProvider : ISettingProvider, IIdentifierSettingStateProvider, IExpirationDateYearsSettingStateProvider,
+        IResetSecondsSettingStateProvider, IDriversLicenseFormatSettingStateProvider
     {
         public int LibraryId { get; protected set; }
         public int OrganizationId { get; }
@@ -48,6 +49,12 @@ namespace Clc.PatronRegistration.Configuration
         public virtual ExpirationDateYearsSettingResult GetExpirationDateYearsState() =>
             ExpirationDateYearsSettingParser.Parse(GetSetting<string>(
                 SettingPropertyMetadataCache.Get(nameof(ExpirationDateYears)).DatabaseKey));
+        public virtual ResetSecondsSettingResult GetResetSecondsState() =>
+            ResetSecondsSettingParser.Parse(GetSetting<string>(
+                SettingPropertyMetadataCache.Get(nameof(ResetSeconds)).DatabaseKey));
+        public virtual DriversLicenseFormatSettingResult GetDriversLicenseFormatState() =>
+            DriversLicenseFormatSettingParser.Parse(GetSetting<string>(
+                SettingPropertyMetadataCache.Get(nameof(DriversLicenseFormat)).DatabaseKey));
 
         private int GetLegacySafeInteger([CallerMemberName] string propertyName = "")
         {
@@ -134,7 +141,11 @@ namespace Clc.PatronRegistration.Configuration
             get
             {
                 var value = GetPropertySetting<string>();
-                return string.IsNullOrWhiteSpace(value) ? new List<string>() : value.Split(';').ToList();
+                return string.IsNullOrWhiteSpace(value)
+                    ? new List<string>()
+                    : value.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                        .Where(prefix => !string.IsNullOrWhiteSpace(prefix))
+                        .ToList();
             }
         }
 
@@ -211,7 +222,7 @@ namespace Clc.PatronRegistration.Configuration
         public int? PatronCodeId => GetPropertySetting<int?>();
         public bool HideBranchSelectIfOnlyOneBranch => GetPropertySetting<bool>();
         public bool DisableBranch => GetPropertySetting<bool>();
-        public int ResetSeconds => GetPropertySetting<int>();
+        public int ResetSeconds => GetResetSecondsState().Value.GetValueOrDefault();
         public string PhoneNumberFormat => GetPropertySetting<string>();
         public bool ForceEcardRemotely => GetPropertySetting<bool>();
     }

@@ -255,6 +255,15 @@
                     <option value="false" selected="@isFalseValue">No</option>
                 </select>
             }
+            else if (definition.ValueType == SettingValueType.Enumeration)
+            {
+                <select id="@inputId" class="setting-value" name="Changes[@token].Value" disabled>
+                    @foreach (var allowedValue in definition.AllowedValues ?? [])
+                    {
+                        <option value="@allowedValue" selected="@editorValue.Equals(allowedValue, StringComparison.OrdinalIgnoreCase)">@allowedValue</option>
+                    }
+                </select>
+            }
             else if (definition.ValueType is SettingValueType.Integer or SettingValueType.NullableInteger or SettingValueType.Decimal)
             {
                 <input id="@inputId" class="setting-value" name="Changes[@token].Value" type="number" step="@(definition.ValueType == SettingValueType.Decimal ? "any" : "1")" value="@editorValue" disabled />

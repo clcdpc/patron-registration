@@ -50,6 +50,9 @@ public sealed class AdminSettingAttribute : Attribute
 
     public bool IsSensitive { get; set; }
 
+    /// <summary>Allowed values for an enumeration setting.</summary>
+    public string[]? AllowedValues { get; set; }
+
     /// <summary>
     /// Controls whether an explicitly empty value is valid. If this named argument is omitted,
     /// the catalog derives the default from the resolved value type.

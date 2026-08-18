@@ -192,7 +192,7 @@ public interface ISettingsAdministrationRepository
     IReadOnlyList<FormCodeMetadata> GetFormCodes(int libraryId, int systemOrganizationId);
     IReadOnlyList<FormCodeMetadata> GetFormCodesForLibraries(IReadOnlyCollection<int> libraryIds, int systemOrganizationId);
     IReadOnlyList<LegacyFormCodeRow> GetLegacyFormCodes();
-    void SaveFormCode(FormCodeMetadata metadata, bool isCreate, AuditContext audit);
+    void SaveFormCode(FormCodeMetadata metadata, bool isCreate, AuditContext audit, DateTime? expectedModifiedAtUtc = null);
     FormCodeImpact GetFormCodeImpact(int ownerOrganizationId, string formCode, IReadOnlyCollection<int> affectedOrganizations);
     FormCodeDeletionSnapshot? GetFormCodeDeletionSnapshot(int ownerOrganizationId, string formCode, int systemOrganizationId, IReadOnlyCollection<int> knownOrganizations);
     void DeleteFormCode(FormCodeDeletionTarget expectedTarget, string expectedFingerprint, int systemOrganizationId, IReadOnlyCollection<int> knownOrganizations, AuditContext audit);
@@ -311,7 +311,15 @@ output inserted.DraftId values(@organizationId,@formCode,@expectedVersion,'Activ
         {
             throw new DBConcurrencyException("Live settings changed after this page was loaded.");
         }
-        var containedSensitiveChanges = DraftContainsSensitiveChanges(connection, transaction, draftId, catalog);
+        // Lock order: the active draft is already locked, so invalidate all existing
+        // preview links before touching draft-change rows. This makes every draft
+        // mutation a new preview revision, including ordinary and remove operations.
+        var revokedPreviewLinks = RevokeDraftPreviewLinks(connection, transaction, draftId, audit.ActorName);
+        if (revokedPreviewLinks > 0)
+        {
+            InsertAudit(connection, transaction, "PreviewLinksRevokedForDraftChange", true, audit, draftId: draftId,
+                metadataJson: $"{{\"count\":{revokedPreviewLinks}}}");
+        }
         foreach (var change in changes)
         {
             if (!catalog.TryGetValue(change.Key, out var definition))
@@ -342,11 +350,6 @@ if @@ROWCOUNT=0
         connection.Execute(
             "update dbo.RegistrationSettingDrafts set ModifiedAtUtc=SYSUTCDATETIME(),ModifiedBy=@actor where DraftId=@draftId",
             new { draftId, actor = audit.ActorName ?? "unknown" }, transaction);
-        if (!containedSensitiveChanges && DraftContainsSensitiveChanges(connection, transaction, draftId, catalog))
-        {
-            RevokeDraftPreviewLinks(connection, transaction, draftId, audit.ActorName);
-            InsertAudit(connection, transaction, "PreviewLinksRevokedForRestrictedDraft", true, audit, draftId: draftId);
-        }
         InsertAudit(connection, transaction, "DraftEdited", true, audit, draftId: draftId, metadataJson: $"{{\"changeCount\":{changes.Count}}}");
         transaction.Commit();
         return new SaveToDraftResult(draftId, created);
@@ -362,6 +365,12 @@ if @@ROWCOUNT=0
         if (!canManageSensitive && definition.IsSensitive)
         {
             throw RestrictedDraftException();
+        }
+        var revokedPreviewLinks = RevokeDraftPreviewLinks(connection, transaction, draftId, audit.ActorName);
+        if (revokedPreviewLinks > 0)
+        {
+            InsertAudit(connection, transaction, "PreviewLinksRevokedForDraftChange", true, audit, draftId: draftId,
+                metadataJson: $"{{\"count\":{revokedPreviewLinks}}}");
         }
         var removed = connection.Execute(
             "delete dbo.RegistrationSettingDraftChanges where DraftId=@draftId and SettingKey=@settingKey",
@@ -703,7 +712,7 @@ where FormCode is not null and len(FormCode)>0
 order by FormCode,OrganizationID").ToList();
     }
 
-    public void SaveFormCode(FormCodeMetadata metadata, bool isCreate, AuditContext audit)
+    public void SaveFormCode(FormCodeMetadata metadata, bool isCreate, AuditContext audit, DateTime? expectedModifiedAtUtc = null)
     {
         if (string.IsNullOrWhiteSpace(metadata.FormCode))
         {
@@ -726,12 +735,23 @@ values(@OrganizationId,@FormCode,@DisplayName,@Description,@CreatedBy,@ModifiedB
         }
         else
         {
+            if (!expectedModifiedAtUtc.HasValue)
+            {
+                InsertAudit(connection, transaction, "ConcurrencyConflict", false, audit,
+                    failureReason: "Expected form-code metadata timestamp was not supplied.");
+                transaction.Commit();
+                throw new DBConcurrencyException("Form-code metadata changed while you were editing. Reload and review the current values.");
+            }
             var updated = connection.Execute(@"
 update dbo.RegistrationFormCodeMetadata set DisplayName=@DisplayName,Description=@Description,ModifiedAtUtc=SYSUTCDATETIME(),ModifiedBy=@ModifiedBy
-where OrganizationId=@OrganizationId and FormCode=@FormCode", metadata, transaction);
+where OrganizationId=@OrganizationId and FormCode=@FormCode and ModifiedAtUtc=@expectedModifiedAtUtc",
+                new { metadata.OrganizationId, metadata.FormCode, metadata.DisplayName, metadata.Description, metadata.ModifiedBy, expectedModifiedAtUtc }, transaction);
             if (updated == 0)
             {
-                throw new InvalidOperationException("The form-code metadata no longer exists. Reload the page and try again.");
+                InsertAudit(connection, transaction, "ConcurrencyConflict", false, audit,
+                    failureReason: "Expected form-code metadata timestamp was stale or the row no longer exists.");
+                transaction.Commit();
+                throw new DBConcurrencyException("Form-code metadata changed while you were editing. Reload and review the current values.");
             }
         }
         EnsureVersionRow(connection, transaction, metadata.OrganizationId, metadata.FormCode);
@@ -1103,13 +1123,13 @@ where p.PreviewLinkId=@previewLinkId and p.DraftId=@candidateDraftId",
         return link ?? throw new DBConcurrencyException("The preview link no longer exists.");
     }
 
-    private static void RevokeDraftPreviewLinks(
+    private static int RevokeDraftPreviewLinks(
         SqlConnection connection,
         IDbTransaction transaction,
         long draftId,
         string? actorName)
     {
-        connection.Execute(@"
+        return connection.Execute(@"
 update dbo.RegistrationSettingPreviewLinks
 set RevokedAtUtc=SYSUTCDATETIME(),RevokedBy=@actor,ModifiedAtUtc=SYSUTCDATETIME(),ModifiedBy=@actor
 where DraftId=@draftId and RevokedAtUtc is null",

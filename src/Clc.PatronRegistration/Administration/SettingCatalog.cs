@@ -66,6 +66,7 @@ public sealed record SettingDefinition(string Key, string DisplayName, string De
     IReadOnlyList<string>? AllowedValues = null, int SortOrder = 0, SettingCategory? Category = null)
 {
     public const int MaximumExpirationDateYears = 100;
+    public const int MaximumResetSeconds = 86_400;
     private static readonly HashSet<string> PositiveIdentifierKeys = new(StringComparer.OrdinalIgnoreCase)
     {
         "add_to_record_set_id",
@@ -110,12 +111,21 @@ public sealed record SettingDefinition(string Key, string DisplayName, string De
                 return "Labels must be single-line plain text without markup or control characters.";
             }
         }
+        if (Key.Equals("show_dl_ips", StringComparison.OrdinalIgnoreCase) &&
+            value.Split(';').Any(segment => string.IsNullOrWhiteSpace(segment)))
+        {
+            return "Enter IP prefixes separated by semicolons without empty segments.";
+        }
         return ValueType switch
         {
             SettingValueType.NullableInteger when Key.Equals("expiration_date_years", StringComparison.OrdinalIgnoreCase) &&
                 (!int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var expirationYears) ||
                  expirationYears < 0 || expirationYears > MaximumExpirationDateYears) =>
                 $"Enter a whole number from 0 through {MaximumExpirationDateYears}, or leave empty.",
+            SettingValueType.Integer when Key.Equals("reset_seconds", StringComparison.OrdinalIgnoreCase) &&
+                (!int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var resetSeconds) ||
+                 resetSeconds < 0 || resetSeconds > MaximumResetSeconds) =>
+                $"Enter a whole number from 0 through {MaximumResetSeconds}.",
             SettingValueType.Boolean when !bool.TryParse(value, out _) => "Enter true or false.",
             SettingValueType.Integer when !int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out _) => "Enter a whole number.",
             SettingValueType.NullableInteger when value.Length > 0 && !int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out _) => "Enter a whole number or leave empty.",
@@ -211,7 +221,7 @@ public sealed class SettingCatalog : ISettingCatalog
             var allowEmpty = attribute.HasAllowEmptyOverride ? attribute.AllowEmpty : AllowsEmpty(type);
             return new SettingDefinition(metadata.DatabaseKey, attribute.DisplayName, attribute.Description, type,
                 IsSensitive: attribute.IsSensitive, AllowEmpty: allowEmpty, SortOrder: i,
-                Category: attribute.Category);
+                AllowedValues: attribute.AllowedValues, Category: attribute.Category);
         }).ToList();
         foreach (var suffix in DynamicFieldSuffixes)
         {

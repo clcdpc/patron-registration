@@ -440,6 +440,27 @@ namespace Clc.PatronRegistration.Tests
         }
 
         [TestMethod]
+        public void ForcedRemoteEcard_AppliesBarcodeAndPatronCodeWithoutVisibleCheckbox()
+        {
+            _mockSettings.Setup(s => s.ForceEcardRemotely).Returns(true);
+            _mockSettings.Setup(s => s.DisplayECardCheckbox).Returns(false);
+            _mockSettings.Setup(s => s.DriversLicenseButtonEnabledIpAddresses).Returns(Array.Empty<string>());
+            _mockSettings.Setup(s => s.EcardBarcodePrefix).Returns("REMOTE-");
+            _mockSettings.Setup(s => s.EcardPatronCodeId).Returns(42);
+            _mockSettings.As<IIdentifierSettingStateProvider>()
+                .Setup(s => s.GetIdentifierState("ecard_patron_code_id"))
+                .Returns(new IdentifierSettingResult(IdentifierSettingState.Positive, 42));
+            var registration = new Registration(_mockSettings.Object);
+
+            registration.ApplyForceEcardSetting("203.0.113.10");
+            registration.HandleECardSettings();
+
+            Assert.IsTrue(registration.IsECard);
+            StringAssert.StartsWith(registration.Barcode, "REMOTE-");
+            Assert.AreEqual(42, registration.PatronCode);
+        }
+
+        [TestMethod]
         public void ApplyForceEcardSetting_ForcesStandardCardForLocalIp_WhenForceEcardRemotelyIsTrue()
         {
             _mockSettings.Setup(s => s.ForceEcardRemotely).Returns(true);

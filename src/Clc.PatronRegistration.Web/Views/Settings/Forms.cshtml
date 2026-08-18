@@ -1,4 +1,5 @@
 @model Clc.PatronRegistration.Web.Models.FormsViewModel
+@using System.Globalization
 @{
     ViewData["Title"] = "Form codes";
     string OrganizationName(int organizationId) => Model.OrganizationNames.TryGetValue(organizationId, out var name)
@@ -53,6 +54,7 @@
                                 @Html.AntiForgeryToken()
                                 <input type="hidden" name="OrganizationId" value="@form.OrganizationId" />
                                 <input type="hidden" name="FormCode" value="@form.FormCode" />
+                                <input type="hidden" name="ExpectedModifiedAtUtc" value="@form.ModifiedAtUtc.ToString("O", CultureInfo.InvariantCulture)" />
                                 <label for="edit-name-@form.OrganizationId-@form.FormCode">Display name</label>
                                 <input id="edit-name-@form.OrganizationId-@form.FormCode" name="DisplayName" value="@form.DisplayName" maxlength="200" required />
                                 <label for="edit-description-@form.OrganizationId-@form.FormCode">Description</label>
@@ -96,10 +98,12 @@
         @foreach (var form in Model.Forms.Where(item => item.OrganizationId == Model.SystemOrganizationId))
         {
             var local = Model.Forms.FirstOrDefault(item => item.OrganizationId == Model.LibraryId && item.FormCode.Equals(form.FormCode, StringComparison.OrdinalIgnoreCase));
+            var localModifiedAtUtc = local?.ModifiedAtUtc.ToString("O", CultureInfo.InvariantCulture);
             <form asp-action="CustomizeForm" asp-route-formCode="@form.FormCode" method="post">
                 @Html.AntiForgeryToken()
                 <input type="hidden" name="OrganizationId" value="@Model.LibraryId" />
                 <input type="hidden" name="FormCode" value="@form.FormCode" />
+                <input type="hidden" name="ExpectedModifiedAtUtc" value="@localModifiedAtUtc" />
                 <strong><code>@form.FormCode</code></strong>
                 <label for="custom-name-@form.FormCode">Library display name</label>
                 <input id="custom-name-@form.FormCode" name="DisplayName" value="@(local?.DisplayName ?? form.DisplayName)" maxlength="200" required />
