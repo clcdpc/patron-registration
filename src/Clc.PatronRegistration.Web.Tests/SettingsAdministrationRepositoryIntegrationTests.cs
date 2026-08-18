@@ -105,7 +105,7 @@ public sealed class SettingsAdministrationRepositoryIntegrationTests
             using var database = new SqlConnection(candidateConnectionString);
             database.Open();
             DeployExistingRegistrationSettingsSchema(database);
-            foreach (var file in new[] { "001-settings-administration.sql", "002-preview-operational-branch.sql", "003-expand-audit-setting-values.sql", "004-registration-form-assets.sql", "005-registration-form-asset-scope.sql", "006-register-header-image-asset-setting.sql", "007-remove-legacy-header-image-url.sql", "008-migrate-legacy-registration-field-settings.sql" })
+            foreach (var file in new[] { "001-settings-administration.sql", "002-preview-operational-branch.sql", "003-expand-audit-setting-values.sql", "004-registration-form-assets.sql", "005-registration-form-asset-scope.sql", "006-register-header-image-asset-setting.sql", "007-remove-legacy-header-image-url.sql", "008-migrate-legacy-registration-field-settings.sql", "009-register-setting-catalog-keys.sql", "010-registration-form-asset-cleanup.sql" })
             {
                 Execute(database, File.ReadAllText(Path.Combine(RepositoryRoot(), "database", file)), 30);
             }
@@ -113,6 +113,8 @@ public sealed class SettingsAdministrationRepositoryIntegrationTests
             Execute(database, File.ReadAllText(Path.Combine(RepositoryRoot(), "database", "006-register-header-image-asset-setting.sql")), 30);
             Execute(database, File.ReadAllText(Path.Combine(RepositoryRoot(), "database", "007-remove-legacy-header-image-url.sql")), 30);
             Execute(database, File.ReadAllText(Path.Combine(RepositoryRoot(), "database", "008-migrate-legacy-registration-field-settings.sql")), 30);
+            Execute(database, File.ReadAllText(Path.Combine(RepositoryRoot(), "database", "009-register-setting-catalog-keys.sql")), 30);
+            Execute(database, File.ReadAllText(Path.Combine(RepositoryRoot(), "database", "010-registration-form-asset-cleanup.sql")), 30);
             databaseConnectionString = candidateConnectionString;
             schemaReady = true;
         }
@@ -183,9 +185,30 @@ update dbo.RegistrationSettingsCacheGeneration set Generation=0,ModifiedAtUtc=SY
         Assert.AreEqual(1, Scalar<int>("select count(*) from sys.indexes where object_id=object_id('dbo.RegistrationSettingDrafts') and name='UX_RSD_ActiveScope' and is_unique=1 and has_filter=1"));
         Assert.AreEqual(2, Scalar<int>("select count(*) from sys.columns where object_id=object_id('dbo.RegistrationFormAssets') and name in ('UploadOrganizationId', 'UploadFormCode')"));
         Assert.AreEqual(1, Scalar<int>("select count(*) from sys.indexes where object_id=object_id('dbo.RegistrationFormAssets') and name='IX_RegistrationFormAssets_UploadScope'"));
+        Assert.AreEqual(1, Scalar<int>("select count(*) from sys.indexes where object_id=object_id('dbo.RegistrationFormAssets') and name='IX_RegistrationFormAssets_CreatedDate'"));
         Assert.AreEqual(1, Scalar<int>("select count(*) from dbo.RegistrationFormSettingTypes where Setting='header_image_asset_id'"));
         Assert.AreEqual(0, Scalar<int>("select count(*) from dbo.RegistrationFormSettingTypes where Setting='header_image_url'"));
         Assert.AreEqual(0, Scalar<int>("select count(*) from dbo.RegistrationFormSettings where Setting='header_image_url'"));
+        Assert.AreEqual(1, Scalar<int>("select count(*) from sys.foreign_keys where parent_object_id=object_id('dbo.RegistrationFormSettings') and name='FK_Registration_Form_Settings_Registration_Form_Setting_Types' and is_disabled=0"));
+    }
+
+    [TestMethod]
+    public void ConvergenceScript_IsRepeatableAndRegistersTheCompleteCatalog()
+    {
+        var convergence = File.ReadAllText(Path.Combine(RepositoryRoot(), "database", "settings-administration.sql"));
+        using (var connection = Open())
+        {
+            Execute(connection, convergence, 30);
+            Execute(connection, convergence, 30);
+        }
+
+        var expected = new SettingCatalog().All.Select(setting => setting.Key).ToArray();
+        var actual = Query("select Setting from dbo.RegistrationFormSettingTypes", null,
+            reader => reader.GetString(0));
+        foreach (var key in expected)
+        {
+            Assert.AreEqual(1, actual.Count(actualKey => actualKey.Equals(key, StringComparison.OrdinalIgnoreCase)), key);
+        }
         Assert.AreEqual(1, Scalar<int>("select count(*) from sys.foreign_keys where parent_object_id=object_id('dbo.RegistrationFormSettings') and name='FK_Registration_Form_Settings_Registration_Form_Setting_Types' and is_disabled=0"));
     }
 
@@ -387,6 +410,66 @@ update dbo.RegistrationSettingsCacheGeneration set Generation=0,ModifiedAtUtc=SY
     }
 
     [TestMethod]
+    public void DeployedSettingTypesContainEveryPersistableCatalogKeyExactlyOnce()
+    {
+        var expected = new SettingCatalog().All.Select(setting => setting.Key).ToArray();
+        var actual = Query("select Setting from dbo.RegistrationFormSettingTypes", null,
+            reader => reader.GetString(0));
+
+        Assert.AreEqual(expected.Length, expected.Distinct(StringComparer.OrdinalIgnoreCase).Count(),
+            "The persistable catalog contains duplicate keys.");
+        foreach (var key in expected)
+        {
+            Assert.AreEqual(1, actual.Count(actualKey => actualKey.Equals(key, StringComparison.OrdinalIgnoreCase)),
+                $"Setting-type registration is missing or duplicated for {key}.");
+        }
+        CollectionAssert.DoesNotContain(actual, "header_image_url");
+        CollectionAssert.DoesNotContain(actual, "legal_name_checkbox_label");
+        CollectionAssert.DoesNotContain(actual, "ecard_checkbox_label");
+        CollectionAssert.DoesNotContain(actual, "mailing_list_checkbox_label");
+        CollectionAssert.DoesNotContain(actual, "require_preferred_pickup_location");
+    }
+
+    [TestMethod]
+    public void DirectSave_PersistsGeneratedCatalogKeysWithForeignKeyEnabled()
+    {
+        var catalog = new SettingCatalog().All.ToDictionary(setting => setting.Key, StringComparer.OrdinalIgnoreCase);
+        SeedVersion(0);
+
+        repository.DirectSave(101, "dynamic", 0,
+            [
+                new SettingMutation("label.NameFirst", DraftOperation.Upsert, "Given name"),
+                new SettingMutation("require.PhoneVoice1", DraftOperation.Upsert, "true"),
+                new SettingMutation("alert.NameFirst", DraftOperation.Upsert, "Enter a first name.")
+            ], catalog, Audit());
+
+        Assert.AreEqual("Given name", ReadSettingValue(101, "dynamic", "label.NameFirst"));
+        Assert.AreEqual("true", ReadSettingValue(101, "dynamic", "require.PhoneVoice1"));
+        Assert.AreEqual("Enter a first name.", ReadSettingValue(101, "dynamic", "alert.NameFirst"));
+        Assert.AreEqual(1L, repository.GetVersion(101, "dynamic"));
+    }
+
+    [TestMethod]
+    public void CommitDraft_PublishesGeneratedCatalogKeysWithForeignKeyEnabled()
+    {
+        var catalog = new SettingCatalog().All.ToDictionary(setting => setting.Key, StringComparer.OrdinalIgnoreCase);
+        SeedVersion(0);
+
+        var draft = repository.SaveToSharedDraft(102, "dynamic", 0, null,
+            [
+                new SettingMutation("label.NameFirst", DraftOperation.Upsert, "Draft first name"),
+                new SettingMutation("require.PhoneVoice1", DraftOperation.Upsert, "false"),
+                new SettingMutation("alert.NameFirst", DraftOperation.Upsert, "Draft validation message")
+            ], catalog, Audit());
+        repository.CommitDraft(draft.DraftId, catalog, true, Audit());
+
+        Assert.AreEqual("Draft first name", ReadSettingValue(102, "dynamic", "label.NameFirst"));
+        Assert.AreEqual("false", ReadSettingValue(102, "dynamic", "require.PhoneVoice1"));
+        Assert.AreEqual("Draft validation message", ReadSettingValue(102, "dynamic", "alert.NameFirst"));
+        Assert.AreEqual(DraftStatus.Committed, repository.GetDraft(draft.DraftId)!.Status);
+    }
+
+    [TestMethod]
     public void DirectSave_PersistsHeaderImageAssetIdWithForeignKeyAndAuditIntact()
     {
         var catalog = new SettingCatalog().All.ToDictionary(setting => setting.Key, StringComparer.OrdinalIgnoreCase);
@@ -462,6 +545,102 @@ update dbo.RegistrationSettingsCacheGeneration set Generation=0,ModifiedAtUtc=SY
         Assert.IsFalse(assetRepository.Exists(987654321));
         Assert.IsNull(assetRepository.Get(987654321));
         Assert.IsNull(assetRepository.GetMetadata(987654321));
+    }
+
+    [TestMethod]
+    public void AssetCleanup_RespectsGracePeriodAndProcessesOnlyTheRequestedBatch()
+    {
+        var oldAssets = Enumerable.Range(0, 3)
+            .Select(index => assetRepository.Create($"old-{index}.png", "image/png", TestImageData.Create("image/png"), 101, "form"))
+            .ToArray();
+        var fresh = assetRepository.Create("fresh.png", "image/png", TestImageData.Create("image/png"), 101, "form");
+        var now = clock.GetUtcNow().UtcDateTime;
+        foreach (var asset in oldAssets)
+        {
+            SetAssetCreatedDate(asset.AssetId, now.AddDays(-2));
+        }
+        SetAssetCreatedDate(fresh.AssetId, now.AddHours(-1));
+
+        var firstDeleted = assetRepository.DeleteOrphanedAssets(now.AddDays(-1), 2);
+
+        Assert.AreEqual(2, firstDeleted);
+        Assert.AreEqual(1, oldAssets.Count(asset => assetRepository.Exists(asset.AssetId)));
+        Assert.IsTrue(assetRepository.Exists(fresh.AssetId));
+        Assert.AreEqual(1, assetRepository.DeleteOrphanedAssets(now.AddDays(-1), 2));
+        Assert.IsFalse(oldAssets.Any(asset => assetRepository.Exists(asset.AssetId)));
+        Assert.IsTrue(assetRepository.Exists(fresh.AssetId));
+    }
+
+    [TestMethod]
+    public void AssetCleanup_DoesNotDeleteAnUploadDuringItsGraceWindowThenDeletesIt()
+    {
+        var asset = assetRepository.Create("abandoned.png", "image/png", TestImageData.Create("image/png"), 101, "form");
+        var now = clock.GetUtcNow().UtcDateTime;
+        SetAssetCreatedDate(asset.AssetId, now.AddHours(-1));
+
+        Assert.AreEqual(0, assetRepository.DeleteOrphanedAssets(now.AddHours(-2), 100));
+        Assert.IsTrue(assetRepository.Exists(asset.AssetId));
+        Assert.AreEqual(1, assetRepository.DeleteOrphanedAssets(now, 100));
+        Assert.IsFalse(assetRepository.Exists(asset.AssetId));
+    }
+
+    [TestMethod]
+    public void AssetCleanup_DeletesReplacedAssetButRetainsReplacement()
+    {
+        var catalog = new SettingCatalog().All.ToDictionary(setting => setting.Key, StringComparer.OrdinalIgnoreCase);
+        var first = assetRepository.Create("first.png", "image/png", TestImageData.Create("image/png"), 101, "form");
+        var replacement = assetRepository.Create("replacement.png", "image/png", TestImageData.Create("image/png"), 101, "form");
+        var now = clock.GetUtcNow().UtcDateTime;
+        SetAssetCreatedDate(first.AssetId, now.AddDays(-2));
+        SetAssetCreatedDate(replacement.AssetId, now.AddHours(-1));
+
+        repository.DirectSave(101, "form", 0,
+            [new SettingMutation("header_image_asset_id", DraftOperation.Upsert, first.AssetId.ToString())], catalog, Audit());
+        repository.DirectSave(101, "form", 1,
+            [new SettingMutation("header_image_asset_id", DraftOperation.Upsert, replacement.AssetId.ToString())], catalog, Audit());
+
+        Assert.AreEqual(1, assetRepository.DeleteOrphanedAssets(now.AddDays(-1), 100));
+        Assert.IsFalse(assetRepository.Exists(first.AssetId));
+        Assert.IsTrue(assetRepository.Exists(replacement.AssetId));
+    }
+
+    [TestMethod]
+    public void AssetCleanup_ProtectsReferencesAcrossScopesAndActiveDraftsUntilFinalRemoval()
+    {
+        var catalog = new SettingCatalog().All.ToDictionary(setting => setting.Key, StringComparer.OrdinalIgnoreCase);
+        var live = assetRepository.Create("live.png", "image/png", TestImageData.Create("image/png"), 101, "live");
+        var anotherScope = assetRepository.Create("another-scope.png", "image/png", TestImageData.Create("image/png"), 999, "other");
+        var draftOnly = assetRepository.Create("draft-only.png", "image/png", TestImageData.Create("image/png"), 777, "draft");
+        var now = clock.GetUtcNow().UtcDateTime;
+        foreach (var asset in new[] { live, anotherScope, draftOnly })
+        {
+            SetAssetCreatedDate(asset.AssetId, now.AddDays(-2));
+        }
+
+        repository.DirectSave(101, "live", 0,
+            [new SettingMutation("header_image_asset_id", DraftOperation.Upsert, live.AssetId.ToString())], catalog, Audit());
+        repository.DirectSave(101, "other", 0,
+            [new SettingMutation("header_image_asset_id", DraftOperation.Upsert, anotherScope.AssetId.ToString())], catalog, Audit());
+        var draft = repository.SaveToSharedDraft(102, "draft", 0, null,
+            [new SettingMutation("header_image_asset_id", DraftOperation.Upsert, draftOnly.AssetId.ToString())], catalog, Audit());
+
+        Assert.AreEqual(0, assetRepository.DeleteOrphanedAssets(now.AddDays(-1), 100));
+        Assert.IsTrue(assetRepository.Exists(live.AssetId));
+        Assert.IsTrue(assetRepository.Exists(anotherScope.AssetId));
+        Assert.IsTrue(assetRepository.Exists(draftOnly.AssetId));
+
+        repository.DirectSave(101, "live", 1,
+            [new SettingMutation("header_image_asset_id", DraftOperation.RemoveOverride, null)], catalog, Audit());
+        repository.DirectSave(101, "other", 1,
+            [new SettingMutation("header_image_asset_id", DraftOperation.RemoveOverride, null)], catalog, Audit());
+        Assert.AreEqual(2, assetRepository.DeleteOrphanedAssets(now.AddDays(-1), 100));
+        Assert.IsFalse(assetRepository.Exists(live.AssetId));
+        Assert.IsFalse(assetRepository.Exists(anotherScope.AssetId));
+        Assert.IsTrue(assetRepository.Exists(draftOnly.AssetId));
+
+        repository.DiscardDraft(draft.DraftId, catalog, true, Audit());
+        Assert.AreEqual(1, assetRepository.DeleteOrphanedAssets(now.AddDays(-1), 100));
+        Assert.IsFalse(assetRepository.Exists(draftOnly.AssetId));
     }
 
     [TestMethod]
@@ -1069,6 +1248,18 @@ end;");
                 "if not exists (select 1 from dbo.RegistrationFormSettingTypes where Setting=@key) insert dbo.RegistrationFormSettingTypes(Setting) values(@key);",
                 parameters: command => command.Parameters.AddWithValue("@key", key));
         }
+    }
+
+    private void SetAssetCreatedDate(int assetId, DateTime createdDateUtc)
+    {
+        using var connection = Open();
+        Execute(connection,
+            "update dbo.RegistrationFormAssets set CreatedDate=@createdDateUtc,ModifiedDate=@createdDateUtc where AssetId=@assetId",
+            parameters: command =>
+            {
+                command.Parameters.AddWithValue("@createdDateUtc", createdDateUtc);
+                command.Parameters.AddWithValue("@assetId", assetId);
+            });
     }
 
     private SqlConnection Open() { var connection = new SqlConnection(databaseConnectionString!); connection.Open(); return connection; }

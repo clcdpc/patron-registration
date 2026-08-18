@@ -709,6 +709,55 @@ public class SettingsControllerTests
     }
 
     [TestMethod]
+    public void DirectSave_RemainsSuccessfulWhenPostCommitCacheRefreshFails()
+    {
+        var repository = new Mock<ISettingsAdministrationRepository>();
+        var mutationCount = 0;
+        repository.Setup(service => service.DirectSave(
+                It.IsAny<int>(), It.IsAny<string>(), It.IsAny<long>(), It.IsAny<IReadOnlyList<SettingMutation>>(),
+                It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), It.IsAny<AuditContext>()))
+            .Callback<int, string, long, IReadOnlyList<SettingMutation>, IReadOnlyDictionary<string, SettingDefinition>, AuditContext>(
+                (_, _, _, _, _, _) => mutationCount++);
+        var cache = new Mock<ICache>();
+        cache.Setup(service => service.RebuildCache()).Throws(new InvalidOperationException("simulated refresh failure"));
+        var invalidator = new SettingsCacheInvalidator(cache.Object, repository.Object);
+        var controller = CreateController(repository, LibraryAuthorization(), suppliedCacheInvalidator: invalidator);
+
+        var result = controller.DirectSave(new SaveSettingsRequest
+        {
+            OrganizationId = 3,
+            ExpectedVersion = 1,
+            Changes = [new SettingMutationInput { Key = "label.NameFirst", Value = "First name" }]
+        });
+
+        Assert.IsInstanceOfType<RedirectToActionResult>(result);
+        Assert.AreEqual(1, mutationCount);
+        cache.Verify(service => service.RebuildCache(), Times.Once);
+    }
+
+    [TestMethod]
+    public void DirectSave_RepositoryFailureStillReturnsConflictWithoutRefreshingCache()
+    {
+        var repository = new Mock<ISettingsAdministrationRepository>();
+        repository.Setup(service => service.DirectSave(
+                It.IsAny<int>(), It.IsAny<string>(), It.IsAny<long>(), It.IsAny<IReadOnlyList<SettingMutation>>(),
+                It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), It.IsAny<AuditContext>()))
+            .Throws(new System.Data.DBConcurrencyException("The settings changed."));
+        var invalidator = new Mock<ISettingsCacheInvalidator>(MockBehavior.Strict);
+        var controller = CreateController(repository, LibraryAuthorization(), suppliedCacheInvalidator: invalidator.Object);
+
+        var result = controller.DirectSave(new SaveSettingsRequest
+        {
+            OrganizationId = 3,
+            ExpectedVersion = 1,
+            Changes = [new SettingMutationInput { Key = "label.NameFirst", Value = "First name" }]
+        });
+
+        Assert.IsInstanceOfType<ConflictObjectResult>(result);
+        invalidator.Verify(service => service.LiveSettingsChanged(It.IsAny<string?>()), Times.Never);
+    }
+
+    [TestMethod]
     public void DirectSave_RejectsMissingImageAssetWithoutCallingRepository()
     {
         var repository = new Mock<ISettingsAdministrationRepository>();
@@ -1870,10 +1919,11 @@ public class SettingsControllerTests
         SettingsAdministrationOptions? administrationOptions = null,
         IPreviewTokenService? previewTokenService = null,
         Mock<IRegistrationFormAssetRepository>? suppliedAssets = null,
-        IRegistrationFormAssetAuthorization? suppliedAssetAuthorization = null)
+        IRegistrationFormAssetAuthorization? suppliedAssetAuthorization = null,
+        ISettingsCacheInvalidator? suppliedCacheInvalidator = null)
     {
         repository.Setup(service => service.GetCacheGeneration()).Returns(1);
-        var invalidator = new Mock<ISettingsCacheInvalidator>();
+        var invalidator = suppliedCacheInvalidator ?? new Mock<ISettingsCacheInvalidator>().Object;
         var branchEligibility = new Mock<IPreviewBranchEligibilityService>();
         branchEligibility.Setup(service => service.GetEligibleBranches(It.IsAny<int>(), It.IsAny<int>())).Returns([]);
         branchEligibility.Setup(service => service.IsEligible(It.IsAny<int>(), It.IsAny<int>(), It.IsAny<int>()))
@@ -1905,7 +1955,7 @@ public class SettingsControllerTests
             previewTokenService ?? new PreviewTokenService(),
             branchEligibility.Object,
             formCodeAvailability,
-            invalidator.Object,
+            invalidator,
             brandingAccessor ?? new SettingsPageBrandingContextAccessor(),
             assets.Object,
             assetAuthorization,

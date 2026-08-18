@@ -78,6 +78,7 @@ namespace Clc.PatronRegistration.Web
             builder.Services.AddScoped<IEmailSenderFactory, EmailSenderFactory>();
             builder.Services.AddScoped<IMelissaClientFactory, MelissaClientFactory>();
             builder.Services.AddHostedService<SettingsCacheGenerationWorker>();
+            builder.Services.AddHostedService<RegistrationFormAssetCleanupWorker>();
 
             builder.Services
                 .AddSingleton<IActionContextAccessor, ActionContextAccessor>()

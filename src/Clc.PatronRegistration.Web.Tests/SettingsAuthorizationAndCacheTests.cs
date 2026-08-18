@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using Clc.PatronRegistration.Helpers;
 using Clc.PatronRegistration.Web.Settings;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Moq;
 
@@ -125,6 +126,34 @@ public class SettingsAuthorizationAndCacheTests
     }
 
     [TestMethod]
+    public async Task ImmediateRefreshFailure_IsLoggedAndRetriedWithoutThrowing()
+    {
+        var cache = new Mock<ICache>();
+        var firstRebuild = true;
+        cache.Setup(service => service.RebuildCache()).Callback(() =>
+        {
+            if (firstRebuild)
+            {
+                firstRebuild = false;
+                throw new InvalidOperationException("simulated cache rebuild failure");
+            }
+        });
+        var repository = new Mock<ISettingsAdministrationRepository>();
+        repository.Setup(service => service.GetCacheGeneration()).Returns(5);
+        var logger = new RecordingLogger<SettingsCacheInvalidator>();
+        var invalidator = new SettingsCacheInvalidator(cache.Object, repository.Object, logger);
+
+        invalidator.LiveSettingsChanged("DirectSave organization=3 form=main");
+        await invalidator.CheckForRemoteChangesAsync();
+
+        cache.Verify(service => service.RebuildCache(), Times.Exactly(2));
+        Assert.IsTrue(logger.Messages.Any(message =>
+            message.Level == LogLevel.Error &&
+            message.Text.Contains("DirectSave organization=3 form=main", StringComparison.Ordinal) &&
+            message.Text.Contains("retry", StringComparison.OrdinalIgnoreCase)));
+    }
+
+    [TestMethod]
     public async Task FirstPoll_RebuildsAnAlreadyLoadedCacheBeforeRecordingGeneration()
     {
         var cache = new Mock<ICache>();
@@ -217,5 +246,25 @@ public class SettingsAuthorizationAndCacheTests
             claims.Add(new Claim(ClaimTypes.Role, "Clc.CardReg.ManageSettings"));
         }
         return new ClaimsPrincipal(new ClaimsIdentity(claims, "test", ClaimTypes.Name, ClaimTypes.Role));
+    }
+
+    private sealed class RecordingLogger<T> : ILogger<T>
+    {
+        public List<LogEntry> Messages { get; } = [];
+
+        public IDisposable BeginScope<TState>(TState state) where TState : notnull => NullScope.Instance;
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+            Func<TState, Exception?, string> formatter) =>
+            Messages.Add(new(logLevel, formatter(state, exception)));
+
+        public sealed record LogEntry(LogLevel Level, string Text);
+
+        private sealed class NullScope : IDisposable
+        {
+            public static readonly NullScope Instance = new();
+            public void Dispose() { }
+        }
     }
 }

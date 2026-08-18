@@ -5,6 +5,7 @@ using Clc.PatronRegistration.Web.Models;
 using Clc.PatronRegistration.Validators;
 using System.ComponentModel.DataAnnotations;
 using System.Reflection;
+using System.Text.RegularExpressions;
 using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using Moq;
@@ -1185,6 +1186,35 @@ public class SettingsAdministrationTests
         Assert.IsTrue(catalog.TryGet("require.PhoneVoice1", out _));
         Assert.IsFalse(catalog.TryGet("require.NameFirst", out _));
         Assert.IsFalse(catalog.TryGet("require.DropTable", out _));
+    }
+
+    [TestMethod]
+    public void SqlSettingAllowlistsMatchEveryPersistableCatalogKey()
+    {
+        var expected = new SettingCatalog().All.Select(setting => setting.Key).ToArray();
+        var root = FindRepositoryRoot();
+        foreach (var relativePath in new[]
+        {
+            "database/009-register-setting-catalog-keys.sql",
+            "database/settings-administration.sql"
+        })
+        {
+            var source = File.ReadAllText(Path.Combine(root, relativePath));
+            const string begin = "/* BEGIN SETTING_CATALOG_ALLOWLIST */";
+            const string end = "/* END SETTING_CATALOG_ALLOWLIST */";
+            var start = source.IndexOf(begin, StringComparison.Ordinal);
+            var finish = source.IndexOf(end, start + begin.Length, StringComparison.Ordinal);
+            Assert.IsTrue(start >= 0 && finish > start, $"The catalog allowlist markers are missing from {relativePath}.");
+            var section = source[(start + begin.Length)..finish];
+            var actual = Regex.Matches(section, @"\('([^']+)'\)")
+                .Select(match => match.Groups[1].Value)
+                .ToArray();
+
+            Assert.AreEqual(expected.Length, actual.Length, $"The catalog allowlist count drifted in {relativePath}.");
+            Assert.AreEqual(actual.Length, actual.Distinct(StringComparer.OrdinalIgnoreCase).Count(),
+                $"The catalog allowlist contains duplicate keys in {relativePath}.");
+            CollectionAssert.AreEquivalent(expected, actual, relativePath);
+        }
     }
 
     [TestMethod]

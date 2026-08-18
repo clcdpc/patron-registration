@@ -282,7 +282,7 @@ public sealed class SettingsController(
         try
         {
             repository.DirectSave(request.OrganizationId, request.FormCode, request.ExpectedVersion, mutations, CatalogByKey, CreateAudit(request.OrganizationId, request.FormCode));
-            cacheInvalidator.LiveSettingsChanged();
+            cacheInvalidator.LiveSettingsChanged($"DirectSave organization={request.OrganizationId} form={request.FormCode}");
         }
         catch (DBConcurrencyException exception)
         {
@@ -477,7 +477,7 @@ public sealed class SettingsController(
         try
         {
             repository.CommitDraft(draftId, CatalogByKey, authorization.Describe(User).IsGlobal, CreateAudit(organizationId, formCode));
-            cacheInvalidator.LiveSettingsChanged();
+            cacheInvalidator.LiveSettingsChanged($"CommitDraft draft={draftId} organization={organizationId} form={formCode}");
             TempData["SettingsStatus"] = $"Shared draft #{draftId} was published.";
         }
         catch (UnauthorizedAccessException)
@@ -788,7 +788,7 @@ public sealed class SettingsController(
             ModelState.AddModelError(nameof(request.FormCode), exception.Message);
             return View("Forms", BuildFormsViewModel(request.OrganizationId, principal.IsGlobal));
         }
-        cacheInvalidator.LiveSettingsChanged();
+        cacheInvalidator.LiveSettingsChanged($"CreateForm organization={request.OrganizationId} form={request.FormCode}");
         return RedirectToAction(nameof(Forms), new { libraryId = request.OrganizationId });
     }
 
@@ -817,7 +817,7 @@ public sealed class SettingsController(
             ModelState.AddModelError(nameof(request.FormCode), exception.Message);
             return View("Forms", BuildFormsViewModel(request.OrganizationId, principal.IsGlobal));
         }
-        cacheInvalidator.LiveSettingsChanged();
+        cacheInvalidator.LiveSettingsChanged($"CustomizeForm organization={request.OrganizationId} form={formCode}");
         return RedirectToAction(nameof(Forms), new { libraryId = request.OrganizationId });
     }
 
@@ -844,7 +844,7 @@ public sealed class SettingsController(
             ModelState.AddModelError(nameof(request.FormCode), exception.Message);
             return View("Forms", BuildFormsViewModel(request.OrganizationId, principal.IsGlobal));
         }
-        cacheInvalidator.LiveSettingsChanged();
+        cacheInvalidator.LiveSettingsChanged($"EditForm organization={request.OrganizationId} form={formCode}");
         return RedirectToAction(nameof(Forms), new { libraryId = request.OrganizationId });
     }
 
@@ -898,7 +898,7 @@ public sealed class SettingsController(
         {
             return Conflict("The form-code deletion conflicted with another settings change. Review the deletion impact again.");
         }
-        cacheInvalidator.LiveSettingsChanged();
+        cacheInvalidator.LiveSettingsChanged($"DeleteForm organization={organizationId} form={formCode}");
         return RedirectToAction(nameof(Forms), new { libraryId = organizationId });
     }
 

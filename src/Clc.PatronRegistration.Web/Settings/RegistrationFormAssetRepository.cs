@@ -34,6 +34,7 @@ public interface IRegistrationFormAssetRepository
 {
     RegistrationFormAsset Create(string fileName, string contentType, byte[] content,
         int uploadOrganizationId, string uploadFormCode);
+    int DeleteOrphanedAssets(DateTime olderThanUtc, int batchSize);
     RegistrationFormAsset? Get(int assetId);
     RegistrationFormAssetMetadata? GetMetadata(int assetId);
     bool Exists(int assetId);
@@ -306,6 +307,8 @@ public static class RegistrationFormAssetUploadValidation
 
 public sealed class RegistrationFormAssetRepository : IRegistrationFormAssetRepository
 {
+    public const int MaximumOrphanCleanupBatchSize = 1_000;
+
     private readonly string connectionString;
 
     public RegistrationFormAssetRepository(IDbHelperSettings settings)
@@ -355,6 +358,40 @@ public sealed class RegistrationFormAssetRepository : IRegistrationFormAssetRepo
         return new RegistrationFormAsset(metadata.AssetId, metadata.FileName, metadata.ContentType, content,
             metadata.ContentHash, metadata.CreatedDate, metadata.ModifiedDate,
             metadata.UploadOrganizationId, metadata.UploadFormCode);
+    }
+
+    public int DeleteOrphanedAssets(DateTime olderThanUtc, int batchSize)
+    {
+        if (batchSize <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(batchSize));
+        }
+
+        batchSize = Math.Min(batchSize, MaximumOrphanCleanupBatchSize);
+        using var connection = Open();
+        return connection.Execute("""
+            delete top (@batchSize)
+            from dbo.RegistrationFormAssets
+            where CreatedDate < @olderThanUtc
+              and not exists
+              (
+                  select 1
+                  from dbo.RegistrationFormSettings
+                  where Setting = 'header_image_asset_id'
+                    and TRY_CONVERT(int, Value) = RegistrationFormAssets.AssetId
+              )
+              and not exists
+              (
+                  select 1
+                  from dbo.RegistrationSettingDraftChanges as draftChange
+                  join dbo.RegistrationSettingDrafts as draft
+                    on draft.DraftId = draftChange.DraftId
+                  where draft.Status = 'Active'
+                    and draftChange.SettingKey = 'header_image_asset_id'
+                    and draftChange.Operation = 'Upsert'
+                    and TRY_CONVERT(int, draftChange.Value) = RegistrationFormAssets.AssetId
+              );
+            """, new { olderThanUtc, batchSize });
     }
 
     public RegistrationFormAsset? Get(int assetId)
