@@ -1,12 +1,12 @@
 /*
 	Patron-registration settings administration convergence script.
 
-	Supersedes migrations 001-010 for deployment purposes.
+	Supersedes migrations 001-011 for deployment purposes.
 
 	Compatible with:
 	- the existing pre-settings-administration database
-	- databases that have run some of migrations 001-010
-	- databases that have run all migrations 001-010
+	- databases that have run some of migrations 001-011
+	- databases that have run all migrations 001-011
 	- databases that have already run this script
 
 	dbo.RegistrationFormSettings and dbo.RegistrationFormSettingTypes
@@ -381,6 +381,27 @@ begin try
 		on dbo.RegistrationFormAssets (CreatedDate)
 	end
 
+	if object_id('dbo.RegistrationFormAssetReferenceLocks', 'U') is null
+	begin
+		create table dbo.RegistrationFormAssetReferenceLocks
+		(
+			LockId tinyint not null
+				constraint PK_RegistrationFormAssetReferenceLocks primary key,
+			constraint CK_RegistrationFormAssetReferenceLocks_Singleton check (LockId = 1)
+		)
+	end
+
+	if not exists
+	(
+		select 1
+		from dbo.RegistrationFormAssetReferenceLocks
+		where LockId = 1
+	)
+	begin
+		insert into dbo.RegistrationFormAssetReferenceLocks (LockId)
+		values (1)
+	end
+
 	declare @setting_map table
 	(
 		LegacyKey nvarchar(200) not null primary key,
@@ -644,6 +665,7 @@ begin try
 		or object_id('dbo.RegistrationSettingAuditEvents', 'U') is null
 		or object_id('dbo.RegistrationSettingsCacheGeneration', 'U') is null
 		or object_id('dbo.RegistrationFormAssets', 'U') is null
+		or object_id('dbo.RegistrationFormAssetReferenceLocks', 'U') is null
 	begin
 		raiserror('Settings administration deployment did not produce all required tables.', 16, 1)
 	end
@@ -712,6 +734,16 @@ begin try
 	)
 	begin
 		raiserror('RegistrationFormAssets created-date index is missing after deployment.', 16, 1)
+	end
+
+	if not exists
+	(
+		select 1
+		from dbo.RegistrationFormAssetReferenceLocks
+		where LockId = 1
+	)
+	begin
+		raiserror('RegistrationFormAssetReferenceLocks row 1 is missing after deployment.', 16, 1)
 	end
 
 	if exists

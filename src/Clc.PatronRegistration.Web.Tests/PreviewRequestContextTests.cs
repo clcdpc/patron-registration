@@ -322,7 +322,9 @@ public class PreviewRequestContextTests
     {
         var context = CreateResolver().Resolve("token")!;
         var accessor = new PreviewRequestContextAccessor { IsPreviewRequest = true, Current = context };
-        var resolver = new RequestSettingProviderResolver(accessor, new SettingsPageBrandingContextAccessor(), new TestCache(), Options.Create(new SettingsAdministrationOptions()), new RegistrationConfiguration());
+        var resolver = new RequestSettingProviderResolver(accessor, new SettingsPageBrandingContextAccessor(),
+            Mock.Of<ISettingsAuthorizationService>(), Mock.Of<IFormCodeAvailabilityService>(),
+            new TestCache(), Options.Create(new SettingsAdministrationOptions()), new RegistrationConfiguration());
 
         Assert.AreSame(context.Settings, resolver.Resolve(new DefaultHttpContext()));
 
@@ -333,7 +335,9 @@ public class PreviewRequestContextTests
     [TestMethod]
     public void RequestSettingResolver_NormalRegistrationUsesRouteOrganizationAndFormCode()
     {
-        var resolver = new RequestSettingProviderResolver(new PreviewRequestContextAccessor(), new SettingsPageBrandingContextAccessor(), new TestCache(), Options.Create(new SettingsAdministrationOptions()), new RegistrationConfiguration());
+        var resolver = new RequestSettingProviderResolver(new PreviewRequestContextAccessor(), new SettingsPageBrandingContextAccessor(),
+            Mock.Of<ISettingsAuthorizationService>(), Mock.Of<IFormCodeAvailabilityService>(),
+            new TestCache(), Options.Create(new SettingsAdministrationOptions()), new RegistrationConfiguration());
         var httpContext = new DefaultHttpContext();
         httpContext.Request.RouteValues["orgId"] = "3";
         httpContext.Request.RouteValues["formCode"] = "kids";
@@ -360,7 +364,8 @@ public class PreviewRequestContextTests
                 new() { OrganizationID = 3, FormCode = "kids", Setting = "header_image_asset_id", Value = "43" }
             ]
         };
-        var resolver = new RequestSettingProviderResolver(new PreviewRequestContextAccessor(), branding, cache,
+        var resolver = new RequestSettingProviderResolver(new PreviewRequestContextAccessor(), branding,
+            Mock.Of<ISettingsAuthorizationService>(), Mock.Of<IFormCodeAvailabilityService>(), cache,
             Options.Create(new SettingsAdministrationOptions()), new RegistrationConfiguration());
         var request = new DefaultHttpContext();
         request.Request.RouteValues["orgId"] = "3";
@@ -383,6 +388,7 @@ public class PreviewRequestContextTests
         branding.Set(2, 2);
         var resolver = new RequestSettingProviderResolver(
             new PreviewRequestContextAccessor { IsPreviewRequest = true, Current = preview }, branding,
+            Mock.Of<ISettingsAuthorizationService>(), Mock.Of<IFormCodeAvailabilityService>(),
             new TestCache(), Options.Create(new SettingsAdministrationOptions()), new RegistrationConfiguration());
 
         Assert.AreSame(preview.Settings, resolver.Resolve(new DefaultHttpContext()));

@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Data;
 using System.Security.Cryptography;
 using Dapper;
 using Microsoft.Data.SqlClient;
@@ -369,7 +370,12 @@ public sealed class RegistrationFormAssetRepository : IRegistrationFormAssetRepo
 
         batchSize = Math.Min(batchSize, MaximumOrphanCleanupBatchSize);
         using var connection = Open();
-        return connection.Execute("""
+        using var transaction = connection.BeginTransaction(IsolationLevel.Serializable);
+        // The gate is acquired before the asset/reference reads below, matching
+        // every settings operation that can change a live or Active-draft image
+        // reference.
+        RegistrationFormAssetReferenceCoordinator.Acquire(connection, transaction, nameof(DeleteOrphanedAssets));
+        var deleted = connection.Execute("""
             delete top (@batchSize)
             from dbo.RegistrationFormAssets
             where CreatedDate < @olderThanUtc
@@ -391,7 +397,9 @@ public sealed class RegistrationFormAssetRepository : IRegistrationFormAssetRepo
                     and draftChange.Operation = 'Upsert'
                     and TRY_CONVERT(int, draftChange.Value) = RegistrationFormAssets.AssetId
               );
-            """, new { olderThanUtc, batchSize });
+            """, new { olderThanUtc, batchSize }, transaction);
+        transaction.Commit();
+        return deleted;
     }
 
     public RegistrationFormAsset? Get(int assetId)

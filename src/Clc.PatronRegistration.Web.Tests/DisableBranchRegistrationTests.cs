@@ -209,7 +209,8 @@ public sealed class DisableBranchRegistrationTests
         var httpContext = new DefaultHttpContext();
         httpContext.Request.RouteValues["formCode"] = "form";
         var settingResolver = new RequestSettingProviderResolver(
-            new PreviewRequestContextAccessor(), new SettingsPageBrandingContextAccessor(), cache.Object,
+            new PreviewRequestContextAccessor(), new SettingsPageBrandingContextAccessor(),
+            Mock.Of<ISettingsAuthorizationService>(), Mock.Of<IFormCodeAvailabilityService>(), cache.Object,
             Options.Create(new SettingsAdministrationOptions()), new RegistrationConfiguration());
         var resolver = new RegistrationScopeResolver(db.Object, cache.Object, settingResolver);
 

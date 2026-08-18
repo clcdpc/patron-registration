@@ -1,4 +1,5 @@
 using System.Data;
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using Clc.PatronRegistration.Administration;
@@ -279,6 +280,8 @@ public sealed class SettingsAdministrationRepository : ISettingsAdministrationRe
         formCode = FormCodeNormalizer.Normalize(formCode);
         using var connection = Open();
         using var transaction = connection.BeginTransaction(IsolationLevel.Serializable);
+        RegistrationFormAssetReferenceCoordinator.Acquire(connection, transaction, nameof(SaveToSharedDraft));
+        EnsureImageAssetsExist(connection, transaction, changes, catalog);
         var activeDraft = connection.QuerySingleOrDefault<ActiveDraftRow>(
             "select DraftId,BaselineVersion from dbo.RegistrationSettingDrafts with(updlock,holdlock) where OrganizationId=@organizationId and FormCode=@formCode and Status='Active'",
             new { organizationId, formCode }, transaction);
@@ -291,7 +294,7 @@ public sealed class SettingsAdministrationRepository : ISettingsAdministrationRe
         var draftId = existing.GetValueOrDefault();
         if (created)
         {
-            // Lock order: draft range, scope version, then draft changes.
+            // Lock order: asset-reference gate, draft range, scope version, then draft changes.
             EnsureVersionRow(connection, transaction, organizationId, formCode);
             var version = ReadVersion(connection, transaction, organizationId, formCode);
             if (version != expectedVersion)
@@ -353,6 +356,7 @@ if @@ROWCOUNT=0
     {
         using var connection = Open();
         using var transaction = connection.BeginTransaction(IsolationLevel.Serializable);
+        RegistrationFormAssetReferenceCoordinator.Acquire(connection, transaction, nameof(RemoveDraftChange));
         EnsureActiveDraft(connection, transaction, draftId);
         var definition = DraftChangeAuditClassification.RequireDefinition(settingKey, catalog);
         if (!canManageSensitive && definition.IsSensitive)
@@ -380,6 +384,8 @@ if @@ROWCOUNT=0
         formCode = FormCodeNormalizer.Normalize(formCode);
         using var connection = Open();
         using var transaction = connection.BeginTransaction(IsolationLevel.Serializable);
+        RegistrationFormAssetReferenceCoordinator.Acquire(connection, transaction, nameof(DirectSave));
+        EnsureImageAssetsExist(connection, transaction, changes, catalog);
         EnsureVersionRow(connection, transaction, organizationId, formCode);
         var current = ReadVersion(connection, transaction, organizationId, formCode);
         if (current != expectedVersion)
@@ -399,11 +405,13 @@ if @@ROWCOUNT=0
     {
         using var connection = Open();
         using var transaction = connection.BeginTransaction(IsolationLevel.Serializable);
+        RegistrationFormAssetReferenceCoordinator.Acquire(connection, transaction, nameof(CommitDraft));
         EnsureActiveDraft(connection, transaction, draftId);
         var draft = ReadDraft(connection, draftId, transaction) ??
             throw new DBConcurrencyException("The shared draft no longer exists. Reload the settings page.");
         DraftOperationValidation.RequireSupported(draft.Changes);
         EnsureCanManageRestrictedDraft(connection, transaction, draftId, catalog, canManageSensitive);
+        EnsureImageAssetsExist(connection, transaction, draft.Changes, catalog);
 
         EnsureVersionRow(connection, transaction, draft.OrganizationId, draft.FormCode);
         if (ReadVersion(connection, transaction, draft.OrganizationId, draft.FormCode) != draft.BaselineVersion)
@@ -427,6 +435,7 @@ update dbo.RegistrationSettingPreviewLinks set RevokedAtUtc=coalesce(RevokedAtUt
     {
         using var connection = Open();
         using var transaction = connection.BeginTransaction(IsolationLevel.Serializable);
+        RegistrationFormAssetReferenceCoordinator.Acquire(connection, transaction, nameof(DiscardDraft));
         EnsureActiveDraft(connection, transaction, draftId);
         EnsureCanManageRestrictedDraft(connection, transaction, draftId, catalog, canManageSensitive);
         connection.Execute(@"
@@ -762,6 +771,7 @@ select
         var affectedOrganizations = DiscoverAffectedOrganizations(connection, expectedTarget.OwnerOrganizationId,
             expectedTarget.FormCode, systemOrganizationId, knownOrganizations);
         using var transaction = connection.BeginTransaction(IsolationLevel.Serializable);
+        RegistrationFormAssetReferenceCoordinator.Acquire(connection, transaction, nameof(DeleteFormCode));
         var lockedSnapshot = BuildDeletionSnapshot(connection, transaction, expectedTarget.OwnerOrganizationId,
             expectedTarget.FormCode, systemOrganizationId, affectedOrganizations, true);
         if (string.IsNullOrWhiteSpace(expectedFingerprint) || lockedSnapshot is null || lockedSnapshot.Target.Kind != expectedTarget.Kind ||
@@ -964,6 +974,43 @@ if @@ROWCOUNT=0 insert dbo.RegistrationFormSettings(OrganizationID,Setting,FormC
                 previousValue: AuditValueFormatter.Format(old, definition.IsSensitive),
                 newValue: AuditValueFormatter.Format(change.Value, definition.IsSensitive),
                 isSensitive: definition.IsSensitive);
+        }
+    }
+
+    private static void EnsureImageAssetsExist(SqlConnection connection, IDbTransaction transaction,
+        IReadOnlyList<SettingMutation> changes, IReadOnlyDictionary<string, SettingDefinition> catalog)
+    {
+        // The caller has acquired the asset-reference gate before any other
+        // repository locks. Cleanup therefore cannot delete a row between this
+        // existence check and the setting/draft write in the same transaction.
+        foreach (var change in changes)
+        {
+            if (change.Operation != DraftOperation.Upsert ||
+                !catalog.TryGetValue(change.Key, out var definition) ||
+                definition.ValueType != SettingValueType.Image)
+            {
+                continue;
+            }
+
+            var validationError = definition.Validate(change.Value);
+            if (validationError is not null)
+            {
+                throw new InvalidOperationException($"{definition.DisplayName}: {validationError}");
+            }
+
+            if (!int.TryParse(change.Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var assetId) || assetId <= 0)
+            {
+                throw new InvalidOperationException($"{definition.DisplayName}: Choose a valid uploaded image.");
+            }
+
+            var existingAssetId = connection.QuerySingleOrDefault<int?>(
+                "select AssetId from dbo.RegistrationFormAssets with (updlock,holdlock) where AssetId=@assetId",
+                new { assetId }, transaction);
+            if (existingAssetId != assetId)
+            {
+                throw new InvalidOperationException(
+                    "The referenced registration-form image no longer exists. Upload the image again and retry the save.");
+            }
         }
     }
 

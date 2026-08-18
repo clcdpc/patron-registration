@@ -1,7 +1,9 @@
 using System.Data;
 using Clc.PatronRegistration.Administration;
+using Clc.PatronRegistration.Configuration;
 using Clc.PatronRegistration.Web.Settings;
 using Microsoft.Data.SqlClient;
+using Microsoft.Extensions.Options;
 using System.Text.Json;
 
 #nullable enable
@@ -105,7 +107,7 @@ public sealed class SettingsAdministrationRepositoryIntegrationTests
             using var database = new SqlConnection(candidateConnectionString);
             database.Open();
             DeployExistingRegistrationSettingsSchema(database);
-            foreach (var file in new[] { "001-settings-administration.sql", "002-preview-operational-branch.sql", "003-expand-audit-setting-values.sql", "004-registration-form-assets.sql", "005-registration-form-asset-scope.sql", "006-register-header-image-asset-setting.sql", "007-remove-legacy-header-image-url.sql", "008-migrate-legacy-registration-field-settings.sql", "009-register-setting-catalog-keys.sql", "010-registration-form-asset-cleanup.sql" })
+            foreach (var file in new[] { "001-settings-administration.sql", "002-preview-operational-branch.sql", "003-expand-audit-setting-values.sql", "004-registration-form-assets.sql", "005-registration-form-asset-scope.sql", "006-register-header-image-asset-setting.sql", "007-remove-legacy-header-image-url.sql", "008-migrate-legacy-registration-field-settings.sql", "009-register-setting-catalog-keys.sql", "010-registration-form-asset-cleanup.sql", "011-registration-form-asset-reference-lock.sql" })
             {
                 Execute(database, File.ReadAllText(Path.Combine(RepositoryRoot(), "database", file)), 30);
             }
@@ -115,6 +117,7 @@ public sealed class SettingsAdministrationRepositoryIntegrationTests
             Execute(database, File.ReadAllText(Path.Combine(RepositoryRoot(), "database", "008-migrate-legacy-registration-field-settings.sql")), 30);
             Execute(database, File.ReadAllText(Path.Combine(RepositoryRoot(), "database", "009-register-setting-catalog-keys.sql")), 30);
             Execute(database, File.ReadAllText(Path.Combine(RepositoryRoot(), "database", "010-registration-form-asset-cleanup.sql")), 30);
+            Execute(database, File.ReadAllText(Path.Combine(RepositoryRoot(), "database", "011-registration-form-asset-reference-lock.sql")), 30);
             databaseConnectionString = candidateConnectionString;
             schemaReady = true;
         }
@@ -174,6 +177,7 @@ update dbo.RegistrationSettingsCacheGeneration set Generation=0,ModifiedAtUtc=SY
             "dbo.RegistrationSettingDraftChanges",
             "dbo.RegistrationSettingAuditEvents",
             "dbo.RegistrationFormAssets",
+            "dbo.RegistrationFormAssetReferenceLocks",
             "dbo.RegistrationFormSettingTypes",
             "dbo.RegistrationFormSettings"
         };
@@ -186,6 +190,8 @@ update dbo.RegistrationSettingsCacheGeneration set Generation=0,ModifiedAtUtc=SY
         Assert.AreEqual(2, Scalar<int>("select count(*) from sys.columns where object_id=object_id('dbo.RegistrationFormAssets') and name in ('UploadOrganizationId', 'UploadFormCode')"));
         Assert.AreEqual(1, Scalar<int>("select count(*) from sys.indexes where object_id=object_id('dbo.RegistrationFormAssets') and name='IX_RegistrationFormAssets_UploadScope'"));
         Assert.AreEqual(1, Scalar<int>("select count(*) from sys.indexes where object_id=object_id('dbo.RegistrationFormAssets') and name='IX_RegistrationFormAssets_CreatedDate'"));
+        Assert.AreEqual(1, Scalar<int>("select case when object_id('dbo.RegistrationFormAssetReferenceLocks','U') is null then 0 else 1 end"));
+        Assert.AreEqual(1, Scalar<int>("select count(*) from dbo.RegistrationFormAssetReferenceLocks where LockId=1"));
         Assert.AreEqual(1, Scalar<int>("select count(*) from dbo.RegistrationFormSettingTypes where Setting='header_image_asset_id'"));
         Assert.AreEqual(0, Scalar<int>("select count(*) from dbo.RegistrationFormSettingTypes where Setting='header_image_url'"));
         Assert.AreEqual(0, Scalar<int>("select count(*) from dbo.RegistrationFormSettings where Setting='header_image_url'"));
@@ -512,6 +518,396 @@ update dbo.RegistrationSettingsCacheGeneration set Generation=0,ModifiedAtUtc=SY
         Assert.AreEqual(1L, repository.GetVersion(101, "form"));
         Assert.AreEqual(DraftStatus.Committed, repository.GetDraft(draft.DraftId)!.Status);
         AssertAuditCount("DraftCommitted", 1);
+        AssertNoDanglingLiveImageReferences();
+    }
+
+    [TestMethod]
+    public async Task DirectSaveAndCleanup_Race_SaveWinsAfterRequestAuthorization()
+    {
+        var catalog = new SettingCatalog().All.ToDictionary(setting => setting.Key, StringComparer.OrdinalIgnoreCase);
+        var asset = assetRepository.Create("race-save.png", "image/png", TestImageData.Create("image/png"), 101, "form");
+        var now = clock.GetUtcNow().UtcDateTime;
+        SetAssetCreatedDate(asset.AssetId, now.AddDays(-2));
+        SeedVersion(0);
+        AssertRequestLevelAssetAuthorizationSucceeded(asset);
+
+        var saveGateHeld = CompletionSource();
+        var cleanupAttempted = CompletionSource();
+        var allowSave = CompletionSource();
+        RegistrationFormAssetReferenceCoordinator.BeforeAcquireForTesting = operation =>
+        {
+            if (operation == nameof(RegistrationFormAssetRepository.DeleteOrphanedAssets))
+            {
+                cleanupAttempted.TrySetResult(true);
+            }
+        };
+        RegistrationFormAssetReferenceCoordinator.AfterAcquireForTesting = operation =>
+        {
+            if (operation == nameof(SettingsAdministrationRepository.DirectSave))
+            {
+                saveGateHeld.TrySetResult(true);
+                if (!allowSave.Task.Wait(ConcurrencyTestTimeout))
+                {
+                    throw new TimeoutException("The deterministic save-wins gate was not released.");
+                }
+            }
+        };
+
+        try
+        {
+            var save = Task.Run(() =>
+            {
+                try
+                {
+                    repository.DirectSave(101, "form", 0,
+                        [new SettingMutation("header_image_asset_id", DraftOperation.Upsert, asset.AssetId.ToString())], catalog, Audit());
+                    return (Exception?)null;
+                }
+                catch (Exception exception)
+                {
+                    return exception;
+                }
+            });
+            await saveGateHeld.Task.WaitAsync(ConcurrencyTestTimeout);
+
+            var cleanup = Task.Run(() => assetRepository.DeleteOrphanedAssets(now.AddDays(-1), 100));
+            await cleanupAttempted.Task.WaitAsync(ConcurrencyTestTimeout);
+            allowSave.TrySetResult(true);
+
+            await Task.WhenAll(save, cleanup).WaitAsync(ConcurrencyTestTimeout);
+            Assert.IsNull(save.Result);
+            Assert.AreEqual(0, cleanup.Result);
+            Assert.IsTrue(assetRepository.Exists(asset.AssetId));
+            Assert.AreEqual(asset.AssetId.ToString(), ReadSettingValue(101, "form", "header_image_asset_id"));
+            AssertNoDanglingLiveImageReferences();
+        }
+        finally
+        {
+            allowSave.TrySetResult(true);
+            RegistrationFormAssetReferenceCoordinator.BeforeAcquireForTesting = null;
+            RegistrationFormAssetReferenceCoordinator.AfterAcquireForTesting = null;
+        }
+    }
+
+    [TestMethod]
+    public async Task DirectSaveAndCleanup_Race_CleanupWinsAndSaveDoesNotPersistDanglingReference()
+    {
+        var catalog = new SettingCatalog().All.ToDictionary(setting => setting.Key, StringComparer.OrdinalIgnoreCase);
+        var asset = assetRepository.Create("race-cleanup.png", "image/png", TestImageData.Create("image/png"), 101, "form");
+        var now = clock.GetUtcNow().UtcDateTime;
+        SetAssetCreatedDate(asset.AssetId, now.AddDays(-2));
+        SeedVersion(0);
+        AssertRequestLevelAssetAuthorizationSucceeded(asset);
+
+        var cleanupGateHeld = CompletionSource();
+        var saveAttempted = CompletionSource();
+        var allowCleanup = CompletionSource();
+        RegistrationFormAssetReferenceCoordinator.BeforeAcquireForTesting = operation =>
+        {
+            if (operation == nameof(SettingsAdministrationRepository.DirectSave))
+            {
+                saveAttempted.TrySetResult(true);
+            }
+        };
+        RegistrationFormAssetReferenceCoordinator.AfterAcquireForTesting = operation =>
+        {
+            if (operation == nameof(RegistrationFormAssetRepository.DeleteOrphanedAssets))
+            {
+                cleanupGateHeld.TrySetResult(true);
+                if (!allowCleanup.Task.Wait(ConcurrencyTestTimeout))
+                {
+                    throw new TimeoutException("The deterministic cleanup-wins gate was not released.");
+                }
+            }
+        };
+
+        try
+        {
+            var cleanup = Task.Run(() => assetRepository.DeleteOrphanedAssets(now.AddDays(-1), 100));
+            await cleanupGateHeld.Task.WaitAsync(ConcurrencyTestTimeout);
+            var save = Task.Run(() =>
+            {
+                try
+                {
+                    repository.DirectSave(101, "form", 0,
+                        [new SettingMutation("header_image_asset_id", DraftOperation.Upsert, asset.AssetId.ToString())], catalog, Audit());
+                    return (Exception?)null;
+                }
+                catch (Exception exception)
+                {
+                    return exception;
+                }
+            });
+            await saveAttempted.Task.WaitAsync(ConcurrencyTestTimeout);
+            allowCleanup.TrySetResult(true);
+
+            await Task.WhenAll(cleanup, save).WaitAsync(ConcurrencyTestTimeout);
+            Assert.AreEqual(1, cleanup.Result);
+            Assert.IsInstanceOfType<InvalidOperationException>(save.Result);
+            Assert.IsFalse(assetRepository.Exists(asset.AssetId));
+            Assert.AreEqual(0, Scalar<int>("select count(*) from dbo.RegistrationFormSettings where Setting='header_image_asset_id'"));
+            AssertNoDanglingLiveImageReferences();
+        }
+        finally
+        {
+            allowCleanup.TrySetResult(true);
+            RegistrationFormAssetReferenceCoordinator.BeforeAcquireForTesting = null;
+            RegistrationFormAssetReferenceCoordinator.AfterAcquireForTesting = null;
+        }
+    }
+
+    [TestMethod]
+    public async Task SaveToSharedDraftAndCleanup_Race_SaveWinsForFirstImageReference()
+    {
+        var catalog = new SettingCatalog().All.ToDictionary(setting => setting.Key, StringComparer.OrdinalIgnoreCase);
+        var asset = assetRepository.Create("draft-race-save.png", "image/png", TestImageData.Create("image/png"), 101, "form");
+        var now = clock.GetUtcNow().UtcDateTime;
+        SetAssetCreatedDate(asset.AssetId, now.AddDays(-2));
+        SeedVersion(0);
+        AssertRequestLevelAssetAuthorizationSucceeded(asset);
+
+        var saveGateHeld = CompletionSource();
+        var cleanupAttempted = CompletionSource();
+        var allowSave = CompletionSource();
+        RegistrationFormAssetReferenceCoordinator.BeforeAcquireForTesting = operation =>
+        {
+            if (operation == nameof(RegistrationFormAssetRepository.DeleteOrphanedAssets))
+            {
+                cleanupAttempted.TrySetResult(true);
+            }
+        };
+        RegistrationFormAssetReferenceCoordinator.AfterAcquireForTesting = operation =>
+        {
+            if (operation == nameof(SettingsAdministrationRepository.SaveToSharedDraft))
+            {
+                saveGateHeld.TrySetResult(true);
+                if (!allowSave.Task.Wait(ConcurrencyTestTimeout))
+                {
+                    throw new TimeoutException("The deterministic draft save-wins gate was not released.");
+                }
+            }
+        };
+
+        try
+        {
+            var save = Task.Run(() =>
+            {
+                try
+                {
+                    return (SaveToDraftResult?)repository.SaveToSharedDraft(101, "form", 0, null,
+                        [new SettingMutation("header_image_asset_id", DraftOperation.Upsert, asset.AssetId.ToString())], catalog, Audit());
+                }
+                catch
+                {
+                    return (SaveToDraftResult?)null;
+                }
+            });
+            await saveGateHeld.Task.WaitAsync(ConcurrencyTestTimeout);
+            var cleanup = Task.Run(() => assetRepository.DeleteOrphanedAssets(now.AddDays(-1), 100));
+            await cleanupAttempted.Task.WaitAsync(ConcurrencyTestTimeout);
+            allowSave.TrySetResult(true);
+
+            await Task.WhenAll(save, cleanup).WaitAsync(ConcurrencyTestTimeout);
+            Assert.IsNotNull(save.Result);
+            Assert.AreEqual(0, cleanup.Result);
+            Assert.IsTrue(assetRepository.Exists(asset.AssetId));
+            Assert.AreEqual(asset.AssetId.ToString(), ReadActiveDraftImageValue(save.Result!.DraftId));
+            AssertNoDanglingActiveDraftImageReferences();
+        }
+        finally
+        {
+            allowSave.TrySetResult(true);
+            RegistrationFormAssetReferenceCoordinator.BeforeAcquireForTesting = null;
+            RegistrationFormAssetReferenceCoordinator.AfterAcquireForTesting = null;
+        }
+    }
+
+    [TestMethod]
+    public async Task SaveToSharedDraftAndCleanup_Race_CleanupWinsWithoutCreatingFirstImageDraftReference()
+    {
+        var catalog = new SettingCatalog().All.ToDictionary(setting => setting.Key, StringComparer.OrdinalIgnoreCase);
+        var asset = assetRepository.Create("draft-race-cleanup.png", "image/png", TestImageData.Create("image/png"), 101, "form");
+        var now = clock.GetUtcNow().UtcDateTime;
+        SetAssetCreatedDate(asset.AssetId, now.AddDays(-2));
+        SeedVersion(0);
+        AssertRequestLevelAssetAuthorizationSucceeded(asset);
+
+        var cleanupGateHeld = CompletionSource();
+        var saveAttempted = CompletionSource();
+        var allowCleanup = CompletionSource();
+        RegistrationFormAssetReferenceCoordinator.BeforeAcquireForTesting = operation =>
+        {
+            if (operation == nameof(SettingsAdministrationRepository.SaveToSharedDraft))
+            {
+                saveAttempted.TrySetResult(true);
+            }
+        };
+        RegistrationFormAssetReferenceCoordinator.AfterAcquireForTesting = operation =>
+        {
+            if (operation == nameof(RegistrationFormAssetRepository.DeleteOrphanedAssets))
+            {
+                cleanupGateHeld.TrySetResult(true);
+                if (!allowCleanup.Task.Wait(ConcurrencyTestTimeout))
+                {
+                    throw new TimeoutException("The deterministic cleanup-wins gate was not released.");
+                }
+            }
+        };
+
+        try
+        {
+            var cleanup = Task.Run(() => assetRepository.DeleteOrphanedAssets(now.AddDays(-1), 100));
+            await cleanupGateHeld.Task.WaitAsync(ConcurrencyTestTimeout);
+            var save = Task.Run(() =>
+            {
+                try
+                {
+                    repository.SaveToSharedDraft(101, "form", 0, null,
+                        [new SettingMutation("header_image_asset_id", DraftOperation.Upsert, asset.AssetId.ToString())], catalog, Audit());
+                    return (Exception?)null;
+                }
+                catch (Exception exception)
+                {
+                    return exception;
+                }
+            });
+            await saveAttempted.Task.WaitAsync(ConcurrencyTestTimeout);
+            allowCleanup.TrySetResult(true);
+
+            await Task.WhenAll(cleanup, save).WaitAsync(ConcurrencyTestTimeout);
+            Assert.AreEqual(1, cleanup.Result);
+            Assert.IsInstanceOfType<InvalidOperationException>(save.Result);
+            Assert.AreEqual(0, CountActiveDrafts());
+            AssertNoDanglingActiveDraftImageReferences();
+        }
+        finally
+        {
+            allowCleanup.TrySetResult(true);
+            RegistrationFormAssetReferenceCoordinator.BeforeAcquireForTesting = null;
+            RegistrationFormAssetReferenceCoordinator.AfterAcquireForTesting = null;
+        }
+    }
+
+    [TestMethod]
+    public async Task SaveToSharedDraftAndCleanup_Race_ReplacementKeepsNewActiveDraftReference()
+    {
+        var catalog = new SettingCatalog().All.ToDictionary(setting => setting.Key, StringComparer.OrdinalIgnoreCase);
+        var first = assetRepository.Create("draft-first.png", "image/png", TestImageData.Create("image/png"), 101, "form");
+        var replacement = assetRepository.Create("draft-replacement.png", "image/png", TestImageData.Create("image/png"), 101, "form");
+        var now = clock.GetUtcNow().UtcDateTime;
+        SetAssetCreatedDate(first.AssetId, now.AddDays(-2));
+        SetAssetCreatedDate(replacement.AssetId, now.AddDays(-2));
+        SeedVersion(0);
+        var draft = repository.SaveToSharedDraft(101, "form", 0, null,
+            [new SettingMutation("header_image_asset_id", DraftOperation.Upsert, first.AssetId.ToString())], catalog, Audit());
+        AssertRequestLevelAssetAuthorizationSucceeded(replacement);
+
+        var saveGateHeld = CompletionSource();
+        var cleanupAttempted = CompletionSource();
+        var allowSave = CompletionSource();
+        RegistrationFormAssetReferenceCoordinator.BeforeAcquireForTesting = operation =>
+        {
+            if (operation == nameof(RegistrationFormAssetRepository.DeleteOrphanedAssets))
+            {
+                cleanupAttempted.TrySetResult(true);
+            }
+        };
+        RegistrationFormAssetReferenceCoordinator.AfterAcquireForTesting = operation =>
+        {
+            if (operation == nameof(SettingsAdministrationRepository.SaveToSharedDraft))
+            {
+                saveGateHeld.TrySetResult(true);
+                if (!allowSave.Task.Wait(ConcurrencyTestTimeout))
+                {
+                    throw new TimeoutException("The deterministic replacement save-wins gate was not released.");
+                }
+            }
+        };
+
+        try
+        {
+            var save = Task.Run(() => repository.SaveToSharedDraft(101, "form", 0, draft.DraftId,
+                [new SettingMutation("header_image_asset_id", DraftOperation.Upsert, replacement.AssetId.ToString())], catalog, Audit()));
+            await saveGateHeld.Task.WaitAsync(ConcurrencyTestTimeout);
+            var cleanup = Task.Run(() => assetRepository.DeleteOrphanedAssets(now.AddDays(-1), 100));
+            await cleanupAttempted.Task.WaitAsync(ConcurrencyTestTimeout);
+            allowSave.TrySetResult(true);
+
+            await Task.WhenAll(save, cleanup).WaitAsync(ConcurrencyTestTimeout);
+            Assert.AreEqual(1, cleanup.Result);
+            Assert.IsTrue(assetRepository.Exists(replacement.AssetId));
+            Assert.IsFalse(assetRepository.Exists(first.AssetId));
+            Assert.AreEqual(replacement.AssetId.ToString(), ReadActiveDraftImageValue(draft.DraftId));
+            AssertNoDanglingActiveDraftImageReferences();
+        }
+        finally
+        {
+            allowSave.TrySetResult(true);
+            RegistrationFormAssetReferenceCoordinator.BeforeAcquireForTesting = null;
+            RegistrationFormAssetReferenceCoordinator.AfterAcquireForTesting = null;
+        }
+    }
+
+    [TestMethod]
+    public async Task CommitDraftAndCleanup_Race_PublishedLiveReferenceKeepsAsset()
+    {
+        var catalog = new SettingCatalog().All.ToDictionary(setting => setting.Key, StringComparer.OrdinalIgnoreCase);
+        var asset = assetRepository.Create("commit-race.png", "image/png", TestImageData.Create("image/png"), 101, "form");
+        var now = clock.GetUtcNow().UtcDateTime;
+        SetAssetCreatedDate(asset.AssetId, now.AddDays(-2));
+        SeedVersion(0);
+        var draft = repository.SaveToSharedDraft(101, "form", 0, null,
+            [new SettingMutation("header_image_asset_id", DraftOperation.Upsert, asset.AssetId.ToString())], catalog, Audit());
+        Assert.AreEqual(0, assetRepository.DeleteOrphanedAssets(now.AddDays(-1), 100));
+
+        var commitGateHeld = CompletionSource();
+        var cleanupAttempted = CompletionSource();
+        var allowCommit = CompletionSource();
+        RegistrationFormAssetReferenceCoordinator.BeforeAcquireForTesting = operation =>
+        {
+            if (operation == nameof(RegistrationFormAssetRepository.DeleteOrphanedAssets))
+            {
+                cleanupAttempted.TrySetResult(true);
+            }
+        };
+        RegistrationFormAssetReferenceCoordinator.AfterAcquireForTesting = operation =>
+        {
+            if (operation == nameof(SettingsAdministrationRepository.CommitDraft))
+            {
+                commitGateHeld.TrySetResult(true);
+                if (!allowCommit.Task.Wait(ConcurrencyTestTimeout))
+                {
+                    throw new TimeoutException("The deterministic commit gate was not released.");
+                }
+            }
+        };
+
+        try
+        {
+            var commit = Task.Run(() =>
+            {
+                repository.CommitDraft(draft.DraftId, catalog, true, Audit());
+                return true;
+            });
+            await commitGateHeld.Task.WaitAsync(ConcurrencyTestTimeout);
+            var cleanup = Task.Run(() => assetRepository.DeleteOrphanedAssets(now.AddDays(-1), 100));
+            await cleanupAttempted.Task.WaitAsync(ConcurrencyTestTimeout);
+            allowCommit.TrySetResult(true);
+
+            await Task.WhenAll(commit, cleanup).WaitAsync(ConcurrencyTestTimeout);
+            Assert.IsTrue(commit.Result);
+            Assert.AreEqual(0, cleanup.Result);
+            Assert.IsTrue(assetRepository.Exists(asset.AssetId));
+            Assert.AreEqual(asset.AssetId.ToString(), ReadSettingValue(101, "form", "header_image_asset_id"));
+            Assert.AreEqual(DraftStatus.Committed, repository.GetDraft(draft.DraftId)!.Status);
+            AssertNoDanglingLiveImageReferences();
+        }
+        finally
+        {
+            allowCommit.TrySetResult(true);
+            RegistrationFormAssetReferenceCoordinator.BeforeAcquireForTesting = null;
+            RegistrationFormAssetReferenceCoordinator.AfterAcquireForTesting = null;
+        }
     }
 
     [TestMethod]
@@ -1091,6 +1487,60 @@ values(@draftId,@hash,0,101,'legacy','legacy',null)", parameters: command =>
         Assert.IsTrue(restoredAudits is 0 or 1);
         if (repository.GetDraft(draftId)!.Status != DraftStatus.Active)
             Assert.IsNull(repository.ResolvePreviewContext(Enumerable.Repeat((byte)21, 32).ToArray()));
+    }
+
+    private static readonly TimeSpan ConcurrencyTestTimeout = TimeSpan.FromSeconds(20);
+
+    private static TaskCompletionSource<bool> CompletionSource() =>
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    private void AssertRequestLevelAssetAuthorizationSucceeded(RegistrationFormAsset asset)
+    {
+        var authorization = new RegistrationFormAssetAuthorization(
+            assetRepository,
+            new TestCache(),
+            Options.Create(new SettingsAdministrationOptions { SystemOrganizationId = 1 }));
+        Assert.IsNotNull(authorization.GetAuthorizedMetadata(
+            asset.AssetId,
+            asset.UploadOrganizationId!.Value,
+            asset.UploadFormCode ?? string.Empty));
+    }
+
+    private string ReadActiveDraftImageValue(long draftId) => QuerySingle(
+        """
+        select c.Value
+        from dbo.RegistrationSettingDraftChanges c
+        join dbo.RegistrationSettingDrafts d on d.DraftId=c.DraftId
+        where c.DraftId=@draftId and d.Status='Active'
+          and c.SettingKey='header_image_asset_id' and c.Operation='Upsert'
+        """,
+        command => command.Parameters.AddWithValue("@draftId", draftId),
+        reader => reader.GetString(0));
+
+    private void AssertNoDanglingLiveImageReferences()
+    {
+        Assert.AreEqual(0, Scalar<int>("""
+            select count(*)
+            from dbo.RegistrationFormSettings s
+            left join dbo.RegistrationFormAssets a
+              on a.AssetId=TRY_CONVERT(int,s.Value)
+            where s.Setting='header_image_asset_id' and a.AssetId is null;
+            """));
+    }
+
+    private void AssertNoDanglingActiveDraftImageReferences()
+    {
+        Assert.AreEqual(0, Scalar<int>("""
+            select count(*)
+            from dbo.RegistrationSettingDraftChanges c
+            join dbo.RegistrationSettingDrafts d on d.DraftId=c.DraftId
+            left join dbo.RegistrationFormAssets a
+              on a.AssetId=TRY_CONVERT(int,c.Value)
+            where d.Status='Active'
+              and c.SettingKey='header_image_asset_id'
+              and c.Operation='Upsert'
+              and a.AssetId is null;
+            """));
     }
 
     private void SeedVersion(long version)
