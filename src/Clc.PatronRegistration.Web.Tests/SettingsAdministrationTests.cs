@@ -680,6 +680,7 @@ public class SettingsAdministrationTests
         StringAssert.Contains(index, "data-label-template=\"Save {count} {noun} to shared draft\"");
         StringAssert.Contains(index, "data-label-template=\"Add {count} {noun} to shared draft\"");
         StringAssert.Contains(index, "name=\"ExpectedDraftId\"");
+        StringAssert.Contains(index, "name=\"ExpectedDraftRevision\"");
         Assert.IsFalse(index.Contains("Create shared draft", StringComparison.Ordinal));
         Assert.IsFalse(index.Contains("No shared draft", StringComparison.Ordinal));
         StringAssert.Contains(css, ".settings-search input[type=\"search\"]");

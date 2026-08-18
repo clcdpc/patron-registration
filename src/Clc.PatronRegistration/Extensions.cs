@@ -23,6 +23,8 @@ using System.Linq;
 using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Encodings.Web;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 
@@ -158,7 +160,13 @@ namespace Clc.PatronRegistration
             return settings == null ? JsonConvert.SerializeObject(obj) : JsonConvert.SerializeObject(obj, settings);
         }
 
-        public static string ToJavascriptString(this string s) => JsonConvert.SerializeObject(s);
+        private static readonly JsonSerializerOptions javascriptStringOptions = new()
+        {
+            Encoder = JavaScriptEncoder.Default
+        };
+
+        public static string ToJavascriptString(this string s) =>
+            System.Text.Json.JsonSerializer.Serialize(s ?? string.Empty, javascriptStringOptions);
 
 
         public static OrganizationsGetRow GetLibrary(this List<OrganizationsGetRow> orgs, int orgId)

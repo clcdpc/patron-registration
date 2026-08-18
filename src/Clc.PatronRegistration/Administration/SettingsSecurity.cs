@@ -74,4 +74,7 @@ public static class DraftOperationValidation
         }
     }
 }
-public sealed record SettingDraft(long DraftId, int OrganizationId, string FormCode, long BaselineVersion, DraftStatus Status, IReadOnlyList<SettingMutation> Changes);
+public sealed record SettingDraft(long DraftId, int OrganizationId, string FormCode, long BaselineVersion, DraftStatus Status, IReadOnlyList<SettingMutation> Changes)
+{
+    public long Revision { get; init; }
+}

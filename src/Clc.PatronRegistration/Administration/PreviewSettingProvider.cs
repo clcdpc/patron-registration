@@ -37,6 +37,10 @@ public sealed class PreviewSettingProvider : DbSettingProvider
             LibraryId,
             FormCode,
             SystemOrganizationId).EffectiveValue;
+        if (typeof(T) == typeof(string) && SafeHtmlPolicy.IsHtmlExecutionContext(name))
+        {
+            value = SafeHtmlPolicy.SanitizeIfHtml(name, value);
+        }
         return ConvertToType(value, defaultValue);
     }
 

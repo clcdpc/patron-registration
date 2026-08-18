@@ -1,10 +1,13 @@
 @inject ISettingProvider Settings
 @inject Clc.PatronRegistration.Web.Settings.IPreviewRequestContextAccessor PreviewContext
+@using Clc.PatronRegistration.Administration
 
 @{
     var bodyClass = ViewData["BodyClass"] as string;
     var pageStylesheet = ViewData["PageStylesheet"] as string;
     var pageStylesheetSupplement = ViewData["PageStylesheetSupplement"] as string;
+    var configuredStylesheet = Settings?.CssFile;
+    var safeSettingsStylesheet = SafeHtmlPolicy.IsSafeStylesheetReference(configuredStylesheet) ? configuredStylesheet : string.Empty;
     var headerImageRoute = Settings?.HeaderImageAssetId is int selectedAssetId
         ? PreviewContext.IsPreviewRequest && !string.IsNullOrWhiteSpace(PreviewContext.PlaintextToken)
             ? Url?.RouteUrl("PreviewRegistrationFormAsset", new { token = PreviewContext.PlaintextToken, id = selectedAssetId })
@@ -27,7 +30,10 @@
     <div id="regFormContainer">
         @if (!@Context.IsInjectedForm())
         {
-            <link rel="stylesheet" href="@this.BuildUrl(Settings.CssFile)" />
+            @if (!string.IsNullOrWhiteSpace(safeSettingsStylesheet))
+            {
+                <link rel="stylesheet" href="@this.BuildUrl(safeSettingsStylesheet)" />
+            }
             
             if (headerImageRoute is not null)
             {

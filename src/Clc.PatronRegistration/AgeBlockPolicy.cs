@@ -1,3 +1,4 @@
+using Clc.PatronRegistration.Administration;
 using Clc.PatronRegistration.Configuration;
 
 namespace Clc.PatronRegistration;
@@ -22,7 +23,7 @@ public static class AgeBlockPolicy
         }
 
         var isBlocked = birthdateOnly > asOf.AddYears(-MinimumAge);
-        return new(isBlocked, isBlocked ? settings.AgeBlockText : string.Empty);
+        return new(isBlocked, isBlocked ? SafeHtmlPolicy.Sanitize(settings.AgeBlockText) : string.Empty);
     }
 
     public static AgeBlockResult Evaluate(ISettingProvider settings, DateTime? birthdate) =>

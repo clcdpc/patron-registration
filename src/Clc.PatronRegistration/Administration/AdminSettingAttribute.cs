@@ -50,6 +50,13 @@ public sealed class AdminSettingAttribute : Attribute
 
     public bool IsSensitive { get; set; }
 
+    /// <summary>
+    /// Indicates that the value is later inserted into an HTML or HTML-backed
+    /// browser execution context. Such values are normalized by the shared
+    /// safe-HTML policy before they are persisted.
+    /// </summary>
+    public bool IsHtmlExecutionContext { get; set; }
+
     /// <summary>Allowed values for an enumeration setting.</summary>
     public string[]? AllowedValues { get; set; }
 
@@ -92,6 +99,11 @@ internal static class SettingPropertyMetadataCache
     }
 
     public static IReadOnlyList<SettingPropertyMetadata> GetAll() => MetadataList;
+
+    public static bool IsHtmlExecutionContext(string databaseKey) =>
+        MetadataList.Any(metadata =>
+            string.Equals(metadata.DatabaseKey, databaseKey, StringComparison.OrdinalIgnoreCase) &&
+            metadata.Administration?.IsHtmlExecutionContext == true);
 
     public static string InferDatabaseKey(string propertyName) =>
         JsonNamingPolicy.SnakeCaseLower.ConvertName(propertyName);

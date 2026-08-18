@@ -1,6 +1,7 @@
 ﻿using Microsoft.AspNetCore.Mvc.Rendering;
 using Microsoft.AspNetCore.Mvc;
 using Clc.PatronRegistration.Configuration;
+using Clc.PatronRegistration.Administration;
 using Clc.Melissa.Models;
 using Clc.Rest;
 using Newtonsoft.Json;
@@ -19,7 +20,6 @@ using System.Text.RegularExpressions;
 using System.Windows.Markup;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
-using Clc.PatronRegistration.Administration;
 
 namespace Clc.PatronRegistration
 {
@@ -737,7 +737,7 @@ namespace Clc.PatronRegistration
 
             registrationText = this.FormatTemplate(registrationText);
 
-            return registrationText;
+            return SafeHtmlPolicy.Sanitize(registrationText);
         }
         public bool ShouldAutoReset(string ip) => Settings.ResetForm && CheckIp(ip, Settings.DriversLicenseButtonEnabledIpAddresses);
 
@@ -801,7 +801,7 @@ namespace Clc.PatronRegistration
             if (string.IsNullOrWhiteSpace(EmailAddress) || (string.IsNullOrWhiteSpace(textTemplate) && string.IsNullOrWhiteSpace(htmlTemplate))) return;
 
             var textBody = this.FormatTemplate(textTemplate);
-            var htmlBody = this.FormatTemplate(htmlTemplate);
+            var htmlBody = SafeHtmlPolicy.Sanitize(this.FormatTemplate(htmlTemplate));
             _ = Task.Run(() => { emailSender.Send(EmailAddress, $@"""{Settings.WelcomeEmailFromName}"" {Settings.WelcomeEmailFromAddress}", Settings.WelcomeEmailFromAddress, subject, htmlBody, textBody); });
         }
 
@@ -852,7 +852,7 @@ namespace Clc.PatronRegistration
             message = message.Replace("[branch_phone]", string.IsNullOrWhiteSpace(branchPhone) ? "" : $"at {branchPhone}")
                 .Replace("[branch_id]", PatronBranchID.ToString());
 
-            return message;
+            return SafeHtmlPolicy.Sanitize(message);
         }
 
         public static Registration BuildBaseRegistration(int orgId, bool forceDl, string ip, ISettingProvider settings, IDbHelper db)

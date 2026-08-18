@@ -247,6 +247,7 @@ public class PreviewRequestContextTests
     {
         var context = CreateResolver(link: Link("Active", allowLiveSubmission: false)).Resolve("token")!;
         var repository = new Mock<ISettingsAdministrationRepository>();
+        repository.Setup(service => service.IsLivePreviewCurrent(It.IsAny<long>(), It.IsAny<long>())).Returns(true);
         var papi = new Mock<IPapiClient>();
         var melissa = new Mock<IMelissaRestClient>();
         var email = new Mock<IEmailSender>();
@@ -293,11 +294,36 @@ public class PreviewRequestContextTests
     }
 
     [TestMethod]
+    public void LivePreviewSubmit_RejectsGenerationChangeBeforeExternalClients()
+    {
+        var context = CreateResolver(link: Link("Active", allowLiveSubmission: true)).Resolve("token")!;
+        var repository = new Mock<ISettingsAdministrationRepository>();
+        repository.Setup(service => service.IsLivePreviewCurrent(context.Link.PreviewLinkId, 1)).Returns(false);
+        var papi = new Mock<IPapiClient>();
+        var melissa = new Mock<IMelissaRestClient>();
+        var email = new Mock<IEmailSender>();
+        var controller = new PreviewController(repository.Object,
+            new PreviewRequestContextAccessor { IsPreviewRequest = true, Current = context },
+            new TestCache(), Mock.Of<IDbHelper>(), papi.Object, melissa.Object, email.Object)
+        {
+            ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() }
+        };
+
+        var result = controller.Submit("ignored", new Registration(context.Settings));
+
+        Assert.IsInstanceOfType<NotFoundObjectResult>(result);
+        Assert.AreEqual(0, papi.Invocations.Count);
+        Assert.AreEqual(0, melissa.Invocations.Count);
+        Assert.AreEqual(0, email.Invocations.Count);
+    }
+
+    [TestMethod]
     public void LivePreview_StagedRequiredFieldModelStateBlocksAllExternalCalls()
     {
         var draft = ActiveDraft(new SettingMutation("require.PhoneVoice1", DraftOperation.Upsert, "true"));
         var context = CreateResolver(draft: draft, link: Link("Active", allowLiveSubmission: true)).Resolve("token")!;
         var repository = new Mock<ISettingsAdministrationRepository>();
+        repository.Setup(service => service.IsLivePreviewCurrent(It.IsAny<long>(), It.IsAny<long>())).Returns(true);
         var papi = new Mock<IPapiClient>();
         var melissa = new Mock<IMelissaRestClient>();
         var email = new Mock<IEmailSender>();
@@ -517,5 +543,8 @@ public class PreviewRequestContextTests
         DateTime? revokedAt = null,
         DateTime? expiresAt = null,
         bool allowLiveSubmission = false) =>
-        new(9, 7, new byte[32], allowLiveSubmission, revokedAt, expiresAt, 3, string.Empty, status, 3);
+        new(9, 7, new byte[32], allowLiveSubmission, revokedAt, expiresAt, 3, string.Empty, status, 3)
+        {
+            LiveSettingsGeneration = allowLiveSubmission ? 1 : null
+        };
 }

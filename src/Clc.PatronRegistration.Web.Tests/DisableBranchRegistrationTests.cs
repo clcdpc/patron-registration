@@ -294,6 +294,7 @@ public sealed class DisableBranchRegistrationTests
         melissa.Setup(value => value.PersonatorRequest(It.IsAny<PersonatorRequestRecord>()))
             .Throws(new InvalidOperationException("preview workflow reached"));
         var repository = new Mock<ISettingsAdministrationRepository>();
+        repository.Setup(service => service.IsLivePreviewCurrent(It.IsAny<long>(), It.IsAny<long>())).Returns(true);
         var controller = new PreviewController(
             repository.Object,
             new PreviewRequestContextAccessor { IsPreviewRequest = true, Current = PreviewContext(settings, true) },
@@ -360,13 +361,15 @@ public sealed class DisableBranchRegistrationTests
         new(7, organizationId, "", 0, DraftStatus.Active, changes);
 
     private static PreviewRequestContext PreviewContext(ISettingProvider settings, bool allowLive) =>
-        new(new PreviewLinkRecord(9, 7, new byte[32], allowLive, null, null, 3, "", "Active", 3),
+        new(new PreviewLinkRecord(9, 7, new byte[32], allowLive, null, null, 3, "", "Active", 3)
+            { LiveSettingsGeneration = allowLive ? 1 : null },
             Draft(3), (PreviewSettingProvider)settings);
 
     private static (PreviewController Controller, Mock<IPapiClient> Papi, Mock<IMelissaRestClient> Melissa,
         Mock<IEmailSender> Email, Mock<IDbHelper> Db) PreviewControllerFor(PreviewSettingProvider settings, bool allowLive)
     {
         var repository = new Mock<ISettingsAdministrationRepository>();
+        repository.Setup(service => service.IsLivePreviewCurrent(It.IsAny<long>(), It.IsAny<long>())).Returns(true);
         var papi = new Mock<IPapiClient>();
         var melissa = new Mock<IMelissaRestClient>();
         var email = new Mock<IEmailSender>();

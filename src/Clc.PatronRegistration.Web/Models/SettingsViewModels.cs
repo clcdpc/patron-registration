@@ -131,7 +131,8 @@ public sealed record SettingRowViewModel(
     bool StagedAssetMissing = false,
     SettingAssetPresentation? InheritedAsset = null,
     bool InheritedAssetMissing = false,
-    string? InheritedSourceDescription = null);
+    string? InheritedSourceDescription = null,
+    long? DraftRevision = null);
 
 public static class SettingInheritancePresentation
 {
@@ -254,6 +255,7 @@ public sealed class SaveToSharedDraftRequest
     public string FormCode { get => formCode; set => formCode = FormCodeNormalizer.Normalize(value); }
     public long ExpectedVersion { get; set; }
     public long? ExpectedDraftId { get; set; }
+    public long? ExpectedDraftRevision { get; set; }
     public List<SettingMutationInput> Changes { get; set; } = [];
 }
 

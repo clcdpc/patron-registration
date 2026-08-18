@@ -152,7 +152,8 @@ public sealed class SettingsController(
                 stagedAssetMissing,
                 inheritedAsset,
                 inheritedAssetMissing,
-                inheritedResolution is null ? null : DescribeSource(inheritedResolution)));
+                inheritedResolution is null ? null : DescribeSource(inheritedResolution),
+                DraftRevision: draft?.Revision));
         }
 
         var formCodes = formCodeAvailability.GetAvailable(libraryId).ToList();
@@ -320,8 +321,12 @@ public sealed class SettingsController(
         }
         try
         {
-            var result = repository.SaveToSharedDraft(request.OrganizationId, request.FormCode, request.ExpectedVersion, request.ExpectedDraftId,
-                mutations, CatalogByKey, CreateAudit(request.OrganizationId, request.FormCode));
+            var audit = CreateAudit(request.OrganizationId, request.FormCode);
+            var result = request.ExpectedDraftRevision.HasValue
+                ? repository.SaveToSharedDraft(request.OrganizationId, request.FormCode, request.ExpectedVersion, request.ExpectedDraftId,
+                    mutations, CatalogByKey, audit, request.ExpectedDraftRevision.Value)
+                : repository.SaveToSharedDraft(request.OrganizationId, request.FormCode, request.ExpectedVersion, request.ExpectedDraftId,
+                    mutations, CatalogByKey, audit);
             TempData["SettingsStatus"] = result.DraftCreated
                 ? $"Shared draft #{result.DraftId} was created with {mutations.Count} {(mutations.Count == 1 ? "change" : "changes")}."
                 : $"{mutations.Count} {(mutations.Count == 1 ? "change was" : "changes were")} added to shared draft #{result.DraftId}.";
@@ -429,7 +434,7 @@ public sealed class SettingsController(
 
     [HttpPost("drafts/{draftId:long}/changes/remove")]
     [ValidateAntiForgeryToken]
-    public IActionResult RemoveDraftChange(long draftId, int organizationId, string formCode, string settingKey)
+    public IActionResult RemoveDraftChange(long draftId, int organizationId, string formCode, string settingKey, long? expectedDraftRevision = null)
     {
         formCode = FormCodeNormalizer.Normalize(formCode);
         if (AuthorizedActiveDraft(draftId, organizationId, formCode) is null)
@@ -444,7 +449,16 @@ public sealed class SettingsController(
         }
         try
         {
-            repository.RemoveDraftChange(draftId, settingKey, CatalogByKey, authorization.Describe(User).IsGlobal, CreateAudit(organizationId, formCode));
+            if (expectedDraftRevision.HasValue)
+            {
+                repository.RemoveDraftChange(draftId, settingKey, CatalogByKey, authorization.Describe(User).IsGlobal,
+                    CreateAudit(organizationId, formCode), expectedDraftRevision.Value);
+            }
+            else
+            {
+                repository.RemoveDraftChange(draftId, settingKey, CatalogByKey, authorization.Describe(User).IsGlobal,
+                    CreateAudit(organizationId, formCode));
+            }
             TempData["SettingsStatus"] = $"Removed one change from shared draft #{draftId}.";
         }
         catch (UnauthorizedAccessException)
@@ -1056,7 +1070,10 @@ public sealed class SettingsController(
                 ModelState.AddModelError(input.Key, "Invalid operation.");
                 continue;
             }
-            var error = operation == DraftOperation.Upsert ? definition.Validate(input.Value) : null;
+            var normalizedValue = operation == DraftOperation.Upsert
+                ? SafeHtmlPolicy.SanitizeForSetting(definition, input.Value)
+                : null;
+            var error = operation == DraftOperation.Upsert ? definition.Validate(normalizedValue) : null;
             if (error is not null)
             {
                 ModelState.AddModelError(input.Key, error);
@@ -1064,14 +1081,14 @@ public sealed class SettingsController(
             }
             if (operation == DraftOperation.Upsert && definition.ValueType == SettingValueType.Image)
             {
-                if (!int.TryParse(input.Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var assetId) ||
+                if (!int.TryParse(normalizedValue, NumberStyles.Integer, CultureInfo.InvariantCulture, out var assetId) ||
                     assetAuthorization.GetAuthorizedMetadata(assetId, organizationId, formCode) is null)
                 {
                     ModelState.AddModelError(input.Key, "The uploaded image is missing or is not available in this settings scope.");
                     continue;
                 }
             }
-            result.Add(new SettingMutation(input.Key, operation, operation == DraftOperation.RemoveOverride ? null : input.Value));
+            result.Add(new SettingMutation(input.Key, operation, normalizedValue));
         }
         if (result.Count == 0)
         {

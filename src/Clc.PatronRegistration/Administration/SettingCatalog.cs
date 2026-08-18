@@ -63,7 +63,8 @@ public static class SettingCategoryPresentation
 
 public sealed record SettingDefinition(string Key, string DisplayName, string Description, SettingValueType ValueType,
     SettingGroup Group = SettingGroup.Ordinary, bool IsSensitive = false, bool AllowEmpty = true,
-    IReadOnlyList<string>? AllowedValues = null, int SortOrder = 0, SettingCategory? Category = null)
+    IReadOnlyList<string>? AllowedValues = null, int SortOrder = 0, SettingCategory? Category = null,
+    bool IsHtmlExecutionContext = false)
 {
     public const int MaximumExpirationDateYears = 100;
     public const int MaximumResetSeconds = 86_400;
@@ -98,6 +99,11 @@ public sealed record SettingDefinition(string Key, string DisplayName, string De
             return AllowEmpty && !IsSensitive
                 ? null
                 : "An empty value is not valid for this setting. Choose “Use inherited value” instead.";
+        }
+        if (Key.Equals("css_file", StringComparison.OrdinalIgnoreCase) &&
+            !SafeHtmlPolicy.IsSafeStylesheetReference(value))
+        {
+            return "The stylesheet must be a local relative path or an HTTP/HTTPS URL without executable content.";
         }
         if (Group == SettingGroup.Label)
         {
@@ -221,7 +227,8 @@ public sealed class SettingCatalog : ISettingCatalog
             var allowEmpty = attribute.HasAllowEmptyOverride ? attribute.AllowEmpty : AllowsEmpty(type);
             return new SettingDefinition(metadata.DatabaseKey, attribute.DisplayName, attribute.Description, type,
                 IsSensitive: attribute.IsSensitive, AllowEmpty: allowEmpty, SortOrder: i,
-                AllowedValues: attribute.AllowedValues, Category: attribute.Category);
+                AllowedValues: attribute.AllowedValues, Category: attribute.Category,
+                IsHtmlExecutionContext: attribute.IsHtmlExecutionContext);
         }).ToList();
         foreach (var suffix in DynamicFieldSuffixes)
         {

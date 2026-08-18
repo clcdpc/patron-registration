@@ -1,12 +1,12 @@
 /*
 	Patron-registration settings administration convergence script.
 
-	Supersedes migrations 001-011 for deployment purposes.
+	Supersedes migrations 001-012 for deployment purposes.
 
 	Compatible with:
 	- the existing pre-settings-administration database
-	- databases that have run some of migrations 001-011
-	- databases that have run all migrations 001-011
+	- databases that have run some of migrations 001-012
+	- databases that have run all migrations 001-012
 	- databases that have already run this script
 
 	dbo.RegistrationFormSettings and dbo.RegistrationFormSettingTypes
@@ -80,6 +80,7 @@ begin try
 			OrganizationId int not null,
 			FormCode nvarchar(64) not null constraint DF_RSD_Code default '',
 			BaselineVersion bigint not null,
+			Revision bigint not null constraint DF_RSD_Revision default 0,
 			Status varchar(16) not null,
 			CreatedAtUtc datetime2(7) not null constraint DF_RSD_Created default sysutcdatetime(),
 			CreatedBy nvarchar(256) not null,
@@ -139,6 +140,7 @@ begin try
 			TokenHash binary(32) not null,
 			OperationalBranchId int not null,
 			AllowLiveSubmission bit not null constraint DF_RSPL_Live default 0,
+			LiveSettingsGeneration bigint null,
 			CreatedAtUtc datetime2(7) not null constraint DF_RSPL_Created default sysutcdatetime(),
 			CreatedBy nvarchar(256) not null,
 			ModifiedAtUtc datetime2(7) not null constraint DF_RSPL_Modified default sysutcdatetime(),
@@ -194,6 +196,12 @@ begin try
 
 		alter table dbo.RegistrationSettingPreviewLinks
 			alter column OperationalBranchId int not null
+	end
+
+	if col_length('dbo.RegistrationSettingPreviewLinks', 'LiveSettingsGeneration') is null
+	begin
+		alter table dbo.RegistrationSettingPreviewLinks
+			add LiveSettingsGeneration bigint null
 	end
 
 	if object_id('dbo.RegistrationSettingAuditEvents', 'U') is null
@@ -312,6 +320,13 @@ begin try
 		)
 	end
 
+	update p
+	set LiveSettingsGeneration = g.Generation
+	from dbo.RegistrationSettingPreviewLinks p
+	cross join dbo.RegistrationSettingsCacheGeneration g
+	where p.AllowLiveSubmission = 1
+		and p.LiveSettingsGeneration is null
+
 	if object_id('dbo.RegistrationFormAssets', 'U') is null
 	begin
 		create table dbo.RegistrationFormAssets
@@ -367,6 +382,12 @@ begin try
 			UploadOrganizationId,
 			UploadFormCode
 		)
+	end
+
+	if col_length('dbo.RegistrationSettingDrafts', 'Revision') is null
+	begin
+		alter table dbo.RegistrationSettingDrafts
+			add Revision bigint not null constraint DF_RSD_Revision default 0
 	end
 
 	if not exists

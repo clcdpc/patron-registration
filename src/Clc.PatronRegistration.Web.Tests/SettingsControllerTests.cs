@@ -593,6 +593,53 @@ public class SettingsControllerTests
     }
 
     [TestMethod]
+    public void LibraryAdministrator_DirectAndDraftSavesSanitizeHtmlExecutionSettingsBeforePersistence()
+    {
+        const string malicious = "<p><strong>Keep this formatting</strong></p><script>alert(1)</script>" +
+            "<img src=\"https://example.test/logo.png\" onerror=\"alert(2)\"><a href=\"javascript:alert(3)\">bad</a>";
+        IReadOnlyList<SettingMutation>? directChanges = null;
+        IReadOnlyList<SettingMutation>? draftChanges = null;
+        var repository = new Mock<ISettingsAdministrationRepository>();
+        repository.Setup(service => service.DirectSave(
+                3, string.Empty, It.IsAny<long>(), It.IsAny<IReadOnlyList<SettingMutation>>(),
+                It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), It.IsAny<AuditContext>()))
+            .Callback<int, string, long, IReadOnlyList<SettingMutation>, IReadOnlyDictionary<string, SettingDefinition>, AuditContext>(
+                (_, _, _, changes, _, _) => directChanges = changes);
+        repository.Setup(service => service.SaveToSharedDraft(
+                3, string.Empty, It.IsAny<long>(), null, It.IsAny<IReadOnlyList<SettingMutation>>(),
+                It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), It.IsAny<AuditContext>()))
+            .Callback<int, string, long, long?, IReadOnlyList<SettingMutation>, IReadOnlyDictionary<string, SettingDefinition>, AuditContext>(
+                (_, _, _, _, changes, _, _) => draftChanges = changes)
+            .Returns(new SaveToDraftResult(25, true));
+        var controller = CreateController(repository, LibraryAuthorization());
+
+        var directResult = controller.DirectSave(new SaveSettingsRequest
+        {
+            OrganizationId = 3,
+            Changes = [new SettingMutationInput { Key = "registration_form_header", Value = malicious }]
+        });
+        controller.ModelState.Clear();
+        var draftResult = controller.SaveToSharedDraft(new SaveToSharedDraftRequest
+        {
+            OrganizationId = 3,
+            Changes = [new SettingMutationInput { Key = "registration_form_header", Value = malicious }]
+        });
+
+        Assert.IsInstanceOfType<RedirectToActionResult>(directResult);
+        Assert.IsInstanceOfType<RedirectToActionResult>(draftResult);
+        Assert.IsNotNull(directChanges);
+        Assert.IsNotNull(draftChanges);
+        foreach (var changes in new[] { directChanges!, draftChanges! })
+        {
+            var value = changes.Single().Value!;
+            StringAssert.Contains(value, "<strong>Keep this formatting</strong>");
+            Assert.IsFalse(value.Contains("<script", StringComparison.OrdinalIgnoreCase));
+            Assert.IsFalse(value.Contains("onerror", StringComparison.OrdinalIgnoreCase));
+            Assert.IsFalse(value.Contains("javascript:", StringComparison.OrdinalIgnoreCase));
+        }
+    }
+
+    [TestMethod]
     public void SaveToSharedDraft_ConcurrentRepositoryChangeUsesFriendlyRecovery()
     {
         var repository = new Mock<ISettingsAdministrationRepository>();
@@ -1071,6 +1118,31 @@ public class SettingsControllerTests
             It.IsAny<IReadOnlyList<SettingMutation>>(), It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), It.IsAny<AuditContext>()), Times.Once);
         repository.Verify(service => service.SaveToSharedDraft(3, string.Empty, 37, null,
             It.IsAny<IReadOnlyList<SettingMutation>>(), It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), It.IsAny<AuditContext>()), Times.Once);
+    }
+
+    [TestMethod]
+    public void SaveToSharedDraft_ForwardsExpectedDraftRevisionWhenEditingSharedDraft()
+    {
+        var repository = new Mock<ISettingsAdministrationRepository>();
+        repository.Setup(service => service.SaveToSharedDraft(3, string.Empty, 37, 24,
+                It.IsAny<IReadOnlyList<SettingMutation>>(), It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(),
+                It.IsAny<AuditContext>(), 9))
+            .Returns(new SaveToDraftResult(24, false) { DraftRevision = 10 });
+        var controller = CreateController(repository, LibraryAuthorization());
+
+        var result = controller.SaveToSharedDraft(new SaveToSharedDraftRequest
+        {
+            OrganizationId = 3,
+            ExpectedVersion = 37,
+            ExpectedDraftId = 24,
+            ExpectedDraftRevision = 9,
+            Changes = [new SettingMutationInput { Key = "registration_text", Value = "value" }]
+        });
+
+        Assert.IsInstanceOfType<RedirectToActionResult>(result);
+        repository.Verify(service => service.SaveToSharedDraft(3, string.Empty, 37, 24,
+            It.IsAny<IReadOnlyList<SettingMutation>>(), It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(),
+            It.IsAny<AuditContext>(), 9), Times.Once);
     }
 
     [TestMethod]

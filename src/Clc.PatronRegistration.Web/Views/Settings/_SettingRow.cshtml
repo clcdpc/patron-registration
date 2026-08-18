@@ -7,9 +7,7 @@
     var inputId = $"{token}-value";
     var operationId = $"{token}-operation";
     bool isImage = definition.ValueType == SettingValueType.Image;
-    bool isHtml = definition.ValueType == SettingValueType.Html || definition.Key is
-        "registration_text" or "kiosk_registration_text" or "ecard_registration_text" or
-        "valid_address_registration_text" or "valid_address_plus_name_registration_text";
+    bool isHtml = SafeHtmlPolicy.IsHtmlExecutionContext(definition);
     bool hasDraftOperation = Model.DraftOperation.HasValue;
     bool isRemoveOverride = Model.DraftOperation == DraftOperation.RemoveOverride;
     bool isDraftUpsert = Model.DraftOperation == DraftOperation.Upsert;

@@ -30,7 +30,7 @@ public class SettingsPageWidthTests
     public void SharedLayout_LoadsPageStylesheetAfterCustomStylesheetAndBeforeBody()
     {
         var layout = ReadWebFile("Views", "Shared", "_Layout.cshtml");
-        var customStylesheet = layout.IndexOf("Settings.CssFile", StringComparison.Ordinal);
+        var customStylesheet = layout.IndexOf("href=\"@this.BuildUrl(safeSettingsStylesheet)\"", StringComparison.Ordinal);
         var pageStylesheet = layout.IndexOf("href=\"@pageStylesheet\"", StringComparison.Ordinal);
         var renderBody = layout.IndexOf("@RenderBody()", StringComparison.Ordinal);
 

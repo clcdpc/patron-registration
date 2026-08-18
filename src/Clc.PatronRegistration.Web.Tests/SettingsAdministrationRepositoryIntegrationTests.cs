@@ -39,10 +39,12 @@ public sealed class SettingsAdministrationRepositoryIntegrationTests
 
     private static readonly SettingDefinition First = new("test.first", "First", "Test value", SettingValueType.ShortString);
     private static readonly SettingDefinition Second = new("test.second", "Second", "Test value", SettingValueType.ShortString);
+    private static readonly SettingDefinition Html = new("registration_form_header", "Registration header", "HTML value", SettingValueType.ShortString,
+        IsHtmlExecutionContext: true);
     private static readonly SettingDefinition Secret = new("test.secret", "Secret", "Test secret", SettingValueType.ShortString, IsSensitive: true);
     private static readonly SettingDefinition RetiredHeaderImageUrl = new("header_image_url", "Retired header image URL", "Retired setting", SettingValueType.Uri);
     private static readonly IReadOnlyDictionary<string, SettingDefinition> Catalog =
-        new[] { First, Second, Secret }.ToDictionary(item => item.Key, StringComparer.OrdinalIgnoreCase);
+        new[] { First, Second, Html, Secret }.ToDictionary(item => item.Key, StringComparer.OrdinalIgnoreCase);
 
     // Represents the setting-type rows from the old database state before the
     // header-image migrations. This is an intentionally explicit fixture
@@ -107,7 +109,7 @@ public sealed class SettingsAdministrationRepositoryIntegrationTests
             using var database = new SqlConnection(candidateConnectionString);
             database.Open();
             DeployExistingRegistrationSettingsSchema(database);
-            foreach (var file in new[] { "001-settings-administration.sql", "002-preview-operational-branch.sql", "003-expand-audit-setting-values.sql", "004-registration-form-assets.sql", "005-registration-form-asset-scope.sql", "006-register-header-image-asset-setting.sql", "007-remove-legacy-header-image-url.sql", "008-migrate-legacy-registration-field-settings.sql", "009-register-setting-catalog-keys.sql", "010-registration-form-asset-cleanup.sql", "011-registration-form-asset-reference-lock.sql" })
+            foreach (var file in new[] { "001-settings-administration.sql", "002-preview-operational-branch.sql", "003-expand-audit-setting-values.sql", "004-registration-form-assets.sql", "005-registration-form-asset-scope.sql", "006-register-header-image-asset-setting.sql", "007-remove-legacy-header-image-url.sql", "008-migrate-legacy-registration-field-settings.sql", "009-register-setting-catalog-keys.sql", "010-registration-form-asset-cleanup.sql", "011-registration-form-asset-reference-lock.sql", "012-draft-revision-and-preview-generation.sql" })
             {
                 Execute(database, File.ReadAllText(Path.Combine(RepositoryRoot(), "database", file)), 30);
             }
@@ -118,6 +120,7 @@ public sealed class SettingsAdministrationRepositoryIntegrationTests
             Execute(database, File.ReadAllText(Path.Combine(RepositoryRoot(), "database", "009-register-setting-catalog-keys.sql")), 30);
             Execute(database, File.ReadAllText(Path.Combine(RepositoryRoot(), "database", "010-registration-form-asset-cleanup.sql")), 30);
             Execute(database, File.ReadAllText(Path.Combine(RepositoryRoot(), "database", "011-registration-form-asset-reference-lock.sql")), 30);
+            Execute(database, File.ReadAllText(Path.Combine(RepositoryRoot(), "database", "012-draft-revision-and-preview-generation.sql")), 30);
             databaseConnectionString = candidateConnectionString;
             schemaReady = true;
         }
@@ -193,6 +196,8 @@ update dbo.RegistrationSettingsCacheGeneration set Generation=0,ModifiedAtUtc=SY
         Assert.AreEqual(1, Scalar<int>("select count(*) from sys.indexes where object_id=object_id('dbo.RegistrationFormAssets') and name='IX_RegistrationFormAssets_CreatedDate'"));
         Assert.AreEqual(1, Scalar<int>("select case when object_id('dbo.RegistrationFormAssetReferenceLocks','U') is null then 0 else 1 end"));
         Assert.AreEqual(1, Scalar<int>("select count(*) from dbo.RegistrationFormAssetReferenceLocks where LockId=1"));
+        Assert.AreEqual(1, Scalar<int>("select count(*) from sys.columns where object_id=object_id('dbo.RegistrationSettingDrafts') and name='Revision' and is_nullable=0"));
+        Assert.AreEqual(1, Scalar<int>("select count(*) from sys.columns where object_id=object_id('dbo.RegistrationSettingPreviewLinks') and name='LiveSettingsGeneration' and is_nullable=1"));
         Assert.AreEqual(1, Scalar<int>("select count(*) from dbo.RegistrationFormSettingTypes where Setting='header_image_asset_id'"));
         Assert.AreEqual(0, Scalar<int>("select count(*) from dbo.RegistrationFormSettingTypes where Setting='header_image_url'"));
         Assert.AreEqual(0, Scalar<int>("select count(*) from dbo.RegistrationFormSettings where Setting='header_image_url'"));
@@ -454,6 +459,54 @@ update dbo.RegistrationSettingsCacheGeneration set Generation=0,ModifiedAtUtc=SY
         Assert.AreEqual("true", ReadSettingValue(101, "dynamic", "require.PhoneVoice1"));
         Assert.AreEqual("Enter a first name.", ReadSettingValue(101, "dynamic", "alert.NameFirst"));
         Assert.AreEqual(1L, repository.GetVersion(101, "dynamic"));
+    }
+
+    [TestMethod]
+    public void DirectSave_AndSharedDraftStripExecutableHtmlBeforeStorage()
+    {
+        const string malicious = "<p><strong>Keep formatting</strong></p><script>alert(1)</script>" +
+            "<img src=\"https://example.test/logo.png\" onerror=\"alert(2)\"><a href=\"javascript:alert(3)\">bad</a>";
+        SeedVersion(0);
+
+        repository.DirectSave(101, "form", 0, [Upsert(Html, malicious)], Catalog, Audit());
+        var direct = ReadSettingValue(101, "form", Html.Key)!;
+        AssertSafeHtml(direct);
+
+        var draft = repository.SaveToSharedDraft(101, "draft-form", 0, null,
+            [Upsert(Html, malicious)], Catalog, Audit());
+        var staged = ReadChanges(draft.DraftId).Single(change => change.StartsWith($"{Html.Key}|", StringComparison.Ordinal));
+        AssertSafeHtml(staged.Split('|', 3)[2]);
+        Assert.AreEqual(1L, repository.GetDraft(draft.DraftId)!.Revision);
+    }
+
+    [TestMethod]
+    public void LivePreview_IsInvalidatedByDirectSaveAtBranchLibraryAndSystemScopes()
+    {
+        SeedVersion(0);
+        var draftId = SeedActiveDraft(0, First, "draft");
+
+        foreach (var (scope, value) in new[] { (101, "branch"), (2, "library"), (1, "system") })
+        {
+            var hash = Enumerable.Repeat((byte)scope, 32).ToArray();
+            var linkId = repository.CreatePreviewLink(draftId, hash, true, 101, 1, Catalog, true, Audit());
+            var issued = repository.GetPreviewLink(linkId)!;
+            Assert.AreEqual(repository.GetCacheGeneration(), issued.LiveSettingsGeneration);
+            Assert.IsNotNull(repository.ResolvePreviewContext(hash));
+
+            repository.DirectSave(scope, "form", 0, [Upsert(First, value)], Catalog, Audit());
+
+            Assert.IsNull(repository.ResolvePreviewContext(hash), $"scope {scope} did not invalidate the live link");
+            Assert.IsFalse(repository.IsLivePreviewCurrent(linkId, issued.LiveSettingsGeneration!.Value));
+        }
+    }
+
+    private static void AssertSafeHtml(string value)
+    {
+        var lower = value.ToLowerInvariant();
+        StringAssert.Contains(value, "<strong>Keep formatting</strong>");
+        Assert.IsFalse(lower.Contains("<script", StringComparison.Ordinal));
+        Assert.IsFalse(lower.Contains("onerror", StringComparison.Ordinal));
+        Assert.IsFalse(lower.Contains("javascript:", StringComparison.Ordinal));
     }
 
     [TestMethod]
@@ -828,7 +881,7 @@ update dbo.RegistrationSettingsCacheGeneration set Generation=0,ModifiedAtUtc=SY
         try
         {
             var save = Task.Run(() => repository.SaveToSharedDraft(101, "form", 0, draft.DraftId,
-                [new SettingMutation("header_image_asset_id", DraftOperation.Upsert, replacement.AssetId.ToString())], catalog, Audit()));
+                [new SettingMutation("header_image_asset_id", DraftOperation.Upsert, replacement.AssetId.ToString())], catalog, Audit(), draft.DraftRevision));
             await saveGateHeld.Task.WaitAsync(ConcurrencyTestTimeout);
             var cleanup = Task.Run(() => assetRepository.DeleteOrphanedAssets(now.AddDays(-1), 100));
             await cleanupAttempted.Task.WaitAsync(ConcurrencyTestTimeout);
@@ -1075,13 +1128,14 @@ update dbo.RegistrationSettingsCacheGeneration set Generation=0,ModifiedAtUtc=SY
     }
 
     [TestMethod]
-    public void SaveToSharedDraft_NullExpectedDraftId_ReusesExistingActiveDraft()
+    public void SaveToSharedDraft_CurrentDraftRevisionAllowsIntentionalMerge()
     {
         SeedVersion(3);
         var first = repository.SaveToSharedDraft(101, "form", 3, null, [Upsert(First, "existing")], Catalog, Audit());
         var beforeEdited = ReadAudits().Count(row => row.EventType == "DraftEdited");
 
-        var result = repository.SaveToSharedDraft(101, "form", 3, null, [Upsert(Second, "new")], Catalog, Audit());
+        var result = repository.SaveToSharedDraft(101, "form", 3, first.DraftId,
+            [Upsert(Second, "new")], Catalog, Audit(), first.DraftRevision);
 
         Assert.AreEqual(first.DraftId, result.DraftId);
         Assert.IsFalse(result.DraftCreated);
@@ -1089,6 +1143,51 @@ update dbo.RegistrationSettingsCacheGeneration set Generation=0,ModifiedAtUtc=SY
         CollectionAssert.AreEquivalent(new[] { "test.first|Upsert|existing", "test.second|Upsert|new" }, ReadChanges(result.DraftId).ToArray());
         AssertAuditCount("DraftCreated", 1);
         Assert.AreEqual(beforeEdited + 1, ReadAudits().Count(row => row.EventType == "DraftEdited"));
+        Assert.AreEqual(first.DraftRevision + 1, result.DraftRevision);
+    }
+
+    [TestMethod]
+    public void SaveToSharedDraft_StaleSecondAdministratorCannotOverwriteSameKey()
+    {
+        SeedVersion(0);
+        var initial = repository.SaveToSharedDraft(101, "form", 0, null,
+            [Upsert(First, "initial")], Catalog, Audit());
+        var administratorARevision = repository.GetDraft(initial.DraftId)!.Revision;
+        var administratorBRevision = administratorARevision;
+
+        var administratorA = repository.SaveToSharedDraft(101, "form", 0, initial.DraftId,
+            [Upsert(First, "administrator A")], Catalog, Audit(), administratorARevision);
+
+        Assert.ThrowsException<DBConcurrencyException>(() => repository.SaveToSharedDraft(101, "form", 0, initial.DraftId,
+            [Upsert(First, "stale administrator B")], Catalog, Audit(), administratorBRevision));
+        Assert.AreEqual("administrator A", ReadChanges(initial.DraftId).Single().Split('|', 3)[2]);
+        Assert.AreEqual(administratorA.DraftRevision, repository.GetDraft(initial.DraftId)!.Revision);
+
+        var merged = repository.SaveToSharedDraft(101, "form", 0, initial.DraftId,
+            [Upsert(Second, "administrator B current edit")], Catalog, Audit(), administratorA.DraftRevision);
+        Assert.AreEqual(administratorA.DraftRevision + 1, merged.DraftRevision);
+        CollectionAssert.AreEquivalent(
+            new[] { "test.first|Upsert|administrator A", "test.second|Upsert|administrator B current edit" },
+            ReadChanges(initial.DraftId).ToArray());
+    }
+
+    [TestMethod]
+    public void RemoveDraftChange_RequiresTheCurrentDraftRevision()
+    {
+        SeedVersion(0);
+        var initial = repository.SaveToSharedDraft(101, "form", 0, null,
+            [Upsert(First, "initial")], Catalog, Audit());
+        var currentRevision = initial.DraftRevision;
+        var changed = repository.SaveToSharedDraft(101, "form", 0, initial.DraftId,
+            [Upsert(Second, "another edit")], Catalog, Audit(), currentRevision);
+
+        Assert.ThrowsException<DBConcurrencyException>(() => repository.RemoveDraftChange(
+            initial.DraftId, First.Key, Catalog, true, Audit(), currentRevision));
+        Assert.IsTrue(ReadChanges(initial.DraftId).Any(change => change.StartsWith("test.first|", StringComparison.Ordinal)));
+
+        repository.RemoveDraftChange(initial.DraftId, First.Key, Catalog, true, Audit(), changed.DraftRevision);
+        Assert.IsFalse(ReadChanges(initial.DraftId).Any(change => change.StartsWith("test.first|", StringComparison.Ordinal)));
+        Assert.AreEqual(changed.DraftRevision + 1, repository.GetDraft(initial.DraftId)!.Revision);
     }
 
     [TestMethod]
@@ -1108,8 +1207,8 @@ update dbo.RegistrationSettingsCacheGeneration set Generation=0,ModifiedAtUtc=SY
         var draftId = SeedActiveDraft(6, First, "existing");
         var auditCount = ReadAudits().Count;
 
-        Assert.ThrowsException<DBConcurrencyException>(() => repository.SaveToSharedDraft(101, "form", 5, null,
-            [Upsert(Second, "stale")], Catalog, Audit()));
+        Assert.ThrowsException<DBConcurrencyException>(() => repository.SaveToSharedDraft(101, "form", 5, draftId,
+            [Upsert(Second, "stale")], Catalog, Audit(), 0));
 
         Assert.AreEqual(1, CountActiveDrafts());
         CollectionAssert.AreEqual(new[] { "test.first|Upsert|existing" }, ReadChanges(draftId).ToArray());
@@ -1124,7 +1223,7 @@ update dbo.RegistrationSettingsCacheGeneration set Generation=0,ModifiedAtUtc=SY
             [Upsert(First, "old"), Upsert(Second, "untouched")], Catalog, Audit());
 
         var result = repository.SaveToSharedDraft(101, "form", 1, first.DraftId,
-            [new SettingMutation(First.Key, DraftOperation.RemoveOverride, null)], Catalog, Audit());
+            [new SettingMutation(First.Key, DraftOperation.RemoveOverride, null)], Catalog, Audit(), first.DraftRevision);
 
         Assert.AreEqual(first.DraftId, result.DraftId);
         Assert.IsFalse(result.DraftCreated);
@@ -1218,7 +1317,7 @@ update dbo.RegistrationSettingsCacheGeneration set Generation=0,ModifiedAtUtc=SY
         Assert.IsNotNull(repository.ResolvePreviewContext(hash));
 
         repository.SaveToSharedDraft(101, "form", 1, draftId,
-            [Upsert(Second, "ordinary edit")], Catalog, Audit());
+            [Upsert(Second, "ordinary edit")], Catalog, Audit(), 0);
 
         Assert.IsNull(repository.ResolvePreviewContext(hash));
         Assert.IsNotNull(repository.GetPreviewLink(linkId)!.RevokedAtUtc);
@@ -1234,7 +1333,7 @@ update dbo.RegistrationSettingsCacheGeneration set Generation=0,ModifiedAtUtc=SY
         var linkId = repository.CreatePreviewLink(draftId, hash, true, 101, 1, Catalog, true, Audit());
         Assert.IsNotNull(repository.ResolvePreviewContext(hash));
 
-        repository.RemoveDraftChange(draftId, First.Key, Catalog, true, Audit());
+        repository.RemoveDraftChange(draftId, First.Key, Catalog, true, Audit(), 0);
 
         Assert.IsNull(repository.ResolvePreviewContext(hash));
         Assert.IsNotNull(repository.GetPreviewLink(linkId)!.RevokedAtUtc);

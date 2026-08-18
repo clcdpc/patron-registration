@@ -35,6 +35,10 @@ namespace Clc.PatronRegistration.Configuration
         public virtual T GetSetting<T>(string name, T defaultValue = default!)
         {
             var dbValue = new SettingsResolver().Resolve(Cache.SettingsCache, name, OrganizationId, LibraryId, FormCode, SystemOrganizationId).EffectiveValue;
+            if (typeof(T) == typeof(string) && SafeHtmlPolicy.IsHtmlExecutionContext(name))
+            {
+                dbValue = SafeHtmlPolicy.SanitizeIfHtml(name, dbValue);
+            }
             return ConvertToType(dbValue, defaultValue);
         }
 

@@ -200,7 +200,10 @@
     <input type="hidden" name="OrganizationId" value="@Model.OrganizationId" />
     <input type="hidden" name="FormCode" value="@Model.FormCode" />
     <input type="hidden" name="ExpectedVersion" value="@Model.ScopeVersion" />
-    @if (Model.ActiveDraft is not null) { <input type="hidden" name="ExpectedDraftId" value="@Model.ActiveDraft.DraftId" /> }
+    @if (Model.ActiveDraft is not null) {
+        <input type="hidden" name="ExpectedDraftId" value="@Model.ActiveDraft.DraftId" />
+        <input type="hidden" name="ExpectedDraftRevision" value="@Model.ActiveDraft.Revision" />
+    }
     <p id="edit-session-status" class="validation-summary" role="alert" tabindex="-1" hidden></p>
 
     @foreach (var category in SettingCategoryPresentation.Ordered)

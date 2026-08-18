@@ -130,6 +130,12 @@ public sealed class PreviewController(
             });
         }
 
+        if (!context.Link.LiveSettingsGeneration.HasValue ||
+            !repository.IsLivePreviewCurrent(context.Link.PreviewLinkId, context.Link.LiveSettingsGeneration.Value))
+        {
+            return NotFound("This live preview link is no longer current. Create a new preview link from the latest draft.");
+        }
+
         ApplyOperationalContext(registration, context.Settings, context.Link.OperationalBranchId);
         try
         {

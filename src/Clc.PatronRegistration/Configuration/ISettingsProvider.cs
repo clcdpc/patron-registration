@@ -14,28 +14,28 @@ namespace Clc.PatronRegistration.Configuration
         [AdminSetting(SettingCategory.PageAppearanceAndInstructions, "Header image", "Displays the uploaded image above the public registration page.", ValueType = SettingValueType.Image)]
         [JsonIgnore]
         int? HeaderImageAssetId { get; }
-        [AdminSetting(SettingCategory.PageAppearanceAndInstructions, "Registration agreement content", "Displays this agreement content before the registration form becomes available; blank content skips the agreement step.", ValueType = SettingValueType.LongString)]
+        [AdminSetting(SettingCategory.PageAppearanceAndInstructions, "Registration agreement content", "Displays this agreement content before the registration form becomes available; blank content skips the agreement step.", ValueType = SettingValueType.LongString, IsHtmlExecutionContext = true)]
         [JsonIgnore]
         string WarningText { get; }
-        [AdminSetting(SettingCategory.PageAppearanceAndInstructions, "Custom form footer HTML", "Renders this HTML beneath the public registration form.", ValueType = SettingValueType.Html)]
+        [AdminSetting(SettingCategory.PageAppearanceAndInstructions, "Custom form footer HTML", "Renders this HTML beneath the public registration form.", ValueType = SettingValueType.Html, IsHtmlExecutionContext = true)]
         [JsonIgnore]
         string CustomFormFooterHtml { get; }
-        [AdminSetting(SettingCategory.DuplicateChecking, "Duplicate patron message", "Displays when the preliminary duplicate check finds a patron; [branch_phone] and [branch_id] placeholders are replaced with the selected branch’s values.", ValueType = SettingValueType.Html)]
+        [AdminSetting(SettingCategory.DuplicateChecking, "Duplicate patron message", "Displays when the preliminary duplicate check finds a patron; [branch_phone] and [branch_id] placeholders are replaced with the selected branch’s values.", ValueType = SettingValueType.Html, IsHtmlExecutionContext = true)]
         [JsonIgnore]
         string DuplicatePatronMessageHtml { get; }
         /// <summary>Compatibility-only. The current public form has no gender field.</summary>
         [JsonIgnore]
         string NaGenderText { get; }
-        [AdminSetting(SettingCategory.PageAppearanceAndInstructions, "Default success message", "Displays this default message after successful registration when no on-site, e-card, or address-verification message takes precedence.", ValueType = SettingValueType.LongString)]
+        [AdminSetting(SettingCategory.PageAppearanceAndInstructions, "Default success message", "Displays this default message after successful registration when no on-site, e-card, or address-verification message takes precedence.", ValueType = SettingValueType.LongString, IsHtmlExecutionContext = true)]
         [JsonIgnore]
         string RegistrationText { get; }
-        [AdminSetting(SettingCategory.PageAppearanceAndInstructions, "Registration form introduction", "Renders this introductory HTML above the registration form when configured.", Key = "registration_form_header")]
+        [AdminSetting(SettingCategory.PageAppearanceAndInstructions, "Registration form introduction", "Renders this introductory HTML above the registration form when configured.", Key = "registration_form_header", IsHtmlExecutionContext = true)]
         [JsonIgnore]
         string RegistrationHeader { get; }
         [AdminSetting(SettingCategory.FormBehaviorAndFields, "Age warning message", "Provides the confirmation message shown for a patron under 18 when age warnings are enabled.", ValueType = SettingValueType.LongString)]
         [JsonIgnore]
         string AgeWarningText { get; }
-        [AdminSetting(SettingCategory.FormBehaviorAndFields, "Underage registration blocking message", "Displays the message shown when an underage patron is prevented from continuing; the value is inserted as HTML.", ValueType = SettingValueType.Html)]
+        [AdminSetting(SettingCategory.FormBehaviorAndFields, "Underage registration blocking message", "Displays the message shown when an underage patron is prevented from continuing; the value is inserted as HTML.", ValueType = SettingValueType.Html, IsHtmlExecutionContext = true)]
         [JsonIgnore]
         string AgeBlockText { get; }
         [AdminSetting(SettingCategory.FormBehaviorAndFields, "Driver’s license button text", "Labels the button that starts driver’s-license input on eligible on-site requests.", ValueType = SettingValueType.LongString)]
@@ -50,7 +50,7 @@ namespace Clc.PatronRegistration.Configuration
         [AdminSetting(SettingCategory.FormBehaviorAndFields, "Agreement decline button text", "Labels the button that declines the registration agreement and leaves the form unavailable.", ValueType = SettingValueType.LongString)]
         [JsonIgnore]
         string AgreementCancelButtonText { get; }
-        [AdminSetting(SettingCategory.KioskAndSessionBehavior, "On-site success message", "Replaces the default success message after a successful on-site registration that will automatically reset.", ValueType = SettingValueType.LongString)]
+        [AdminSetting(SettingCategory.KioskAndSessionBehavior, "On-site success message", "Replaces the default success message after a successful on-site registration that will automatically reset.", ValueType = SettingValueType.LongString, IsHtmlExecutionContext = true)]
         [JsonIgnore]
         string KioskRegistrationText { get; }
         [AdminSetting(SettingCategory.KioskAndSessionBehavior, "On-site registration introduction", "Retained for compatibility; no current registration-page consumer has been established.")]
@@ -62,13 +62,13 @@ namespace Clc.PatronRegistration.Configuration
         [AdminSetting(SettingCategory.PageAppearanceAndInstructions, "CSS file", "Loads this stylesheet on the public registration page.")]
         [JsonIgnore]
         string CssFile { get; }
-        [AdminSetting(SettingCategory.EmailAndNotices, "Mailing-list description", "Renders this explanatory HTML beside the mailing-list option when that option is displayed.", ValueType = SettingValueType.Html)]
+        [AdminSetting(SettingCategory.EmailAndNotices, "Mailing-list description", "Renders this explanatory HTML beside the mailing-list option when that option is displayed.", ValueType = SettingValueType.Html, IsHtmlExecutionContext = true)]
         [JsonIgnore]
         string MailingListDescriptionHtml { get; }
-        [AdminSetting(SettingCategory.ECardRegistration, "E-card success message", "Replaces the default success message after an e-card registration when configured.", ValueType = SettingValueType.LongString)]
+        [AdminSetting(SettingCategory.ECardRegistration, "E-card success message", "Replaces the default success message after an e-card registration when configured.", ValueType = SettingValueType.LongString, IsHtmlExecutionContext = true)]
         [JsonIgnore]
         string EcardRegistrationText { get; }
-        [AdminSetting(SettingCategory.EmailAndNotices, "Text-message information", "Provides the HTML shown when Text Message is selected as the notification method and text-message information is enabled.", ValueType = SettingValueType.Html)]
+        [AdminSetting(SettingCategory.EmailAndNotices, "Text-message information", "Provides the HTML shown when Text Message is selected as the notification method and text-message information is enabled.", ValueType = SettingValueType.Html, IsHtmlExecutionContext = true)]
         [JsonIgnore]
         string SmsNoticeInformationHtml { get; }
         [AdminSetting(SettingCategory.EmailAndNotices, "Show text-message information", "Displays the configured text-message information when Text Message is selected as the notification method.")]
@@ -76,13 +76,13 @@ namespace Clc.PatronRegistration.Configuration
         [AdminSetting(SettingCategory.EmailAndNotices, "E-card welcome email text version", "Plain-text body for e-card welcome emails; the standard plain-text template is used when this is blank.", ValueType = SettingValueType.EmailTemplate)]
         [JsonIgnore]
         string EcardWelcomeEmailTemplateText { get; }
-        [AdminSetting(SettingCategory.EmailAndNotices, "E-card welcome email HTML version", "HTML body for e-card welcome emails; the standard HTML template is used when this is blank.", ValueType = SettingValueType.EmailTemplate)]
+        [AdminSetting(SettingCategory.EmailAndNotices, "E-card welcome email HTML version", "HTML body for e-card welcome emails; the standard HTML template is used when this is blank.", ValueType = SettingValueType.EmailTemplate, IsHtmlExecutionContext = true)]
         [JsonIgnore]
         string EcardWelcomeEmailTemplateHtml { get; }
         [AdminSetting(SettingCategory.EmailAndNotices, "Welcome email text version", "Plain-text body for the standard welcome email sent after successful registration.", ValueType = SettingValueType.EmailTemplate)]
         [JsonIgnore]
         string WelcomeEmailTemplateText { get; }
-        [AdminSetting(SettingCategory.EmailAndNotices, "Welcome email HTML version", "HTML body for the standard welcome email sent after successful registration.", ValueType = SettingValueType.EmailTemplate)]
+        [AdminSetting(SettingCategory.EmailAndNotices, "Welcome email HTML version", "HTML body for the standard welcome email sent after successful registration.", ValueType = SettingValueType.EmailTemplate, IsHtmlExecutionContext = true)]
         [JsonIgnore]
         string WelcomeEmailTemplateHtml { get; }
         [AdminSetting(SettingCategory.EmailAndNotices, "Postmark API key", "Concealed credential used by the Postmark email client to send registration welcome emails.", IsSensitive = true)]
@@ -91,7 +91,7 @@ namespace Clc.PatronRegistration.Configuration
         [AdminSetting(SettingCategory.AddressVerification, "Melissa Data API key", "Concealed credential used by the Melissa client to verify submitted addresses.", IsSensitive = true)]
         [JsonIgnore]
         string MelissaDataApiKey { get; }
-        [AdminSetting(SettingCategory.FormBehaviorAndFields, "Responsible-person instructions", "Renders these instructions beside the responsible-person field when that field is displayed.", ValueType = SettingValueType.LongString)]
+        [AdminSetting(SettingCategory.FormBehaviorAndFields, "Responsible-person instructions", "Renders these instructions beside the responsible-person field when that field is displayed.", ValueType = SettingValueType.LongString, IsHtmlExecutionContext = true)]
         [JsonIgnore]
         string ResponsiblePersonDisclaimer { get; }
         [AdminSetting(SettingCategory.EmailAndNotices, "Welcome email sender name", "Sets the display name in the From header of welcome emails.")]
@@ -106,13 +106,13 @@ namespace Clc.PatronRegistration.Configuration
         [AdminSetting(SettingCategory.EmailAndNotices, "Welcome email subject", "Sets the subject for standard welcome emails.")]
         [JsonIgnore]
         string WelcomeEmailSubject { get; }
-        [AdminSetting(SettingCategory.AddressVerification, "Verified-address success message", "Replaces the default success message when Melissa verifies the address and the verified-address patron code remains assigned.", ValueType = SettingValueType.LongString)]
+        [AdminSetting(SettingCategory.AddressVerification, "Verified-address success message", "Replaces the default success message when Melissa verifies the address and the verified-address patron code remains assigned.", ValueType = SettingValueType.LongString, IsHtmlExecutionContext = true)]
         [JsonIgnore]
         string ValidAddressRegistrationText { get; }
-        [AdminSetting(SettingCategory.AddressVerification, "Address-and-name-match success message", "Replaces the default success message when Melissa verifies both the address and name and the matching patron code remains assigned.", ValueType = SettingValueType.LongString)]
+        [AdminSetting(SettingCategory.AddressVerification, "Address-and-name-match success message", "Replaces the default success message when Melissa verifies both the address and name and the matching patron code remains assigned.", ValueType = SettingValueType.LongString, IsHtmlExecutionContext = true)]
         [JsonIgnore]
         string ValidAddressPlusNameRegistrationText { get; }
-        [AdminSetting(SettingCategory.AddressVerification, "Out-of-state registration message", "Displays when registration is rejected because the submitted address state is outside Ohio.", ValueType = SettingValueType.LongString)]
+        [AdminSetting(SettingCategory.AddressVerification, "Out-of-state registration message", "Displays when registration is rejected because the submitted address state is outside Ohio.", ValueType = SettingValueType.LongString, IsHtmlExecutionContext = true)]
         [JsonIgnore]
         string OutOfStateBlockMessage { get; }
 

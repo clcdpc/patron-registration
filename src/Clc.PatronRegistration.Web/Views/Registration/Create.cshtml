@@ -806,7 +806,7 @@ else
     }
 
     async function dl() {
-        var dlinfo = window.prompt("@Settings.DriversLicensePromptText");
+        var dlinfo = window.prompt(@Html.Raw(Settings.DriversLicensePromptText.ToJavascriptString()));
 
         if (!dlinfo || dlinfo.length < 20) { return; }
 
