@@ -42,7 +42,40 @@ namespace Clc.PatronRegistration.Web.Controllers
             int? orgId,
             bool forceDl = false,
             bool agreementAccepted = false,
-            int? selectedBranchId = null)
+            int? selectedBranchId = null) =>
+            RenderCreate(orgId, forceDl, agreementAccepted, selectedBranchId);
+
+        [HttpPost]
+        public IActionResult ChangeBranch(
+            Registration p,
+            int? orgId,
+            bool forceDl = false,
+            bool agreementAccepted = false)
+        {
+            // The branch-switch request contains the live form only long enough to
+            // render the selected branch's settings. It must never become a cacheable
+            // response that a shared browser can reuse after the form is abandoned.
+            Response.Headers.CacheControl = "no-store";
+            Response.Headers.Pragma = "no-cache";
+            Response.Headers.Expires = "0";
+
+            if (!orgId.HasValue || p.PatronBranchID <= 0)
+            {
+                return RegistrationUnavailableView();
+            }
+
+            // A branch change is not a registration submission. Do not carry binding
+            // or validation errors into the newly rendered branch-specific form.
+            ModelState.Clear();
+            return RenderCreate(orgId, forceDl, agreementAccepted, p.PatronBranchID, p);
+        }
+
+        private IActionResult RenderCreate(
+            int? orgId,
+            bool forceDl,
+            bool agreementAccepted,
+            int? selectedBranchId = null,
+            Registration? submittedRegistration = null)
         {
             var organizations = db.GetSelfRegistrationOrganizations().ToList();
             if (!orgId.HasValue) { return RedirectToAction("SelectLibrary"); }
@@ -70,9 +103,36 @@ namespace Clc.PatronRegistration.Web.Controllers
                 renderSettings = selectedBranchResolution.Settings;
             }
 
-            var model = Registration.BuildBaseRegistration(
+            var model = submittedRegistration ?? Registration.BuildBaseRegistration(
                 effectiveSelectedBranchId ?? organizationId,
                 forceDl, Request.GetTrueClientIP(), renderSettings, db);
+
+            if (submittedRegistration is not null)
+            {
+                model.UseSettings(renderSettings);
+                model.Genders = db.GetGendersToOrganizations(effectiveSelectedBranchId ?? organizationId)
+                    .Select(g => new SelectListItem { Value = g.GenderID.ToString(), Text = g.Description })
+                    .ToList();
+                model.PickupBranches = renderSettings.DisplayPreferredPickupLocation
+                    ? new SelectList(
+                        db.GetPickupBranches(renderSettings.LibraryId),
+                        "OrganizationID",
+                        "DisplayName")
+                    : new SelectList(Array.Empty<string>());
+                model.ShowDlButton = forceDl || renderSettings.EnableDriversLicenseSwipe &&
+                    Registration.CheckIp(Request.GetTrueClientIP(), renderSettings.DriversLicenseButtonEnabledIpAddresses);
+                if (renderSettings.ForceEcardRemotely)
+                {
+                    model.IsECard = !Registration.CheckIp(
+                        Request.GetTrueClientIP(), renderSettings.DriversLicenseButtonEnabledIpAddresses);
+                }
+                else if (renderSettings.DisplayMailingListCheckbox &&
+                    (!Request.HasFormContentType ||
+                     !Request.Form.ContainsKey(nameof(Registration.AddToMailingList))))
+                {
+                    model.AddToMailingList = true;
+                }
+            }
 
             if (renderSettings.EnablePatronBranchSelectOption)
             {
@@ -114,6 +174,7 @@ namespace Clc.PatronRegistration.Web.Controllers
             }
 
             model.BypassAgreement = agreementAccepted;
+            RegistrationSettingsContext.Set(HttpContext, renderSettings);
 
             return HttpContext.IsInjectedForm() ? PartialView("Create", model) : View("Create", model);
         }

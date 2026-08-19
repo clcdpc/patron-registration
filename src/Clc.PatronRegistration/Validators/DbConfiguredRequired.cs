@@ -3,6 +3,7 @@ using System.ComponentModel.DataAnnotations;
 using Microsoft.Extensions.DependencyInjection;
 using Clc.PatronRegistration.Configuration;
 using Clc.PatronRegistration;
+using Clc.PatronRegistration.Helpers;
 
 namespace Clc.PatronRegistration.Validators
 {
@@ -10,11 +11,11 @@ namespace Clc.PatronRegistration.Validators
     {
         protected override ValidationResult IsValid(object? value, ValidationContext context)
         {
-            var settings = context.GetService<ISettingProvider>()!;
             var reg = context.ObjectInstance as Registration;
 
             if (reg == null) { return new ValidationResult("invalid model object"); }
 
+            var settings = reg.Settings ?? context.GetService<ISettingProvider>()!;
             var memberName = context.MemberName ?? string.Empty;
             return IsApplicable(settings, memberName) &&
                 settings.GetFieldRequired(memberName) && string.IsNullOrWhiteSpace(value?.ToString())
@@ -24,7 +25,9 @@ namespace Clc.PatronRegistration.Validators
 
         public void AddValidation(ClientModelValidationContext context)
         {
-            var settings = context.GetService<ISettingProvider>()!;
+            var settings = RegistrationSettingsContext.Get(
+                context.ActionContext.HttpContext,
+                context.GetService<ISettingProvider>()!);
 
             if (context == null)
             {

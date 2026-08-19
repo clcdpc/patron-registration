@@ -10,17 +10,15 @@
     var forceDl = ViewData["RegistrationForceDl"] as bool? == true;
     var agreementAccepted = ViewData["RegistrationAgreementAccepted"] as bool? == true;
     var registrationScopeOrganizationId = ViewData["RegistrationScopeOrganizationId"] as int? ?? Settings.OrganizationId;
-    var registrationStateStorageKey = $"patron-registration:{registrationScopeOrganizationId}:{Settings.FormCode}";
     var resetSeconds = Settings is IResetSecondsSettingStateProvider resetStateProvider
         ? resetStateProvider.GetResetSecondsState().Value.GetValueOrDefault()
         : ResetSecondsSettingParser.Normalize(Settings.ResetSeconds);
     var resetDelayMilliseconds = ResetSecondsSettingParser.ToJavaScriptMilliseconds(resetSeconds);
     var branchReloadUrlPattern = !isSettingsPreview && Settings.EnablePatronBranchSelectOption
-        ? Url.Action("Create", "Registration", new
+        ? Url.Action("ChangeBranch", "Registration", new
         {
             orgId = registrationScopeOrganizationId,
             formCode = Settings.FormCode,
-            selectedBranchId = "__BRANCH__",
             forceDl,
             agreementAccepted = "__AGREEMENT__"
         })
@@ -99,7 +97,7 @@ else
         <button onclick="dl()" id="dlbutton">@Settings.DriversLicenseButtonText</button>
     }
 
-    <form id="regform">
+    <form id="regform" autocomplete="off">
         @Html.AntiForgeryToken()
         <div asp-validation-summary="All" class="danger"></div>
 
@@ -336,12 +334,12 @@ else
 
             <div asp-for="Password">
                 <label asp-for="Password"></label>
-                <input asp-for="Password" type="password" />
+                <input asp-for="Password" type="password" autocomplete="new-password" />
             </div>
 
             <div asp-for="Password2">
                 <label asp-for="Password2"></label>
-                <input asp-for="Password2" type="password" />
+                <input asp-for="Password2" type="password" autocomplete="new-password" />
             </div>
         </fieldset>
 
@@ -377,96 +375,59 @@ else
     const theform = document.forms.regform;
     const patronBranchId = q('#PatronBranchID');
     const branchReloadUrlPattern = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(branchReloadUrlPattern));
-    const registrationStateStorageKey = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(registrationStateStorageKey));
     const forcedDriverLicense = @forceDl.ToJavascriptBool();
     let agreementAccepted = @agreementAccepted.ToJavascriptBool();
 
-    function getRegistrationStateStorage() {
+    async function reloadRegistrationForm(branchReloadUrl, branchFormData) {
+        const errorMessage = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(
+            string.Equals(Settings.FormCode, "kiosk", StringComparison.OrdinalIgnoreCase)
+                ? "An error has occurred. Please see library staff for assistance."
+                : "An error has occurred. Please contact the library for assistance."));
+
         try {
-            return window.sessionStorage;
+            const response = await fetch(branchReloadUrl, {
+                method: "POST",
+                credentials: "same-origin",
+                cache: "no-store",
+                body: branchFormData
+            });
+            if (!response.ok) {
+                showErrorMessage(errorMessage);
+                return false;
+            }
+
+            const registrationContainer = q('#regFormContainer');
+            if (!registrationContainer) return false;
+
+            registrationContainer.innerHTML = await response.text();
+            registrationContainer.querySelectorAll('script').forEach(script => {
+                const source = script.textContent;
+                script.remove();
+                if (source) eval(source);
+            });
+            return true;
         } catch {
-            return null;
+            showErrorMessage(errorMessage);
+            return false;
         }
     }
 
-    function saveRegistrationState() {
-        const storage = getRegistrationStateStorage();
-        if (!theform || !storage) return;
-
-        let state = {};
-        try {
-            state = JSON.parse(storage.getItem(registrationStateStorageKey) || "{}");
-        } catch { }
-        if (!state || typeof state !== "object" || Array.isArray(state)) state = {};
-
-        const checkboxNames = new Set();
-        theform.querySelectorAll("input, select, textarea").forEach(field => {
-            if (!field.name || field.type === "hidden" || field.type === "file" ||
-                field.name === "PatronBranchID") return;
-
-            if (field.type === "checkbox" || field.type === "radio") {
-                if (!checkboxNames.has(field.name)) {
-                    state[field.name] = [];
-                    checkboxNames.add(field.name);
-                }
-                if (field.checked) state[field.name].push(field.value);
-            } else {
-                state[field.name] = field.value;
-            }
-        });
-
-        try {
-            storage.setItem(registrationStateStorageKey, JSON.stringify(state));
-        } catch { }
-    }
-
-    function restoreRegistrationState() {
-        const storage = getRegistrationStateStorage();
-        if (!theform || !storage) return;
-
-        let state;
-        try {
-            const raw = storage.getItem(registrationStateStorageKey);
-            if (!raw) return;
-            state = JSON.parse(raw);
-        } catch {
-            return;
-        }
-
-        if (!state || typeof state !== "object") return;
-
-        theform.querySelectorAll("input, select, textarea").forEach(field => {
-            if (!field.name || field.type === "hidden" || field.type === "file" ||
-                field.name === "PatronBranchID" || !Object.prototype.hasOwnProperty.call(state, field.name)) return;
-
-            if (field.type === "checkbox" || field.type === "radio") {
-                field.checked = Array.isArray(state[field.name]) && state[field.name].includes(field.value);
-            } else {
-                field.value = state[field.name] ?? "";
-            }
-        });
-
-    }
-
-    function clearRegistrationState() {
-        const storage = getRegistrationStateStorage();
-        if (!storage) return;
-        try {
-            storage.removeItem(registrationStateStorageKey);
-        } catch { }
-    }
-
-    restoreRegistrationState();
     if (branchReloadUrlPattern && patronBranchId) {
-        patronBranchId.addEventListener("change", () => {
+        patronBranchId.addEventListener("change", async () => {
             if (!patronBranchId.value) return;
-            saveRegistrationState();
-            const branchReloadUrl = new URL(
-                branchReloadUrlPattern.replace("__BRANCH__", encodeURIComponent(patronBranchId.value)),
-                window.location.href);
+
+            const branchFormData = new FormData(theform);
+            branchFormData.set("PatronBranchID", patronBranchId.value);
+            patronBranchId.disabled = true;
+
+            const branchReloadUrl = new URL(branchReloadUrlPattern, window.location.href);
             branchReloadUrl.searchParams.set("forceDl", forcedDriverLicense ? "true" : "false");
             branchReloadUrl.searchParams.set("agreementAccepted", agreementAccepted ? "true" : "false");
-            window.location.assign(branchReloadUrl.toString());
+
+            const replaced = await reloadRegistrationForm(branchReloadUrl.toString(), branchFormData);
+            if (!replaced && document.contains(patronBranchId)) {
+                patronBranchId.disabled = false;
+            }
         });
     }
     const nameFirst = q('#NameFirst');
@@ -850,7 +811,6 @@ else
         const data = await postData("@submitUrl", formData);
 
         if (data.isSuccess) {
-            clearRegistrationState();
             theform.reset();
             theform.remove();
             hide(wrapperDiv);

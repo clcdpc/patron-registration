@@ -3,6 +3,7 @@ using System.ComponentModel.DataAnnotations;
 using Microsoft.Extensions.DependencyInjection;
 using Clc.PatronRegistration.Configuration;
 using Clc.PatronRegistration.Data;
+using Clc.PatronRegistration.Helpers;
 
 namespace Clc.PatronRegistration.Validators
 {
@@ -38,7 +39,9 @@ namespace Clc.PatronRegistration.Validators
                 throw new ArgumentNullException(nameof(context));
             }
 
-            var settings = context.GetService<ISettingProvider>()!;
+            var settings = RegistrationSettingsContext.Get(
+                context.ActionContext.HttpContext,
+                context.GetService<ISettingProvider>()!);
             var label = settings.GetFieldLabel(context.ModelMetadata.Name ?? "");
 
             context.Attributes.TryAdd("data-val", "true");

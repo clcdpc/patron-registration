@@ -245,6 +245,58 @@ public sealed class RegistrationBranchScopeTests
     }
 
     [TestMethod]
+    public void BranchSwitchPost_RendersSubmittedModelWithSelectedBranchSettingsWithoutCachingIt()
+    {
+        var organizations = new List<OrganizationsGetRow>
+        {
+            Organization(1, null, 1),
+            Organization(2, 1, 2),
+            Organization(3, 2),
+            Organization(4, 2)
+        };
+        var routeSettings = Settings(requiredUser5: false, organizationId: 2, libraryId: 2);
+        var selectedSettings = Settings(requiredUser5: true, organizationId: 4, libraryId: 2,
+            melissaKey: "selected-melissa", postmarkKey: "selected-postmark");
+        selectedSettings.SetupGet(value => value.WarningText).Returns("Selected branch agreement");
+        var db = new Mock<IDbHelper>();
+        db.Setup(value => value.GetSelfRegistrationOrganizations(null)).Returns(organizations);
+        db.Setup(value => value.GetGendersToOrganizations(4)).Returns([]);
+        var scopeResolver = new Mock<IRegistrationScopeResolver>();
+        scopeResolver.Setup(value => value.ResolveForSubmission(
+                It.IsAny<HttpContext>(), routeSettings.Object, 4))
+            .Returns(new RegistrationScopeResolution(true, selectedSettings.Object));
+        scopeResolver.Setup(value => value.GetAvailableBranches(
+                It.IsAny<HttpContext>(), routeSettings.Object))
+            .Returns([organizations[2], organizations[3]]);
+        var controller = CreateGetController(routeSettings.Object, db.Object, scopeResolver.Object);
+        controller.HttpContext.Request.Method = "POST";
+
+        var submitted = ValidRegistration(routeSettings.Object, user5: "Earlier patron");
+        submitted.PatronBranchID = 4;
+        submitted.NameFirst = "Earlier";
+        submitted.EmailAddress = "earlier@example.test";
+        submitted.Password = "1234";
+        submitted.Password2 = "1234";
+
+        var result = controller.ChangeBranch(submitted, 2, forceDl: true, agreementAccepted: true);
+
+        var view = result as PartialViewResult;
+        var model = view?.Model as Registration;
+        Assert.IsNotNull(view);
+        Assert.IsNotNull(model);
+        Assert.AreSame(selectedSettings.Object, model.Settings);
+        Assert.AreEqual("Earlier", model.NameFirst);
+        Assert.AreEqual("earlier@example.test", model.EmailAddress);
+        Assert.AreEqual("1234", model.Password);
+        Assert.AreEqual("1234", model.Password2);
+        Assert.AreEqual(4, model.PatronBranchID);
+        Assert.IsTrue(model.BypassAgreement);
+        Assert.AreEqual("no-store", controller.Response.Headers.CacheControl.ToString());
+        scopeResolver.Verify(value => value.ResolveForSubmission(
+            It.IsAny<HttpContext>(), routeSettings.Object, 4), Times.Once);
+    }
+
+    [TestMethod]
     public void RegistrationDriverLicense_RejectsInvalidConfiguredFormatInsteadOfUsingMagstripe()
     {
         var settings = Settings(requiredUser5: false, dlFormat: "unsupported");
