@@ -991,8 +991,12 @@ public sealed class SettingsController(
         try
         {
             var metadata = repository.GetFormCodes(libraryId, settingsOptions.SystemOrganizationId) ?? [];
-            return metadata.LastOrDefault(form =>
-                form.FormCode.Equals(formCode, StringComparison.OrdinalIgnoreCase))?.DisplayName ?? formCode;
+            var preferred = metadata.FirstOrDefault(form =>
+                form.OrganizationId == libraryId &&
+                form.FormCode.Equals(formCode, StringComparison.OrdinalIgnoreCase))
+                ?? metadata.FirstOrDefault(form =>
+                    form.FormCode.Equals(formCode, StringComparison.OrdinalIgnoreCase));
+            return preferred?.DisplayName ?? formCode;
         }
         catch (SqlException)
         {

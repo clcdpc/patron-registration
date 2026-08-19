@@ -1253,6 +1253,89 @@ public class SettingsAdministrationTests
     }
 
     [TestMethod]
+    public void DbSettingProvider_CapturesOneCacheGenerationForAllSettingReads()
+    {
+        var cache = new TestCache
+        {
+            OrganizationCache =
+            [
+                new() { OrganizationID = 1, OrganizationCodeID = 1, Name = "System" },
+                new() { OrganizationID = 2, OrganizationCodeID = 2, Name = "Generation N library", ParentOrganizationID = 1 },
+                new() { OrganizationID = 3, OrganizationCodeID = 3, Name = "Generation N branch", ParentOrganizationID = 2 }
+            ],
+            SettingsCache =
+            [
+                Setting(3, "registration_text", "generation N", "kids"),
+                Setting(3, "display_responsible_person_field", "true", "kids"),
+                Setting(3, "require.User5", "true", "kids"),
+                Setting(3, "registration_logon_user_id", "42", "kids")
+            ]
+        };
+
+        var generationN = new DbSettingProvider(3, cache, "kids", 1);
+
+        cache.OrganizationCache =
+        [
+            new() { OrganizationID = 1, OrganizationCodeID = 1, Name = "System" },
+            new() { OrganizationID = 4, OrganizationCodeID = 2, Name = "Generation N+1 library", ParentOrganizationID = 1 },
+            new() { OrganizationID = 3, OrganizationCodeID = 3, Name = "Generation N+1 branch", ParentOrganizationID = 4 }
+        ];
+        cache.SettingsCache =
+        [
+            Setting(3, "registration_text", "generation N+1", "kids"),
+            Setting(3, "display_responsible_person_field", "false", "kids"),
+            Setting(3, "require.User5", "false", "kids"),
+            Setting(3, "registration_logon_user_id", "84", "kids")
+        ];
+
+        Assert.AreEqual(2, generationN.LibraryId);
+        Assert.AreEqual("generation N", generationN.RegistrationText);
+        Assert.IsTrue(generationN.DisplayResponsiblePersonField);
+        Assert.IsTrue(generationN.GetFieldRequired("User5"));
+        CollectionAssert.AreEquivalent(new[] { "User5" }, generationN.GetRequiredFields());
+        Assert.AreEqual(42, generationN.RegistrationLogonUserId);
+
+        var generationN1 = new DbSettingProvider(3, cache, "kids", 1);
+
+        Assert.AreEqual(4, generationN1.LibraryId);
+        Assert.AreEqual("generation N+1", generationN1.RegistrationText);
+        Assert.IsFalse(generationN1.DisplayResponsiblePersonField);
+        Assert.IsFalse(generationN1.GetFieldRequired("User5"));
+        CollectionAssert.AreEquivalent(Array.Empty<string>(), generationN1.GetRequiredFields());
+        Assert.AreEqual(84, generationN1.RegistrationLogonUserId);
+    }
+
+    [TestMethod]
+    public void PreviewSettingProvider_UsesTheCapturedCacheGenerationForItsOverlay()
+    {
+        var cache = new TestCache
+        {
+            SettingsCache =
+            [
+                Setting(3, "registration_text", "generation N", "kids"),
+                Setting(3, "display_responsible_person_field", "true", "kids"),
+                Setting(3, "require.User5", "false", "kids")
+            ]
+        };
+        var draft = Draft(3, new SettingMutation("require.User5", DraftOperation.Upsert, "true"));
+        draft = draft with { FormCode = "kids" };
+
+        var preview = new PreviewSettingProvider(draft, 3, cache, 1);
+
+        cache.SettingsCache =
+        [
+            Setting(3, "registration_text", "generation N+1", "kids"),
+            Setting(3, "display_responsible_person_field", "false", "kids"),
+            Setting(3, "require.User5", "false", "kids")
+        ];
+
+        Assert.AreEqual("generation N", preview.RegistrationText);
+        Assert.IsTrue(preview.DisplayResponsiblePersonField);
+        Assert.IsTrue(preview.GetFieldRequired("User5"));
+        CollectionAssert.AreEquivalent(new[] { "User5" }, preview.GetRequiredFields());
+    }
+
+    [TestMethod]
     public void CatalogKeys_AreUniqueAndRejectArbitrarySuffixes()
     {
         var catalog = new SettingCatalog();

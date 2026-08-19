@@ -19,6 +19,8 @@ namespace Clc.PatronRegistration.Configuration
         public ICache Cache { get; }
         public string FormCode { get; } = string.Empty;
         public int SystemOrganizationId { get; }
+        protected IReadOnlyList<RegistrationFormSetting> SettingsSnapshot { get; }
+        protected IReadOnlyList<OrganizationsGetRow> OrganizationSnapshot { get; }
 
         public DbSettingProvider(int orgId, ICache cache) : this(orgId, cache, "", 1) { }
 
@@ -28,13 +30,21 @@ namespace Clc.PatronRegistration.Configuration
             FormCode = formCode;
             Cache = cache;
             SystemOrganizationId = systemOrganizationId;
-            var branch = cache.OrganizationCache.Single(o => o.OrganizationID == OrganizationId);
-            LibraryId = libraryId ?? Cache.OrganizationCache.GetLibrary(orgId).OrganizationID;
+            var snapshot = CaptureSnapshot(cache);
+            SettingsSnapshot = snapshot.Settings.ToArray();
+            OrganizationSnapshot = snapshot.Organizations.ToArray();
+            _ = OrganizationSnapshot.Single(o => o.OrganizationID == OrganizationId);
+            LibraryId = libraryId ?? OrganizationSnapshot.GetLibrary(orgId).OrganizationID;
         }
+
+        private static CacheSnapshot CaptureSnapshot(ICache cache) =>
+            cache is ICacheSnapshotProvider snapshotProvider
+                ? snapshotProvider.GetSnapshot()
+                : new CacheSnapshot(cache.SettingsCache.ToArray(), cache.OrganizationCache.ToArray());
 
         public virtual T GetSetting<T>(string name, T defaultValue = default!)
         {
-            var dbValue = new SettingsResolver().Resolve(Cache.SettingsCache, name, OrganizationId, LibraryId, FormCode, SystemOrganizationId).EffectiveValue;
+            var dbValue = new SettingsResolver().Resolve(SettingsSnapshot, name, OrganizationId, LibraryId, FormCode, SystemOrganizationId).EffectiveValue;
             if (typeof(T) == typeof(string) && SafeHtmlPolicy.IsHtmlExecutionContext(name))
             {
                 dbValue = SafeHtmlPolicy.SanitizeIfHtml(name, dbValue);
@@ -127,11 +137,11 @@ namespace Clc.PatronRegistration.Configuration
         public virtual List<string> GetRequiredFields()
         {
             var resolver = new SettingsResolver();
-            return Cache.SettingsCache
+            return SettingsSnapshot
                 .Where(setting => setting.Setting.StartsWith("require.", StringComparison.OrdinalIgnoreCase))
                 .Select(setting => setting.Setting)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
-                .Where(key => bool.TryParse(resolver.Resolve(Cache.SettingsCache, key, OrganizationId, LibraryId, FormCode, SystemOrganizationId).EffectiveValue, out var required) && required)
+                .Where(key => bool.TryParse(resolver.Resolve(SettingsSnapshot, key, OrganizationId, LibraryId, FormCode, SystemOrganizationId).EffectiveValue, out var required) && required)
                 .Select(key => key["require.".Length..])
                 .ToList();
         }

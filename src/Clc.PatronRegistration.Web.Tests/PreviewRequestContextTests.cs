@@ -5,6 +5,9 @@ using Clc.PatronRegistration.Data;
 using Clc.PatronRegistration.Web.Controllers;
 using Clc.PatronRegistration.Web.Settings;
 using Clc.Polaris.Api;
+using Clc.Polaris.Api.Models;
+using Clc.Rest;
+using Clc.Rest.Models;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
@@ -315,6 +318,102 @@ public class PreviewRequestContextTests
         Assert.AreEqual(0, papi.Invocations.Count);
         Assert.AreEqual(0, melissa.Invocations.Count);
         Assert.AreEqual(0, email.Invocations.Count);
+    }
+
+    [TestMethod]
+    public void LivePreviewSubmit_PreservesSuccessfulRegistrationWhenAuditPersistenceFails()
+    {
+        var draft = ActiveDraft();
+        var settings = new PreviewSettingProvider(draft, 3, new TestCache(), 1);
+        var context = new PreviewRequestContext(Link("Active", allowLiveSubmission: true), draft, settings);
+        var repository = new Mock<ISettingsAdministrationRepository>();
+        repository.Setup(service => service.IsLivePreviewCurrent(context.Link.PreviewLinkId, 1)).Returns(true);
+        repository.Setup(service => service.WriteAudit(
+                It.IsAny<string>(), It.IsAny<bool>(), It.IsAny<AuditContext>(),
+                It.IsAny<string>(), It.IsAny<long?>(), It.IsAny<long?>(), It.IsAny<string>()))
+            .Throws(new InvalidOperationException("audit persistence is unavailable"));
+
+        var db = new Mock<IDbHelper>();
+        db.Setup(service => service.CheckPatronIsDuplicate(
+                It.IsAny<int>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<DateTime>()))
+            .Returns(false);
+        db.Setup(service => service.AddRegistrationHistoryEntry(It.IsAny<RegistrationHistoryEntry>())).Returns(true);
+
+        var melissa = new Mock<IMelissaRestClient>();
+        melissa.Setup(service => service.PersonatorRequest(It.IsAny<Clc.Melissa.Models.PersonatorRequestRecord>()))
+            .Returns(new RestResponse<Clc.Melissa.Models.PersonatorResponse>
+            {
+                Data = new Clc.Melissa.Models.PersonatorResponse
+                {
+                    Records =
+                    [
+                        new Clc.Melissa.Models.Record
+                        {
+                            Results = "AS01",
+                            AddressLine1 = "1 Main St",
+                            AddressLine2 = string.Empty,
+                            City = "Columbus",
+                            State = "OH",
+                            PostalCode = "43215"
+                        }
+                    ]
+                }
+            });
+
+        var papi = new Mock<IPapiClient>();
+        papi.Setup(service => service.PatronRegistrationCreate(It.IsAny<PatronRegistrationParams>()))
+            .Returns(new RestResponse<PatronRegistrationCreateResult>
+            {
+                Data = new PatronRegistrationCreateResult
+                {
+                    PatronID = 123,
+                    Barcode = "2000000000123",
+                    PAPIErrorCode = 0
+                }
+            });
+
+        var controller = new PreviewController(
+            repository.Object,
+            new PreviewRequestContextAccessor { IsPreviewRequest = true, Current = context },
+            new TestCache(),
+            db.Object,
+            papi.Object,
+            melissa.Object,
+            Mock.Of<IEmailSender>())
+        {
+            ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() }
+        };
+        var registration = new Registration(settings)
+        {
+            NameFirst = "Jane",
+            NameLast = "Doe",
+            Birthdate = new DateTime(2000, 1, 1),
+            PatronBranchID = 3,
+            State = "OH",
+            StreetOne = "1 Main St",
+            City = "Columbus",
+            PostalCode = "43215"
+        };
+
+        var previousGlobal = DbHelper.Global;
+        try
+        {
+            DbHelper.Global = db.Object;
+
+            var result = (JsonResult)controller.Submit("ignored", registration);
+            var attempt = (RegistrationAttempt)result.Value!;
+
+            Assert.AreEqual(RegistrationStatus.Success, attempt.Status);
+            papi.Verify(service => service.PatronRegistrationCreate(It.IsAny<PatronRegistrationParams>()), Times.Once);
+            melissa.Verify(service => service.PersonatorRequest(It.IsAny<Clc.Melissa.Models.PersonatorRequestRecord>()), Times.Once);
+            repository.Verify(service => service.WriteAudit(
+                "LivePreviewSubmission", true, It.IsAny<AuditContext>(), null, null, context.Link.PreviewLinkId,
+                It.Is<string>(json => json.Contains("Success", StringComparison.Ordinal))), Times.Once);
+        }
+        finally
+        {
+            DbHelper.Global = previousGlobal;
+        }
     }
 
     [TestMethod]

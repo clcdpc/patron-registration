@@ -273,7 +273,8 @@ public class SettingsControllerTests
             metadataResolved = true;
             return
             [
-                new FormCodeMetadata(2, "kids", "Kids registration", null, DateTime.UtcNow, "a", DateTime.UtcNow, "a")
+                new FormCodeMetadata(2, "kids", "Library-customized kids registration", null, DateTime.UtcNow, "a", DateTime.UtcNow, "a"),
+                new FormCodeMetadata(1, "kids", "System kids registration", null, DateTime.UtcNow, "a", DateTime.UtcNow, "a")
             ];
         });
         repository.Setup(service => service.GetLegacyFormCodes()).Returns([]);
@@ -291,7 +292,7 @@ public class SettingsControllerTests
         Assert.AreEqual(draft.DraftId, model.DraftId);
         Assert.AreEqual(draft.OrganizationId, model.OrganizationId);
         Assert.AreEqual(draft.FormCode, model.FormCode);
-        Assert.AreEqual("Kids registration", model.FormDisplayName);
+        Assert.AreEqual("Library-customized kids registration", model.FormDisplayName);
         Assert.AreEqual(3, model.OperationalBranchId);
         Assert.IsTrue(model.AllowLiveSubmission);
         repository.Verify(service => service.ReplacePreviewLinkMode(12,
@@ -1416,7 +1417,8 @@ public class SettingsControllerTests
             metadataResolved = true;
             return
             [
-                new FormCodeMetadata(2, "kids", "Kids registration", null, DateTime.UtcNow, "a", DateTime.UtcNow, "a")
+                new FormCodeMetadata(2, "kids", "Library-customized kids registration", null, DateTime.UtcNow, "a", DateTime.UtcNow, "a"),
+                new FormCodeMetadata(1, "kids", "System kids registration", null, DateTime.UtcNow, "a", DateTime.UtcNow, "a")
             ];
         });
         repository.Setup(service => service.GetLegacyFormCodes()).Returns([]);
@@ -1436,7 +1438,7 @@ public class SettingsControllerTests
         var model = (PreviewLinkCreatedViewModel)view.Model!;
         Assert.AreEqual("https://example.test/preview/plaintext", model.PreviewUrl);
         Assert.AreEqual(10, model.DraftId);
-        Assert.AreEqual("Kids registration", model.FormDisplayName);
+        Assert.AreEqual("Library-customized kids registration", model.FormDisplayName);
         Assert.AreEqual("Branch", model.OperationalBranchDisplayName);
         Assert.IsFalse(model.AllowLiveSubmission);
     }

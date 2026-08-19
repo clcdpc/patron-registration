@@ -11,7 +11,7 @@ public sealed class PreviewSettingProvider : DbSettingProvider
     public PreviewSettingProvider(SettingDraft draft, int operationalBranchId, ICache cache, int systemOrganizationId)
         : base(operationalBranchId, cache, draft.FormCode, systemOrganizationId)
     {
-        var rows = cache.SettingsCache
+        var rows = SettingsSnapshot
             .Where(row => !(row.OrganizationID == draft.OrganizationId &&
                             row.FormCode.Equals(draft.FormCode, StringComparison.OrdinalIgnoreCase) &&
                             draft.Changes.Any(change => change.Key.Equals(row.Setting, StringComparison.OrdinalIgnoreCase))))

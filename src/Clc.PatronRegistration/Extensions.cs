@@ -169,7 +169,7 @@ namespace Clc.PatronRegistration
             System.Text.Json.JsonSerializer.Serialize(s ?? string.Empty, javascriptStringOptions);
 
 
-        public static OrganizationsGetRow GetLibrary(this List<OrganizationsGetRow> orgs, int orgId)
+        public static OrganizationsGetRow GetLibrary(this IEnumerable<OrganizationsGetRow> orgs, int orgId)
         {
             var org = orgs.Single(o => o.OrganizationID == orgId);
             return org.OrganizationCodeID == 1 ? orgs.Single(o => o.OrganizationCodeID == 1) : org.OrganizationCodeID == 2 ? org : orgs.Single(o => o.OrganizationID == org.ParentOrganizationID);

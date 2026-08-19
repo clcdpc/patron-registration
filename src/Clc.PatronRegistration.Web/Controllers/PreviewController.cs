@@ -9,6 +9,8 @@ using Clc.PatronRegistration.Web.Settings;
 using Clc.Polaris.Api;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Rendering;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Clc.PatronRegistration.Web.Controllers;
 
@@ -21,8 +23,11 @@ public sealed class PreviewController(
     IDbHelper db,
     IPapiClient papi,
     IMelissaRestClient melissa,
-    IEmailSender emailSender) : Controller
+    IEmailSender emailSender,
+    ILogger<PreviewController>? suppliedLogger = null) : Controller
 {
+    private readonly ILogger<PreviewController> logger = suppliedLogger ?? NullLogger<PreviewController>.Instance;
+
     [HttpGet("{token}")]
     public IActionResult Index(string token, bool forceDl = false, bool agreementAccepted = false)
     {
@@ -150,24 +155,48 @@ public sealed class PreviewController(
             var failureReason = result.IsSuccess
                 ? null
                 : $"Registration status: {result.Status}; validation errors: {result.Errors.Count}.";
-            repository.WriteAudit(
+            TryWriteLivePreviewAudit(
+                context,
                 "LivePreviewSubmission",
                 result.IsSuccess,
-                AnonymousAudit(context),
                 failureReason,
-                previewLinkId: context.Link.PreviewLinkId,
                 metadataJson: $"{{\"status\":\"{result.Status}\",\"errorCount\":{result.Errors.Count}}}");
             return Json(result);
         }
         catch (Exception exception)
         {
-            repository.WriteAudit(
+            TryWriteLivePreviewAudit(
+                context,
                 "LivePreviewSubmission",
                 false,
-                AnonymousAudit(context),
                 $"Registration workflow threw {exception.GetType().Name}.",
-                previewLinkId: context.Link.PreviewLinkId);
+                metadataJson: null);
             throw;
+        }
+    }
+
+    private void TryWriteLivePreviewAudit(
+        PreviewRequestContext context,
+        string eventType,
+        bool succeeded,
+        string? failureReason,
+        string? metadataJson)
+    {
+        try
+        {
+            repository.WriteAudit(
+                eventType,
+                succeeded,
+                AnonymousAudit(context),
+                failureReason,
+                previewLinkId: context.Link.PreviewLinkId,
+                metadataJson: metadataJson);
+        }
+        catch (Exception exception)
+        {
+            logger.LogError(exception,
+                "Could not persist {EventType} audit for preview link {PreviewLinkId}; preserving the registration result.",
+                eventType, context.Link.PreviewLinkId);
         }
     }
 

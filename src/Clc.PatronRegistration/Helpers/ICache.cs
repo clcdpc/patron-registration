@@ -6,6 +6,16 @@ using Clc.PatronRegistration.Configuration;
 
 namespace Clc.PatronRegistration.Helpers
 {
+    public sealed record CacheSnapshot(
+        IReadOnlyList<RegistrationFormSetting> Settings,
+        IReadOnlyList<OrganizationsGetRow> Organizations);
+
+    /// <summary>Provides one atomically published cache generation to request-scoped consumers.</summary>
+    public interface ICacheSnapshotProvider
+    {
+        CacheSnapshot GetSnapshot();
+    }
+
     public interface ICache
     {
         List<RegistrationFormSetting> SettingsCache { get; }

@@ -13,14 +13,14 @@ using System.Threading.Tasks;
 
 namespace Clc.PatronRegistration.Helpers
 {
-    public class MemoryCache(IPapiClient papi, IDbHelper db) : ICache
+    public class MemoryCache(IPapiClient papi, IDbHelper db) : ICache, ICacheSnapshotProvider
     {
-        private sealed record CacheSnapshot(
+        private sealed record PublishedCacheSnapshot(
             List<RegistrationFormSetting> Settings,
             List<OrganizationsGetRow> Organizations);
 
         private readonly object rebuildLock = new();
-        private CacheSnapshot? snapshot;
+        private PublishedCacheSnapshot? snapshot;
         public bool IsInitialized => Volatile.Read(ref snapshot) is not null;
         public List<RegistrationFormSetting> SettingsCache
         {
@@ -49,6 +49,18 @@ namespace Clc.PatronRegistration.Helpers
             }
         }
 
+        public CacheSnapshot GetSnapshot()
+        {
+            var current = Volatile.Read(ref snapshot);
+            if (current is null)
+            {
+                RebuildCache();
+                current = Volatile.Read(ref snapshot);
+            }
+
+            return new CacheSnapshot(current?.Settings.ToArray() ?? [], current?.Organizations.ToArray() ?? []);
+        }
+
         public void RebuildCache()
         {
             lock (rebuildLock)
@@ -56,7 +68,7 @@ namespace Clc.PatronRegistration.Helpers
                 var orgResult = papi.OrganizationsGet(OrganizationType.All);
                 var organizations = orgResult.Data.OrganizationsGetRows.ToList();
                 var settings = db.GetAllSettings().ToList();
-                Volatile.Write(ref snapshot, new CacheSnapshot(settings, organizations));
+                Volatile.Write(ref snapshot, new PublishedCacheSnapshot(settings, organizations));
             }
         }
         public OrganizationsGetRow GetOrg(int orgId) => OrganizationCache.Single(o => o.OrganizationID == orgId);
