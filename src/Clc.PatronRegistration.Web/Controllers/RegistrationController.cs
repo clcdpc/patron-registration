@@ -38,13 +38,43 @@ namespace Clc.PatronRegistration.Web.Controllers
     {
         private static readonly NLog.ILogger logger = LogManager.GetCurrentClassLogger();
 
-        public IActionResult Create(int? orgId, bool forceDl = false, bool agreementAccepted = false)
+        public IActionResult Create(
+            int? orgId,
+            bool forceDl = false,
+            bool agreementAccepted = false,
+            int? selectedBranchId = null)
         {
-            if (!orgId.HasValue || !db.GetSelfRegistrationOrganizations().Any(o=>o.OrganizationID == orgId)) { return RedirectToAction("SelectLibrary"); }
+            var organizations = db.GetSelfRegistrationOrganizations().ToList();
+            if (!orgId.HasValue) { return RedirectToAction("SelectLibrary"); }
 
-            var model = Registration.BuildBaseRegistration(orgId.Value, forceDl, Request.GetTrueClientIP(), settings, db);
+            var organizationId = orgId.Value;
+            var routeOrganization = organizations.FirstOrDefault(organization => organization.OrganizationID == organizationId);
+            if (routeOrganization is null) { return RedirectToAction("SelectLibrary"); }
 
-            if (settings.EnablePatronBranchSelectOption)
+            ViewData["RegistrationForceDl"] = forceDl;
+            ViewData["RegistrationAgreementAccepted"] = agreementAccepted;
+            ViewData["RegistrationScopeOrganizationId"] = organizationId;
+
+            var renderSettings = settings;
+            var effectiveSelectedBranchId = selectedBranchId ??
+                (routeOrganization.OrganizationCodeID == 3 ? routeOrganization.OrganizationID : null);
+            if (effectiveSelectedBranchId.HasValue)
+            {
+                var selectedBranchResolution = registrationScopeResolver.ResolveForSubmission(
+                    HttpContext, settings, effectiveSelectedBranchId.Value);
+                if (!selectedBranchResolution.IsValid || selectedBranchResolution.Settings.DisableBranch)
+                {
+                    return RegistrationUnavailableView();
+                }
+
+                renderSettings = selectedBranchResolution.Settings;
+            }
+
+            var model = Registration.BuildBaseRegistration(
+                effectiveSelectedBranchId ?? organizationId,
+                forceDl, Request.GetTrueClientIP(), renderSettings, db);
+
+            if (renderSettings.EnablePatronBranchSelectOption)
             {
                 var availableBranches = registrationScopeResolver.GetAvailableBranches(HttpContext, settings);
                 model.Branches = new SelectList(availableBranches, "OrganizationID", "DisplayName");
@@ -52,21 +82,38 @@ namespace Clc.PatronRegistration.Web.Controllers
                 {
                     return RegistrationUnavailableView();
                 }
-                if (availableBranches.Count == 1)
+
+                var selectedBranch = availableBranches
+                    .FirstOrDefault(branch => branch.OrganizationID == effectiveSelectedBranchId);
+                if (effectiveSelectedBranchId.HasValue && selectedBranch is null)
+                {
+                    return RegistrationUnavailableView();
+                }
+
+                if (selectedBranch is not null)
+                {
+                    model.PatronBranchID = selectedBranch.OrganizationID;
+                }
+                else if (availableBranches.Count == 1)
                 {
                     model.PatronBranchID = availableBranches[0].OrganizationID;
                 }
             }
             else
             {
-                var resolution = registrationScopeResolver.ResolveForSubmission(HttpContext, settings, model.PatronBranchID);
+                var resolution = registrationScopeResolver.ResolveForSubmission(
+                    HttpContext, settings, model.PatronBranchID);
                 if (!resolution.IsValid || resolution.Settings.DisableBranch)
                 {
                     return RegistrationUnavailableView();
                 }
+
+                renderSettings = resolution.Settings;
+                model.UseSettings(renderSettings);
+                model.LibraryId = renderSettings.LibraryId;
             }
 
-            if (agreementAccepted) { model.BypassAgreement = true; }
+            model.BypassAgreement = agreementAccepted;
 
             return HttpContext.IsInjectedForm() ? PartialView("Create", model) : View("Create", model);
         }
@@ -75,7 +122,8 @@ namespace Clc.PatronRegistration.Web.Controllers
         [HttpPost]
         public RegistrationAttempt Submit(Registration p)
         {
-            var resolution = registrationScopeResolver.ResolveForSubmission(HttpContext, settings, p.PatronBranchID);
+            var resolution = registrationScopeResolver.ResolveForSubmission(
+                HttpContext, settings, p.PatronBranchID);
             if (!resolution.IsValid)
             {
                 return new RegistrationAttempt

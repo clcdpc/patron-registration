@@ -2,13 +2,16 @@ using Clc.Melissa;
 using Clc.Melissa.Models;
 using Clc.PatronRegistration.Configuration;
 using Clc.PatronRegistration.Data;
+using Clc.PatronRegistration.Helpers;
 using Clc.PatronRegistration.Web.Controllers;
 using Clc.PatronRegistration.Web.Settings;
 using Clc.Polaris.Api;
+using Clc.Polaris.Api.Models;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.ModelBinding.Validation;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 using Moq;
 
 namespace Clc.PatronRegistration.Tests;
@@ -99,6 +102,149 @@ public sealed class RegistrationBranchScopeTests
     }
 
     [TestMethod]
+    public void NormalSubmission_UsesSelectedBranchWithinThePreservedLibraryScope()
+    {
+        var routeSettings = Settings(requiredUser5: false, melissaKey: "route-melissa",
+            postmarkKey: "route-postmark", organizationId: 2, libraryId: 2);
+        var selectedSettings = Settings(requiredUser5: false, melissaKey: "branch-melissa",
+            postmarkKey: "branch-postmark", organizationId: 3, libraryId: 2);
+        var melissa = new Mock<IMelissaRestClient>();
+        melissa.Setup(client => client.PersonatorRequest(It.IsAny<PersonatorRequestRecord>()))
+            .Throws(new InvalidOperationException("selected branch Melissa client used"));
+        var melissaFactory = new Mock<IMelissaClientFactory>();
+        melissaFactory.Setup(factory => factory.Create("branch-melissa")).Returns(melissa.Object);
+        var emailFactory = new Mock<IEmailSenderFactory>();
+        emailFactory.Setup(factory => factory.Create("branch-postmark")).Returns(Mock.Of<IEmailSender>());
+        var controller = CreateController(routeSettings.Object, selectedSettings.Object,
+            melissaFactory, emailFactory, out var scopeResolver, selectedBranchId: 3);
+
+        controller.Submit(ValidRegistration(routeSettings.Object, user5: null));
+
+        scopeResolver.Verify(value => value.ResolveForSubmission(
+            It.IsAny<HttpContext>(), routeSettings.Object, 3), Times.Once);
+        melissaFactory.Verify(factory => factory.Create("branch-melissa"), Times.Once);
+        melissaFactory.Verify(factory => factory.Create("route-melissa"), Times.Never);
+        emailFactory.Verify(factory => factory.Create("branch-postmark"), Times.Once);
+        emailFactory.Verify(factory => factory.Create("route-postmark"), Times.Never);
+    }
+
+    [TestMethod]
+    public void LibraryScopedBranchReload_RemainsSwitchableAndResolvesTheSelectedBranch()
+    {
+        var organizations = new List<OrganizationsGetRow>
+        {
+            Organization(1, null, 1),
+            Organization(2, 1, 2),
+            Organization(3, 2),
+            Organization(4, 2),
+            Organization(5, 1)
+        };
+        var cache = new Mock<ICache>();
+        cache.SetupGet(value => value.OrganizationCache).Returns(organizations);
+        cache.SetupGet(value => value.SettingsCache).Returns([]);
+        cache.Setup(value => value.GetOrg(It.IsAny<int>()))
+            .Returns((int id) => organizations.Single(value => value.OrganizationID == id));
+        var db = new Mock<IDbHelper>();
+        db.Setup(value => value.GetSelfRegistrationBranches(2)).Returns([organizations[2], organizations[3]]);
+        db.Setup(value => value.GetSelfRegistrationBranches(null)).Returns([organizations[2], organizations[3], organizations[4]]);
+        var requestSettings = new DbSettingProvider(2, cache.Object, "form", 1);
+        var httpContext = new DefaultHttpContext();
+        httpContext.Request.RouteValues["formCode"] = "form";
+        var settingResolver = new RequestSettingProviderResolver(
+            new PreviewRequestContextAccessor(), new SettingsPageBrandingContextAccessor(),
+            Mock.Of<ISettingsAuthorizationService>(), Mock.Of<IFormCodeAvailabilityService>(), cache.Object,
+            Options.Create(new SettingsAdministrationOptions()), new RegistrationConfiguration());
+        var resolver = new RegistrationScopeResolver(db.Object, cache.Object, settingResolver);
+
+        var availableAfterReload = resolver.GetAvailableBranches(httpContext, requestSettings);
+        var branchThree = resolver.ResolveForSubmission(httpContext, requestSettings, 3);
+        var branchFour = resolver.ResolveForSubmission(httpContext, requestSettings, 4);
+        var outOfScope = resolver.ResolveForSubmission(httpContext, requestSettings, 5);
+
+        CollectionAssert.AreEquivalent(new[] { 3, 4 }, availableAfterReload.Select(value => value.OrganizationID).ToArray());
+        Assert.IsTrue(branchThree.IsValid);
+        Assert.AreEqual(3, branchThree.Settings.OrganizationId);
+        Assert.IsTrue(branchFour.IsValid);
+        Assert.AreEqual(4, branchFour.Settings.OrganizationId);
+        Assert.IsFalse(outOfScope.IsValid);
+    }
+
+    [DataTestMethod]
+    [DataRow(3)]
+    [DataRow(4)]
+    public void LibraryScopedBranchReload_RendersSelectedSettingsAndPreservesWorkflowFlags(int selectedBranchId)
+    {
+        var organizations = new List<OrganizationsGetRow>
+        {
+            Organization(1, null, 1),
+            Organization(2, 1, 2),
+            Organization(3, 2),
+            Organization(4, 2)
+        };
+        CacheHelper.Configure(new TestCache { OrganizationCache = organizations });
+
+        var routeSettings = Settings(requiredUser5: false, organizationId: 2, libraryId: 2);
+        var selectedSettings = Settings(requiredUser5: true, organizationId: selectedBranchId, libraryId: 2,
+            melissaKey: "selected-melissa", postmarkKey: "selected-postmark");
+        selectedSettings.SetupGet(value => value.WarningText).Returns("Selected branch agreement");
+        var db = new Mock<IDbHelper>();
+        db.Setup(value => value.GetSelfRegistrationOrganizations(null)).Returns(organizations);
+        db.Setup(value => value.GetSelfRegistrationBranches(2)).Returns([organizations[2], organizations[3]]);
+        db.Setup(value => value.GetPickupBranches(2)).Returns([]);
+        db.Setup(value => value.GetGendersToOrganizations(selectedBranchId)).Returns([]);
+        var scopeResolver = new Mock<IRegistrationScopeResolver>();
+        scopeResolver.Setup(value => value.ResolveForSubmission(
+                It.IsAny<HttpContext>(), routeSettings.Object, selectedBranchId))
+            .Returns(new RegistrationScopeResolution(true, selectedSettings.Object));
+        scopeResolver.Setup(value => value.GetAvailableBranches(
+                It.IsAny<HttpContext>(), routeSettings.Object))
+            .Returns([organizations[2], organizations[3]]);
+        var controller = CreateGetController(routeSettings.Object, db.Object, scopeResolver.Object);
+
+        var result = controller.Create(2, forceDl: true, agreementAccepted: true, selectedBranchId: selectedBranchId);
+        var view = result as ViewResult;
+        var model = view?.Model as Registration;
+
+        Assert.IsNotNull(view);
+        Assert.IsNotNull(model);
+        Assert.AreSame(selectedSettings.Object, model.Settings);
+        Assert.AreEqual(selectedBranchId, model.PatronBranchID);
+        Assert.IsTrue(model.ShowDlButton);
+        Assert.IsTrue(model.BypassAgreement);
+        CollectionAssert.AreEquivalent(new[] { "3", "4" },
+            model.Branches.Select(value => value.Value).ToArray());
+        scopeResolver.Verify(value => value.ResolveForSubmission(
+            It.IsAny<HttpContext>(), routeSettings.Object, selectedBranchId), Times.Once);
+    }
+
+    [TestMethod]
+    public void DisabledSelectedBranch_IsUnavailableAfterLibraryScopedReload()
+    {
+        var organizations = new List<OrganizationsGetRow>
+        {
+            Organization(1, null, 1),
+            Organization(2, 1, 2),
+            Organization(3, 2),
+            Organization(4, 2)
+        };
+        var routeSettings = Settings(requiredUser5: false, organizationId: 2, libraryId: 2);
+        var disabledSettings = Settings(requiredUser5: false, organizationId: 3, libraryId: 2, disabled: true);
+        var db = new Mock<IDbHelper>();
+        db.Setup(value => value.GetSelfRegistrationOrganizations(null)).Returns(organizations);
+        var scopeResolver = new Mock<IRegistrationScopeResolver>();
+        scopeResolver.Setup(value => value.ResolveForSubmission(
+                It.IsAny<HttpContext>(), routeSettings.Object, 3))
+            .Returns(new RegistrationScopeResolution(true, disabledSettings.Object));
+        var controller = CreateGetController(routeSettings.Object, db.Object, scopeResolver.Object);
+
+        var result = controller.Create(2, selectedBranchId: 3);
+
+        var view = result as ViewResult;
+        Assert.IsNotNull(view);
+        Assert.AreEqual("Unavailable", view.ViewName);
+    }
+
+    [TestMethod]
     public void RegistrationDriverLicense_RejectsInvalidConfiguredFormatInsteadOfUsingMagstripe()
     {
         var settings = Settings(requiredUser5: false, dlFormat: "unsupported");
@@ -115,7 +261,8 @@ public sealed class RegistrationBranchScopeTests
         ISettingProvider selectedSettings,
         Mock<IMelissaClientFactory> melissaFactory,
         Mock<IEmailSenderFactory> emailFactory,
-        out Mock<IRegistrationScopeResolver> scopeResolver)
+        out Mock<IRegistrationScopeResolver> scopeResolver,
+        int selectedBranchId = 3)
     {
         var services = new ServiceCollection();
         services.AddLogging();
@@ -125,7 +272,8 @@ public sealed class RegistrationBranchScopeTests
         new HttpContextAccessor().HttpContext = httpContext;
 
         scopeResolver = new Mock<IRegistrationScopeResolver>();
-        scopeResolver.Setup(resolver => resolver.ResolveForSubmission(httpContext, routeSettings, 3))
+        scopeResolver.Setup(resolver => resolver.ResolveForSubmission(
+                httpContext, routeSettings, selectedBranchId))
             .Returns(new RegistrationScopeResolution(true, selectedSettings));
         var controller = new RegistrationController(
             Mock.Of<IPapiClient>(),
@@ -141,6 +289,25 @@ public sealed class RegistrationBranchScopeTests
         return controller;
     }
 
+    private static RegistrationController CreateGetController(
+        ISettingProvider settings,
+        IDbHelper db,
+        IRegistrationScopeResolver scopeResolver)
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddControllersWithViews();
+        var provider = services.BuildServiceProvider();
+        var httpContext = new DefaultHttpContext { RequestServices = provider };
+        return new RegistrationController(
+            Mock.Of<IPapiClient>(), db, settings,
+            Mock.Of<IEmailSenderFactory>(), Mock.Of<IMelissaClientFactory>(),
+            provider.GetRequiredService<IObjectModelValidator>(), scopeResolver)
+        {
+            ControllerContext = new ControllerContext { HttpContext = httpContext }
+        };
+    }
+
     private static Mock<IDbHelper> DuplicateFreeDb()
     {
         var db = new Mock<IDbHelper>();
@@ -150,13 +317,21 @@ public sealed class RegistrationBranchScopeTests
     }
 
     private static Mock<ISettingProvider> Settings(bool requiredUser5, string? melissaKey = null,
-        string? postmarkKey = null, string? dlFormat = null)
+        string? postmarkKey = null, string? dlFormat = null, int organizationId = 3,
+        int libraryId = 2, bool disabled = false)
     {
         var settings = new Mock<ISettingProvider>();
         settings.Setup(value => value.GetFieldRequired(nameof(Registration.User5))).Returns(requiredUser5);
         settings.Setup(value => value.GetFieldLabel(nameof(Registration.User5))).Returns("Responsible person");
         settings.SetupGet(value => value.DisplayResponsiblePersonField).Returns(true);
-        settings.SetupGet(value => value.DisableBranch).Returns(false);
+        settings.SetupGet(value => value.DisableBranch).Returns(disabled);
+        settings.SetupGet(value => value.OrganizationId).Returns(organizationId);
+        settings.SetupGet(value => value.LibraryId).Returns(libraryId);
+        settings.SetupGet(value => value.EnablePatronBranchSelectOption).Returns(true);
+        settings.SetupGet(value => value.EnableDriversLicenseSwipe).Returns(false);
+        settings.SetupGet(value => value.DriversLicenseButtonEnabledIpAddresses).Returns([]);
+        settings.SetupGet(value => value.DisplayMailingListCheckbox).Returns(false);
+        settings.SetupGet(value => value.ForceEcardRemotely).Returns(false);
         settings.SetupGet(value => value.PhoneNumberFormat).Returns("($1) $2-$3");
         settings.SetupGet(value => value.FormCode).Returns(string.Empty);
         settings.SetupGet(value => value.MelissaDataApiKey).Returns(melissaKey ?? string.Empty);
@@ -178,5 +353,15 @@ public sealed class RegistrationBranchScopeTests
         City = "Columbus",
         State = "OH",
         PostalCode = "43215"
+    };
+
+    private static OrganizationsGetRow Organization(int id, int? parentId, int code = 3) => new()
+    {
+        OrganizationID = id,
+        ParentOrganizationID = parentId,
+        OrganizationCodeID = code,
+        DisplayName = $"Organization {id}",
+        Name = $"Organization {id}",
+        Abbreviation = $"O{id}"
     };
 }
