@@ -10,7 +10,14 @@ using System.Threading.Tasks;
 
 namespace Clc.PatronRegistration.Data
 {
-    public class AuthDbHelper
+    public interface IAuthDbHelper
+    {
+        List<string> GetRolesForUser(string? username);
+        int? GetOrgForUser(string? username);
+        List<string> GetDomains();
+    }
+
+    public class AuthDbHelper : IAuthDbHelper
     {
         AppSettings config;
         public string ConnectionString => $"Server={config.Database.Hostname};Database=clc_web_membership;Trusted_Connection=True;TrustServerCertificate=true";
@@ -25,7 +32,7 @@ namespace Clc.PatronRegistration.Data
             config = _config;
         }
 
-        public List<string> GetRolesForUser(string username)
+        public List<string> GetRolesForUser(string? username)
         {
             using (var sql = new SqlConnection(ConnectionString))
             {
@@ -35,15 +42,48 @@ namespace Clc.PatronRegistration.Data
             }
         }
 
-        public int GetOrgForUser(string username)
+        public int? GetOrgForUser(string? username)
         {
+            if (!TryGetEmailDomain(username, out var emailDomain))
+            {
+                return null;
+            }
+
             using (var sql = new SqlConnection(ConnectionString))
             {
-                var emailDomain = username.Split('@')[1];
                 var sqlCommand = "select top 1 ed.LibraryId from clc_web_membership.dbo.EmailDomains ed where (ed.ApplicationName = @application or ed.ApplicationName is null) and ed.EmailDomain = @emailDomain order by ApplicationName desc";
 
-                return sql.QueryFirst<int>(sqlCommand, new { application = config.ApplicationName, emailDomain });
+                return sql.QueryFirstOrDefault<int?>(sqlCommand, new { application = config.ApplicationName, emailDomain });
             }
+        }
+
+        public static bool TryGetEmailDomain(string? username, out string emailDomain)
+        {
+            emailDomain = string.Empty;
+            if (string.IsNullOrWhiteSpace(username))
+            {
+                return false;
+            }
+
+            var identifier = username.Trim();
+            var atIndex = identifier.IndexOf('@');
+            if (atIndex <= 0 || atIndex == identifier.Length - 1 || atIndex != identifier.LastIndexOf('@'))
+            {
+                return false;
+            }
+
+            var localPart = identifier[..atIndex];
+            var domain = identifier[(atIndex + 1)..];
+            if (localPart.Any(char.IsWhiteSpace) || domain.Any(char.IsWhiteSpace) ||
+                domain.StartsWith(".", StringComparison.Ordinal) ||
+                domain.EndsWith(".", StringComparison.Ordinal) ||
+                domain.Contains("..", StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            emailDomain = domain;
+            return true;
         }
 
         public List<string> GetDomains()

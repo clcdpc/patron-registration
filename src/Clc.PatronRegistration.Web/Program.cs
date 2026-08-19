@@ -98,7 +98,8 @@ namespace Clc.PatronRegistration.Web
 
             builder.Services.AddSingleton(x => builder.Configuration.GetSection("Clc").Get<AppSettings>()!);
             builder.Services.AddSingleton<IAuthorizationHandler, IsClcUserCheckHandler>();
-            builder.Services.AddSingleton<IClaimsTransformation, ClcAzureAdClaimsTransformer>();
+            builder.Services.AddSingleton<IClaimsTransformation>(service =>
+                new ClcAzureAdClaimsTransformer(service.GetRequiredService<AppSettings>()));
 
 
             var app = builder.Build();

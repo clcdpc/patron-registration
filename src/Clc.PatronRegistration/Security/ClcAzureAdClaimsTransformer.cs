@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.ComponentModel;
 using System.Data;
 using System.Data.SqlClient;
+using System.Globalization;
 using System.Linq;
 using System.Security.Claims;
 using System.Security.Principal;
@@ -19,7 +20,9 @@ namespace Clc.PatronRegistration.Security
 {
     public class ClcAzureAdClaimsTransformer : IClaimsTransformation
     {
-        readonly AuthDbHelper db;
+        private const string OrganizationClaimType = "Clc.OrganizationId";
+
+        readonly IAuthDbHelper db;
 
         public ClcAzureAdClaimsTransformer(AppSettings settings) : this(settings.Database.Hostname, settings.ApplicationName)
         {
@@ -32,21 +35,63 @@ namespace Clc.PatronRegistration.Security
             db = new AuthDbHelper(dbHostname, appName);
         }
 
+        public ClcAzureAdClaimsTransformer(IAuthDbHelper db)
+        {
+            this.db = db ?? throw new ArgumentNullException(nameof(db));
+        }
+
         public Task<ClaimsPrincipal> TransformAsync(ClaimsPrincipal principal)
         {
-            var ci = (ClaimsIdentity)principal.Identity;
-            var roles = db.GetRolesForUser(ci.Name);
+            if (principal.Identity is not ClaimsIdentity ci)
+            {
+                return Task.FromResult(principal);
+            }
+
+            var loginIdentifier = GetLoginIdentifier(ci);
+            var roles = db.GetRolesForUser(loginIdentifier);
 
             foreach (var role in roles)
             {
-                ci.AddClaim(new Claim(ci.RoleClaimType, role));
+                if (!string.IsNullOrWhiteSpace(role))
+                {
+                    AddClaimIfMissing(ci, ci.RoleClaimType, role);
+                }
             }
 
-            ci.GetGroups().Where(g => g.Value.StartsWith("Clc.", StringComparison.OrdinalIgnoreCase)).ToList().ForEach(g => ci.AddClaim(new Claim(ClaimTypes.Role, g.Value)));
+            ci.GetGroups()
+                .Where(g => g.Value.StartsWith("Clc.", StringComparison.OrdinalIgnoreCase))
+                .ToList()
+                .ForEach(g => AddClaimIfMissing(ci, ClaimTypes.Role, g.Value));
 
-            ci.AddClaim(new Claim("Clc.OrganizationId", db.GetOrgForUser(ci.Name).ToString()));            
+            foreach (var claim in ci.Claims
+                .Where(claim => string.Equals(claim.Type, OrganizationClaimType, StringComparison.OrdinalIgnoreCase))
+                .ToList())
+            {
+                ci.RemoveClaim(claim);
+            }
+
+            var organizationId = db.GetOrgForUser(loginIdentifier);
+            if (organizationId.HasValue)
+            {
+                ci.AddClaim(new Claim(OrganizationClaimType, organizationId.Value.ToString(CultureInfo.InvariantCulture)));
+            }
 
             return Task.FromResult(principal);
+        }
+
+        private static string? GetLoginIdentifier(ClaimsIdentity identity)
+        {
+            return string.IsNullOrWhiteSpace(identity.Name)
+                ? identity.FindFirst("preferred_username")?.Value
+                : identity.Name;
+        }
+
+        private static void AddClaimIfMissing(ClaimsIdentity identity, string claimType, string claimValue)
+        {
+            if (!identity.HasClaim(claimType, claimValue))
+            {
+                identity.AddClaim(new Claim(claimType, claimValue));
+            }
         }
     }
 
@@ -54,7 +99,7 @@ namespace Clc.PatronRegistration.Security
     {
         public static string GetPreferredUsername(this IIdentity identity)
         {
-            var ci = (ClaimsIdentity)identity;
+            var ci = identity as ClaimsIdentity;
 
             var username = ci?.FindFirst("preferred_username")?.Value ?? identity?.Name ?? "";
             return username;
@@ -62,7 +107,7 @@ namespace Clc.PatronRegistration.Security
 
         public static string GetDomain(this IIdentity identity)
         {
-            return identity.GetPreferredUsername().Split('@')[1];
+            return AuthDbHelper.TryGetEmailDomain(identity.GetPreferredUsername(), out var domain) ? domain : "";
         }
 
         public static T GetClaim<T>(this IIdentity identity, string claimName)
@@ -70,16 +115,13 @@ namespace Clc.PatronRegistration.Security
             var ci = (ClaimsIdentity)identity;
             return (T)TypeDescriptor.GetConverter(typeof(T)).ConvertFromInvariantString(ci.FindFirst(claimName)?.Value?.ToString());
         }
-        public static string GetPreferredUsername(this ClaimsPrincipal principal) => principal.Identity?.GetClaim<string>("preferred_username");
+        public static string GetPreferredUsername(this ClaimsPrincipal principal) => principal?.Identity?.GetPreferredUsername() ?? "";
         public static int? GetClaimOrganization(this ClaimsPrincipal principal) => principal.Identity?.GetClaim<int?>("Clc.OrganizationId");
         public static int? GetNothing(this ClaimsPrincipal principal) => principal.Identity?.GetClaim<int?>("Clc.asfddsafsad");
 
         public static string GetPreferredUsername(this IPrincipal principal)
         {
-            var ci = (ClaimsIdentity)principal.Identity;
-
-            var username = ci?.FindFirst("preferred_username")?.Value ?? principal?.Identity?.Name ?? "";
-            return username;
+            return principal?.Identity?.GetPreferredUsername() ?? "";
         }
 
         //public static int? GetClaimOrganization(this IPrincipal principal) => principal.Identity.GetClaim<int?>("Clc.OrganizationId");

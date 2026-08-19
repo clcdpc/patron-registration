@@ -31,11 +31,11 @@ namespace Clc.PatronRegistration.Security
 
         protected override Task HandleRequirementAsync(AuthorizationHandlerContext context, IsClcUserRequirement requirement)
         {
-            var ci = (ClaimsIdentity)context.User.Identity;
-            if (ci.IsAuthenticated)
+            if (context.User.Identity is ClaimsIdentity ci && ci.IsAuthenticated &&
+                AuthDbHelper.TryGetEmailDomain(ci.Name, out var domain) &&
+                db.GetDomains().Any(d => d.Equals(domain, StringComparison.OrdinalIgnoreCase)))
             {
-                var domain = context.User.Identity.Name.Split('@')[1];
-                if (ci.IsAuthenticated && db.GetDomains().Any(d => d.Equals(domain, StringComparison.OrdinalIgnoreCase))) { context.Succeed(requirement); }
+                context.Succeed(requirement);
             }
             return Task.FromResult(0);
         }
