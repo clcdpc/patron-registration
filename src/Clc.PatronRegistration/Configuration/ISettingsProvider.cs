@@ -181,7 +181,6 @@ namespace Clc.PatronRegistration.Configuration
         int ValidAddressPlusNameRecordSetId { get; }
         [AdminSetting(SettingCategory.AddressVerification, "Invalid-address record set", "Adds a successfully created patron to this Polaris record set when address verification returns an invalid result.")]
         int InvalidAddressRecordSetId { get; }
-        [AdminSetting(SettingCategory.FormBehaviorAndFields, "School-registration mode", "Enables the school, student, and teacher workflow and selects its configured operating mode; blank disables that workflow.")]
         string SchoolInfoFormat { get; }
         [AdminSetting(SettingCategory.ECardRegistration, "E-card barcode prefix", "Prefixes the timestamp-based temporary barcode generated for an e-card registration.")]
         string EcardBarcodePrefix { get; }

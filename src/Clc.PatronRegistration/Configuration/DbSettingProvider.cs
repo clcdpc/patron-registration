@@ -19,28 +19,29 @@ namespace Clc.PatronRegistration.Configuration
         public ICache Cache { get; }
         public string FormCode { get; } = string.Empty;
         public int SystemOrganizationId { get; }
-        protected IReadOnlyList<RegistrationFormSetting> SettingsSnapshot { get; }
+        protected SettingsResolverSnapshot SettingsSnapshot { get; }
         protected IReadOnlyList<OrganizationsGetRow> OrganizationSnapshot { get; }
+        [JsonIgnore]
+        public SettingsResolverSnapshot ResolutionSnapshot => SettingsSnapshot;
 
         public DbSettingProvider(int orgId, ICache cache) : this(orgId, cache, "", 1) { }
 
         public DbSettingProvider(int orgId, ICache cache, string formCode = "", int systemOrganizationId = 1, int? libraryId = null)
+            : this(orgId, cache, CacheSnapshot.Capture(cache), formCode, systemOrganizationId, libraryId)
+        {
+        }
+
+        public DbSettingProvider(int orgId, ICache cache, CacheSnapshot snapshot, string formCode = "", int systemOrganizationId = 1, int? libraryId = null)
         {
             OrganizationId = orgId;
             FormCode = formCode;
             Cache = cache;
             SystemOrganizationId = systemOrganizationId;
-            var snapshot = CaptureSnapshot(cache);
-            SettingsSnapshot = snapshot.Settings.ToArray();
-            OrganizationSnapshot = snapshot.Organizations.ToArray();
+            SettingsSnapshot = snapshot.IndexedSettings;
+            OrganizationSnapshot = snapshot.Organizations;
             _ = OrganizationSnapshot.Single(o => o.OrganizationID == OrganizationId);
             LibraryId = libraryId ?? OrganizationSnapshot.GetLibrary(orgId).OrganizationID;
         }
-
-        private static CacheSnapshot CaptureSnapshot(ICache cache) =>
-            cache is ICacheSnapshotProvider snapshotProvider
-                ? snapshotProvider.GetSnapshot()
-                : new CacheSnapshot(cache.SettingsCache.ToArray(), cache.OrganizationCache.ToArray());
 
         public virtual T GetSetting<T>(string name, T defaultValue = default!)
         {
@@ -137,10 +138,7 @@ namespace Clc.PatronRegistration.Configuration
         public virtual List<string> GetRequiredFields()
         {
             var resolver = new SettingsResolver();
-            return SettingsSnapshot
-                .Where(setting => setting.Setting.StartsWith("require.", StringComparison.OrdinalIgnoreCase))
-                .Select(setting => setting.Setting)
-                .Distinct(StringComparer.OrdinalIgnoreCase)
+            return SettingsSnapshot.RequiredKeys
                 .Where(key => bool.TryParse(resolver.Resolve(SettingsSnapshot, key, OrganizationId, LibraryId, FormCode, SystemOrganizationId).EffectiveValue, out var required) && required)
                 .Select(key => key["require.".Length..])
                 .ToList();

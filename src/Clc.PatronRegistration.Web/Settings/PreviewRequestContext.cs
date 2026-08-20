@@ -50,7 +50,9 @@ public sealed class PreviewContextResolver(
         {
             return null;
         }
-        return new(link, draft, new PreviewSettingProvider(draft, link.OperationalBranchId, cache, options.Value.SystemOrganizationId));
+        var cacheSnapshot = CacheSnapshot.Capture(cache);
+        return new(link, draft, new PreviewSettingProvider(
+            draft, link.OperationalBranchId, cache, cacheSnapshot, options.Value.SystemOrganizationId));
     }
 }
 

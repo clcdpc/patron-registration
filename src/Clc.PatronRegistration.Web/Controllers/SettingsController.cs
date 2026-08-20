@@ -96,7 +96,10 @@ public sealed class SettingsController(
             return Forbid();
         }
 
-        var libraryId = target == settingsOptions.SystemOrganizationId ? settingsOptions.SystemOrganizationId : GetLibraryId(target);
+        var cacheSnapshot = CacheSnapshot.Capture(cache);
+        var libraryId = target == settingsOptions.SystemOrganizationId
+            ? settingsOptions.SystemOrganizationId
+            : cacheSnapshot.Organizations.GetLibrary(target).OrganizationID;
         var draft = repository.GetActiveDraft(target, formCode);
         var resolver = new SettingsResolver();
         var visibleSettings = catalog.All.Where(setting => principal.IsGlobal || !setting.IsSensitive).ToList();
@@ -106,10 +109,10 @@ public sealed class SettingsController(
         {
             var definition = visibleSettings[index];
             var draftChange = draft?.Changes.FirstOrDefault(change => change.Key.Equals(definition.Key, StringComparison.OrdinalIgnoreCase));
-            var resolution = resolver.Resolve(cache.SettingsCache, definition.Key, target, libraryId, formCode,
+            var resolution = resolver.Resolve(cacheSnapshot.IndexedSettings, definition.Key, target, libraryId, formCode,
                 settingsOptions.SystemOrganizationId);
             var inheritedResolution = resolution.OwnsOverride
-                ? resolver.Resolve(cache.SettingsCache, definition.Key, target, libraryId, formCode,
+                ? resolver.Resolve(cacheSnapshot.IndexedSettings, definition.Key, target, libraryId, formCode,
                     settingsOptions.SystemOrganizationId,
                     new HashSet<(int OrganizationId, string FormCode, string Key)>
                     {

@@ -6,26 +6,18 @@ namespace Clc.PatronRegistration.Administration;
 /// <summary>Provides the normal setting surface with an active draft overlaid at its selected scope.</summary>
 public sealed class PreviewSettingProvider : DbSettingProvider
 {
-    private readonly IReadOnlyList<RegistrationFormSetting> overlaidSettings;
+    private readonly SettingsResolverSnapshot overlaidSettings;
 
     public PreviewSettingProvider(SettingDraft draft, int operationalBranchId, ICache cache, int systemOrganizationId)
-        : base(operationalBranchId, cache, draft.FormCode, systemOrganizationId)
+        : this(draft, operationalBranchId, cache, CacheSnapshot.Capture(cache), systemOrganizationId)
     {
-        var rows = SettingsSnapshot
-            .Where(row => !(row.OrganizationID == draft.OrganizationId &&
-                            row.FormCode.Equals(draft.FormCode, StringComparison.OrdinalIgnoreCase) &&
-                            draft.Changes.Any(change => change.Key.Equals(row.Setting, StringComparison.OrdinalIgnoreCase))))
-            .ToList();
-        rows.AddRange(draft.Changes
-            .Where(change => change.Operation == DraftOperation.Upsert)
-            .Select(change => new RegistrationFormSetting
-            {
-                OrganizationID = draft.OrganizationId,
-                FormCode = draft.FormCode,
-                Setting = change.Key,
-                Value = change.Value ?? string.Empty
-            }));
-        overlaidSettings = rows;
+    }
+
+    public PreviewSettingProvider(SettingDraft draft, int operationalBranchId, ICache cache, CacheSnapshot snapshot, int systemOrganizationId)
+        : base(operationalBranchId, cache, snapshot, draft.FormCode, systemOrganizationId)
+    {
+        overlaidSettings = SettingsResolverSnapshot.CreateOverlay(
+            SettingsSnapshot, draft.OrganizationId, draft.FormCode, draft.Changes);
     }
 
     public override T GetSetting<T>(string name, T defaultValue = default!)
@@ -46,10 +38,7 @@ public sealed class PreviewSettingProvider : DbSettingProvider
 
     public override List<string> GetRequiredFields()
     {
-        return overlaidSettings
-            .Where(setting => setting.Setting.StartsWith("require.", StringComparison.OrdinalIgnoreCase))
-            .Select(setting => setting.Setting)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
+        return overlaidSettings.RequiredKeys
             .Where(key => GetSetting(key, false))
             .Select(key => key["require.".Length..])
             .ToList();

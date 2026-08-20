@@ -7,7 +7,7 @@ namespace Clc.PatronRegistration.Tests
     public class TestCache : ICache, ICacheSnapshotProvider
     {
         public bool IsInitialized { get; set; } = true;
-        public List<RegistrationFormSetting> SettingsCache { get; set; } = [];
+        private List<RegistrationFormSetting> settings = [];
         private List<OrganizationsGetRow> organizations =
         [
             new() { OrganizationID = 1, Name = "System", OrganizationCodeID = 1, Abbreviation = "SYS" },
@@ -18,10 +18,28 @@ namespace Clc.PatronRegistration.Tests
         public List<OrganizationsGetRow> OrganizationCache
         {
             get => organizations;
-            set => organizations = value;
+            set
+            {
+                organizations = value;
+                snapshot = null;
+            }
         }
 
-        public CacheSnapshot GetSnapshot() => new(SettingsCache.ToArray(), OrganizationCache.ToArray());
+        private CacheSnapshot? snapshot;
+
+        public CacheSnapshot GetSnapshot() => snapshot ??= new(
+            Array.AsReadOnly(SettingsCache.ToArray()),
+            Array.AsReadOnly(OrganizationCache.ToArray()));
+
+        public List<RegistrationFormSetting> SettingsCache
+        {
+            get => settings;
+            set
+            {
+                settings = value;
+                snapshot = null;
+            }
+        }
 
         public List<OrganizationsGetRow> GetBranches(int orgId) => OrganizationCache.Where(o => o.OrganizationCodeID == 3).ToList();
 

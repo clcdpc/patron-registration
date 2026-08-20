@@ -1,5 +1,7 @@
 # Patron-registration settings administration
 
+`school_info_format` is intentionally backend-only for this version. It remains on `ISettingProvider` and is still resolved by `DbSettingProvider` so existing school-workflow rows continue to work, but it is not in the administration catalog or mutation allowlist. Existing database values are retained unchanged; enabling or changing that workflow requires backend setup outside this interface.
+
 The MVC administration interface is rooted at `/settings`. It uses the existing Dapper and `RegistrationFormSettings` architecture; it does not use EF Core or run database migrations at startup.
 
 ## Authorization and scope

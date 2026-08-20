@@ -594,6 +594,34 @@ public class SettingsControllerTests
     }
 
     [TestMethod]
+    public void BackendOnlySchoolInfoFormat_IsRejectedByDirectAndDraftMutationPaths()
+    {
+        var repository = new Mock<ISettingsAdministrationRepository>();
+        var controller = CreateController(repository, LibraryAuthorization());
+        var direct = new SaveSettingsRequest
+        {
+            OrganizationId = 3,
+            Changes = [new SettingMutationInput { Key = "school_info_format", Value = "uapl" }]
+        };
+        var draft = new SaveToSharedDraftRequest
+        {
+            OrganizationId = 3,
+            Changes = [new SettingMutationInput { Key = "school_info_format", Value = "uapl" }]
+        };
+
+        Assert.IsInstanceOfType<RedirectToActionResult>(controller.DirectSave(direct));
+        controller.ModelState.Clear();
+        Assert.IsInstanceOfType<RedirectToActionResult>(controller.SaveToSharedDraft(draft));
+
+        repository.Verify(service => service.DirectSave(
+            It.IsAny<int>(), It.IsAny<string>(), It.IsAny<long>(), It.IsAny<IReadOnlyList<SettingMutation>>(),
+            It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), It.IsAny<AuditContext>()), Times.Never);
+        repository.Verify(service => service.SaveToSharedDraft(
+            It.IsAny<int>(), It.IsAny<string>(), It.IsAny<long>(), It.IsAny<long?>(), It.IsAny<IReadOnlyList<SettingMutation>>(),
+            It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), It.IsAny<AuditContext>()), Times.Never);
+    }
+
+    [TestMethod]
     public void LibraryAdministrator_DirectAndDraftSavesSanitizeHtmlExecutionSettingsBeforePersistence()
     {
         const string malicious = "<p><strong>Keep this formatting</strong></p><script>alert(1)</script>" +

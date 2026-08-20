@@ -3,6 +3,8 @@ using Clc.PatronRegistration.Configuration;
 using Clc.PatronRegistration.Web.Settings;
 using Clc.PatronRegistration.Web.Models;
 using Clc.PatronRegistration.Validators;
+using Clc.PatronRegistration.Helpers;
+using Clc.Polaris.Api.Models;
 using System.ComponentModel.DataAnnotations;
 using System.Reflection;
 using System.Text.RegularExpressions;
@@ -22,7 +24,7 @@ public class SettingsAdministrationTests
         "show_dl", "enable_age_warning", "age_warning_text", "enable_age_block", "age_block_text", "hide_ereceipt",
         "normalize_to_uppercase", "dl_format", "enable_legal_name_checkbox", "drivers_license_button_text",
         "drivers_license_prompt_text", "agreement_confirm_button_text", "agreement_cancel_button_text", "school_info_field_legend",
-        "school_info_format", "responsible_person_disclaimer", "display_responsible_person_field", "phone_number_format",
+        "responsible_person_disclaimer", "display_responsible_person_field", "phone_number_format",
         "enable_patron_branch_select_option", "display_preferred_pickup_location", "teacher_patron_code_id", "student_patron_code_id",
         "patron_code_id", "expiration_date", "expiration_date_years", "hide_branch_select_if_only_one_option", "disable_branch",
         "display_ecard_checkbox", "ecard_patron_code_id", "ecard_registration_text", "ecard_barcode_prefix", "force_ecard_remotely",
@@ -176,6 +178,20 @@ public class SettingsAdministrationTests
 
         Assert.IsFalse(catalog.TryGet("hide_gender", out _));
         Assert.IsFalse(catalog.TryGet("na_gender_text", out _));
+    }
+
+    [TestMethod]
+    public void SchoolInfoFormat_RemainsRuntimeOnlyAndExistingRowsStillResolve()
+    {
+        var property = typeof(ISettingProvider).GetProperty(nameof(ISettingProvider.SchoolInfoFormat));
+        Assert.IsNotNull(property);
+        Assert.IsNull(property!.GetCustomAttribute<AdminSettingAttribute>(inherit: false));
+        Assert.IsFalse(new SettingCatalog().TryGet("school_info_format", out _));
+
+        var provider = new DbSettingProvider(3,
+            CacheWith(Setting(3, "school_info_format", "uapl")), string.Empty, 1);
+
+        Assert.AreEqual("uapl", provider.SchoolInfoFormat);
     }
 
     [TestMethod]
@@ -1201,6 +1217,50 @@ public class SettingsAdministrationTests
     }
 
     [TestMethod]
+    public void Resolver_ResolvesNamedAndDefaultValuesAtEveryPrecedenceLevel()
+    {
+        var rows = new[]
+        {
+            Setting(3, "branch_named", "branch named", "kids"),
+            Setting(3, "branch_default", "branch default"),
+            Setting(2, "library_named", "library named", "kids"),
+            Setting(2, "library_default", "library default"),
+            Setting(1, "system_named", "system named", "kids"),
+            Setting(1, "system_default", "system default")
+        };
+        var snapshot = new SettingsResolverSnapshot(rows);
+        var resolver = new SettingsResolver();
+
+        foreach (var expected in new[]
+        {
+            (Key: "branch_named", Value: "branch named", Source: "Branch", Form: "kids"),
+            (Key: "branch_default", Value: "branch default", Source: "Branch", Form: ""),
+            (Key: "library_named", Value: "library named", Source: "Library", Form: "kids"),
+            (Key: "library_default", Value: "library default", Source: "Library", Form: ""),
+            (Key: "system_named", Value: "system named", Source: "System", Form: "kids"),
+            (Key: "system_default", Value: "system default", Source: "System", Form: "")
+        })
+        {
+            var result = resolver.Resolve(snapshot, expected.Key, 3, 2, "kids", 1);
+            Assert.AreEqual(expected.Value, result.EffectiveValue, expected.Key);
+            Assert.AreEqual(expected.Source, result.SourceOrganizationType, expected.Key);
+            Assert.AreEqual(expected.Form, result.SourceFormCode, expected.Key);
+        }
+    }
+
+    [TestMethod]
+    public void Resolver_IndexUsesCaseInsensitiveKeysAndFormCodes()
+    {
+        var snapshot = new SettingsResolverSnapshot(
+            [Setting(3, "MixedKey", "configured", "KidsForm")]);
+
+        var result = new SettingsResolver().Resolve(snapshot, "mixedkey", 3, 2, "kidsform", 1);
+
+        Assert.AreEqual("configured", result.EffectiveValue);
+        Assert.IsTrue(result.OwnsOverride);
+    }
+
+    [TestMethod]
     public void Resolver_PreservesExplicitEmptyOverride()
     {
         var rows = new[]
@@ -1273,6 +1333,8 @@ public class SettingsAdministrationTests
         };
 
         var generationN = new DbSettingProvider(3, cache, "kids", 1);
+        var generationNSnapshot = cache.GetSnapshot();
+        Assert.AreSame(generationNSnapshot.IndexedSettings, generationN.ResolutionSnapshot);
 
         cache.OrganizationCache =
         [
@@ -1303,6 +1365,43 @@ public class SettingsAdministrationTests
         Assert.IsFalse(generationN1.GetFieldRequired("User5"));
         CollectionAssert.AreEquivalent(Array.Empty<string>(), generationN1.GetRequiredFields());
         Assert.AreEqual(84, generationN1.RegistrationLogonUserId);
+    }
+
+    [TestMethod]
+    public void DbSettingProvider_UsesPublishedIndexWithoutPerProviderGlobalScanOrCopy()
+    {
+        var rows = Enumerable.Range(0, 20_000)
+            .Select(index => Setting(3, $"unused_{index}", index.ToString(), "kids"))
+            .Append(Setting(3, "registration_text", "indexed value", "kids"))
+            .ToList();
+        var guardedSettings = new GuardedSettingsList(rows);
+        var snapshot = new CacheSnapshot(guardedSettings,
+        [
+            new() { OrganizationID = 1, OrganizationCodeID = 1, Name = "System" },
+            new() { OrganizationID = 2, OrganizationCodeID = 2, Name = "Library", ParentOrganizationID = 1 },
+            new() { OrganizationID = 3, OrganizationCodeID = 3, Name = "Branch", ParentOrganizationID = 2 }
+        ]);
+        var cache = new SnapshotOnlyCache(snapshot);
+
+        // Building the generation is allowed to enumerate the complete input
+        // once. Every provider and read after publication must use the index.
+        guardedSettings.ThrowOnEnumeration = true;
+        const int providerCount = 250;
+        var allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
+        DbSettingProvider? last = null;
+        for (var i = 0; i < providerCount; i++)
+        {
+            last = new DbSettingProvider(3, cache, "kids", 1);
+            Assert.AreEqual("indexed value", last.RegistrationText);
+        }
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - allocatedBefore;
+
+        Assert.IsNotNull(last);
+        Assert.AreSame(snapshot.IndexedSettings, last!.ResolutionSnapshot);
+        Assert.AreEqual(providerCount, cache.SnapshotCalls);
+        Assert.AreEqual(0, cache.SettingsPropertyReads);
+        Assert.IsTrue(allocated < 10_000_000,
+            $"Provider construction/read allocation unexpectedly scaled with the global settings collection: {allocated} bytes.");
     }
 
     [TestMethod]
@@ -1352,6 +1451,7 @@ public class SettingsAdministrationTests
     public void SqlSettingAllowlistsMatchEveryPersistableCatalogKey()
     {
         var expected = new SettingCatalog().All.Select(setting => setting.Key).ToArray();
+        Assert.IsFalse(expected.Contains("school_info_format", StringComparer.OrdinalIgnoreCase));
         var root = FindRepositoryRoot();
         foreach (var relativePath in new[]
         {
@@ -1875,7 +1975,7 @@ public class SettingsAdministrationTests
         var interfaceProperties = typeof(ISettingProvider).GetProperties(BindingFlags.Instance | BindingFlags.Public);
         var providerProperties = typeof(DbSettingProvider).GetProperties(BindingFlags.Instance | BindingFlags.Public);
 
-        Assert.AreEqual(76, AdministrationProperties().Length);
+        Assert.AreEqual(75, AdministrationProperties().Length);
         Assert.IsFalse(providerProperties.Any(property => property.GetCustomAttribute<AdminSettingAttribute>() is not null));
         Assert.IsTrue(SettingPropertyMetadataCache.GetAll().Where(metadata => metadata.Administration is not null)
             .All(metadata => metadata.Property.DeclaringType == typeof(ISettingProvider)));
@@ -2076,4 +2176,46 @@ public class SettingsAdministrationTests
 
     private static SettingDraft Draft(int organizationId, params SettingMutation[] changes) =>
         new(20, organizationId, string.Empty, 0, DraftStatus.Active, changes);
+
+    private sealed class GuardedSettingsList(IReadOnlyList<RegistrationFormSetting> rows) : IReadOnlyList<RegistrationFormSetting>
+    {
+        public bool ThrowOnEnumeration { get; set; }
+        public int Count => rows.Count;
+        public RegistrationFormSetting this[int index] => rows[index];
+
+        public IEnumerator<RegistrationFormSetting> GetEnumerator()
+        {
+            if (ThrowOnEnumeration)
+            {
+                throw new InvalidOperationException("The published settings snapshot was enumerated after indexing.");
+            }
+            return rows.GetEnumerator();
+        }
+
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
+    }
+
+    private sealed class SnapshotOnlyCache(CacheSnapshot snapshot) : ICache, ICacheSnapshotProvider
+    {
+        public int SnapshotCalls { get; private set; }
+        public int SettingsPropertyReads { get; private set; }
+        public bool IsInitialized => true;
+        public List<RegistrationFormSetting> SettingsCache
+        {
+            get
+            {
+                SettingsPropertyReads++;
+                throw new InvalidOperationException("Provider used the mutable cache property instead of the published snapshot.");
+            }
+        }
+        public List<OrganizationsGetRow> OrganizationCache => throw new InvalidOperationException();
+        public CacheSnapshot GetSnapshot()
+        {
+            SnapshotCalls++;
+            return snapshot;
+        }
+        public void RebuildCache() => throw new InvalidOperationException();
+        public OrganizationsGetRow GetOrg(int orgId) => throw new InvalidOperationException();
+        public List<OrganizationsGetRow> GetBranches(int orgId) => throw new InvalidOperationException();
+    }
 }

@@ -17,7 +17,8 @@ namespace Clc.PatronRegistration.Helpers
     {
         private sealed record PublishedCacheSnapshot(
             List<RegistrationFormSetting> Settings,
-            List<OrganizationsGetRow> Organizations);
+            List<OrganizationsGetRow> Organizations,
+            CacheSnapshot Snapshot);
 
         private readonly object rebuildLock = new();
         private PublishedCacheSnapshot? snapshot;
@@ -58,7 +59,7 @@ namespace Clc.PatronRegistration.Helpers
                 current = Volatile.Read(ref snapshot);
             }
 
-            return new CacheSnapshot(current?.Settings.ToArray() ?? [], current?.Organizations.ToArray() ?? []);
+            return current?.Snapshot ?? new CacheSnapshot([], []);
         }
 
         public void RebuildCache()
@@ -68,7 +69,12 @@ namespace Clc.PatronRegistration.Helpers
                 var orgResult = papi.OrganizationsGet(OrganizationType.All);
                 var organizations = orgResult.Data.OrganizationsGetRows.ToList();
                 var settings = db.GetAllSettings().ToList();
-                Volatile.Write(ref snapshot, new PublishedCacheSnapshot(settings, organizations));
+                Volatile.Write(ref snapshot, new PublishedCacheSnapshot(
+                    settings,
+                    organizations,
+                    new CacheSnapshot(
+                        Array.AsReadOnly(settings.ToArray()),
+                        Array.AsReadOnly(organizations.ToArray()))));
             }
         }
         public OrganizationsGetRow GetOrg(int orgId) => OrganizationCache.Single(o => o.OrganizationID == orgId);

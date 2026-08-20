@@ -40,7 +40,6 @@ VALUES
         ('agreement_confirm_button_text'),
         ('agreement_cancel_button_text'),
         ('school_info_field_legend'),
-        ('school_info_format'),
         ('responsible_person_disclaimer'),
         ('display_responsible_person_field'),
         ('phone_number_format'),

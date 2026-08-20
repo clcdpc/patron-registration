@@ -6,9 +6,26 @@ using Clc.PatronRegistration.Configuration;
 
 namespace Clc.PatronRegistration.Helpers
 {
-    public sealed record CacheSnapshot(
-        IReadOnlyList<RegistrationFormSetting> Settings,
-        IReadOnlyList<OrganizationsGetRow> Organizations);
+    public sealed record CacheSnapshot
+    {
+        public CacheSnapshot(
+            IReadOnlyList<RegistrationFormSetting> settings,
+            IReadOnlyList<OrganizationsGetRow> organizations)
+        {
+            Settings = settings;
+            Organizations = organizations;
+            IndexedSettings = new SettingsResolverSnapshot(settings);
+        }
+
+        public IReadOnlyList<RegistrationFormSetting> Settings { get; }
+        public IReadOnlyList<OrganizationsGetRow> Organizations { get; }
+        public SettingsResolverSnapshot IndexedSettings { get; }
+
+        public static CacheSnapshot Capture(ICache cache) =>
+            cache is ICacheSnapshotProvider snapshotProvider
+                ? snapshotProvider.GetSnapshot()
+                : new CacheSnapshot(cache.SettingsCache.ToArray(), cache.OrganizationCache.ToArray());
+    }
 
     /// <summary>Provides one atomically published cache generation to request-scoped consumers.</summary>
     public interface ICacheSnapshotProvider

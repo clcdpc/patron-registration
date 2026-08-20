@@ -225,6 +225,26 @@ update dbo.RegistrationSettingsCacheGeneration set Generation=0,ModifiedAtUtc=SY
     }
 
     [TestMethod]
+    public void BackendOnlySchoolInfoFormatValue_SurvivesCatalogMigrationsUnchanged()
+    {
+        const string originalValue = "uapl-backend-value";
+        using (var connection = Open())
+        {
+            Execute(connection, "delete dbo.RegistrationFormSettings where OrganizationID=101 and Setting='school_info_format' and FormCode='form';");
+            Execute(connection,
+                "insert dbo.RegistrationFormSettings(OrganizationID, Setting, FormCode, Value) values(101, 'school_info_format', 'form', @value);",
+                parameters: command => command.Parameters.AddWithValue("@value", originalValue));
+
+            Execute(connection, File.ReadAllText(Path.Combine(RepositoryRoot(), "database", "009-register-setting-catalog-keys.sql")), 30);
+            Execute(connection, File.ReadAllText(Path.Combine(RepositoryRoot(), "database", "009-register-setting-catalog-keys.sql")), 30);
+            Execute(connection, File.ReadAllText(Path.Combine(RepositoryRoot(), "database", "settings-administration.sql")), 30);
+            Execute(connection, File.ReadAllText(Path.Combine(RepositoryRoot(), "database", "settings-administration.sql")), 30);
+        }
+
+        Assert.AreEqual(originalValue, ReadSettingValue(101, "form", "school_info_format"));
+    }
+
+    [TestMethod]
     public void Migration006_IsIdempotentAndRegistersExactlyOneHeaderImageSettingType()
     {
         var migration = File.ReadAllText(Path.Combine(RepositoryRoot(), "database", "006-register-header-image-asset-setting.sql"));

@@ -31,11 +31,12 @@ public sealed class RequestSettingProviderResolver(
 
         if (settingsPageBrandingContext.Current is { } branding)
         {
+            var snapshot = GetRequestSnapshot(httpContext);
             var brandingOrganizationId = branding.OrganizationId;
             var formCode = string.Empty;
             if (int.TryParse(httpContext.Request.Query["organizationId"].ToString(), out var selectedOrganizationId) &&
                 settingsAuthorization.CanManage(httpContext.User, selectedOrganizationId) &&
-                cache.OrganizationCache.Any(organization => organization.OrganizationID == selectedOrganizationId))
+                snapshot.Organizations.Any(organization => organization.OrganizationID == selectedOrganizationId))
             {
                 var selectedFormCode = httpContext.Request.Query["formCode"].ToString();
                 if (formCodeAvailability.IsAvailable(selectedOrganizationId, selectedFormCode))
@@ -47,11 +48,12 @@ public sealed class RequestSettingProviderResolver(
 
             var libraryId = brandingOrganizationId == options.Value.SystemOrganizationId
                 ? options.Value.SystemOrganizationId
-                : cache.OrganizationCache.GetLibrary(brandingOrganizationId).OrganizationID;
+                : snapshot.Organizations.GetLibrary(brandingOrganizationId).OrganizationID;
 
             return new DbSettingProvider(
                 brandingOrganizationId,
                 cache,
+                snapshot,
                 formCode,
                 options.Value.SystemOrganizationId,
                 libraryId);
@@ -83,6 +85,20 @@ public sealed class RequestSettingProviderResolver(
         {
             formCode = "kiosk";
         }
-        return new DbSettingProvider(organizationId, cache, formCode, options.Value.SystemOrganizationId);
+        return new DbSettingProvider(organizationId, cache, GetRequestSnapshot(httpContext), formCode, options.Value.SystemOrganizationId);
+    }
+
+    private static readonly object SnapshotItemKey = new();
+
+    private CacheSnapshot GetRequestSnapshot(HttpContext httpContext)
+    {
+        if (httpContext.Items.TryGetValue(SnapshotItemKey, out var existing) && existing is CacheSnapshot snapshot)
+        {
+            return snapshot;
+        }
+
+        var captured = CacheSnapshot.Capture(cache);
+        httpContext.Items[SnapshotItemKey] = captured;
+        return captured;
     }
 }
