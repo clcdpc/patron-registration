@@ -14,6 +14,7 @@ using Clc.PatronRegistration.Data;
 using Clc.PatronRegistration.Web.Models;
 using NLog;
 using Microsoft.AspNetCore.Mvc.ModelBinding;
+using Microsoft.AspNetCore.Mvc.ModelBinding.Validation;
 using Clc.PatronRegistration.Validators;
 using Clc.Rest.Models;
 using System.Text.RegularExpressions;
@@ -51,7 +52,7 @@ namespace Clc.PatronRegistration
         public string? StreetTwo { get; set; } = string.Empty;
         public string City { get; set; } = string.Empty;
         public string State { get; set; } = string.Empty;
-        public string User1 { get; set; } = string.Empty;
+        public string? User1 { get; set; } = string.Empty;
         public string User2 { get; set; } = string.Empty;
         public string User4 { get; set; } = string.Empty;
         public string? User5 { get; set; } = string.Empty;
@@ -84,6 +85,7 @@ namespace Clc.PatronRegistration
         public bool AddToMailingList { get; set; }
         public bool ShowDlButton { get; set; }
         [JsonIgnore]
+        [ValidateNever]
         public ISettingProvider Settings { get; protected set; }
 
         public void UseSettings(ISettingProvider settings)

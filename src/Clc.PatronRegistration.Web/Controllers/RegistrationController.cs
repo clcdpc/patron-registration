@@ -181,7 +181,7 @@ namespace Clc.PatronRegistration.Web.Controllers
 
 
         [HttpPost]
-        public RegistrationAttempt Submit(Registration p)
+        public RegistrationAttempt Submit([ValidateNever] Registration p)
         {
             var resolution = registrationScopeResolver.ResolveForSubmission(
                 HttpContext, settings, p.PatronBranchID);
@@ -204,7 +204,28 @@ namespace Clc.PatronRegistration.Web.Controllers
                 };
             }
 
-            RevalidateAgainstSelectedBranch(p, resolution.Settings);
+            RevalidateAgainstSelectedBranch(p);
+
+            // Revalidation must finish before any external client is constructed. The
+            // registration domain repeats this guard, but the controller can avoid even
+            // creating integration clients when MVC binding or selected-branch validation
+            // has already rejected the request.
+            if (p.HasHoneypotValue)
+            {
+                return new RegistrationAttempt { Status = RegistrationStatus.Error };
+            }
+
+            if (!ModelState.IsValid)
+            {
+                p.ModelErrors = RegistrationAttempt.ErrorsFromModelState(ModelState);
+                return new RegistrationAttempt
+                {
+                    Status = RegistrationStatus.Error,
+                    Message = "Please correct the validation errors and try again.",
+                    Errors = p.ModelErrors
+                };
+            }
+
             var melissa = RegistrationClientProvider.CreateMelissa(resolution.Settings, melissaClientFactory);
             var emailSender = RegistrationClientProvider.CreateEmail(resolution.Settings, emailSenderFactory);
             return p.CreateRegistration(Request.GetTrueClientIP(), ModelState, resolution.Settings, db, papi, melissa, emailSender);
@@ -270,15 +291,12 @@ namespace Clc.PatronRegistration.Web.Controllers
             registration.LibraryId = effectiveSettings.LibraryId;
         }
 
-        private void RevalidateAgainstSelectedBranch(Registration registration, ISettingProvider effectiveSettings)
+        private void RevalidateAgainstSelectedBranch(Registration registration)
         {
-            var bindingErrors = ModelState
-                .SelectMany(pair => pair.Value?.Errors.Select(error => (pair.Key, error)) ?? [])
-                .Where(item => item.error.Exception is not null)
-                .ToList();
             var selectedModelState = new ModelStateDictionary();
             var originalRequestServices = HttpContext.RequestServices;
-            HttpContext.RequestServices = new SettingProviderServiceProvider(originalRequestServices, effectiveSettings);
+            HttpContext.RequestServices = new SettingProviderServiceProvider(
+                originalRequestServices, registration.Settings);
             try
             {
                 var actionContext = new ActionContext(
@@ -293,31 +311,43 @@ namespace Clc.PatronRegistration.Web.Controllers
                 HttpContext.RequestServices = originalRequestServices;
             }
 
-            ModelState.Clear();
-            foreach (var (key, error) in bindingErrors)
-            {
-                ModelState.AddModelError(key, error.Exception?.Message ?? "The supplied value is invalid.");
-            }
+            // Submit's parameter is marked ValidateNever so MVC has not yet written
+            // object-validation errors into ModelState. The entries already present are
+            // therefore the complete binding result and must remain untouched, including
+            // message-only errors produced by value conversion/binding.
             foreach (var pair in selectedModelState)
             {
                 foreach (var error in pair.Value.Errors)
                 {
-                    if (error.Exception is not null)
-                    {
-                        ModelState.AddModelError(pair.Key, error.Exception.Message);
-                    }
-                    else if (!string.IsNullOrEmpty(error.ErrorMessage))
-                    {
-                        ModelState.AddModelError(pair.Key, error.ErrorMessage);
-                    }
+                    AddValidationError(pair.Key, error);
                 }
             }
         }
 
-        private sealed class SettingProviderServiceProvider(IServiceProvider inner, ISettingProvider effectiveSettings) : IServiceProvider
+        private void AddValidationError(string key, ModelError error)
+        {
+            if (error.Exception is not null)
+            {
+                ModelState.AddModelError(key, error.Exception.Message);
+            }
+            else if (!string.IsNullOrEmpty(error.ErrorMessage))
+            {
+                ModelState.AddModelError(key, error.ErrorMessage);
+            }
+            else
+            {
+                ModelState.AddModelError(key, "The submitted value is invalid.");
+            }
+        }
+
+        private sealed class SettingProviderServiceProvider(
+            IServiceProvider inner,
+            ISettingProvider effectiveSettings) : IServiceProvider
         {
             public object? GetService(Type serviceType) =>
-                serviceType == typeof(ISettingProvider) ? effectiveSettings : inner.GetService(serviceType);
+                serviceType == typeof(ISettingProvider)
+                    ? effectiveSettings
+                    : inner.GetService(serviceType);
         }
 
         private IActionResult RegistrationUnavailableView()

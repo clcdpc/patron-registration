@@ -38,7 +38,7 @@ public sealed class RegistrationBranchScopeTests
     }
 
     [TestMethod]
-    public void RouteRequired_SelectedBranchOptional_DynamicFieldDoesNotKeepRouteError()
+    public void SelectedBranchOptional_DynamicFieldDoesNotCreateValidationError()
     {
         var routeSettings = Settings(requiredUser5: true);
         var selectedSettings = Settings(requiredUser5: false);
@@ -51,11 +51,10 @@ public sealed class RegistrationBranchScopeTests
         emailFactory.Setup(factory => factory.Create(It.IsAny<string>())).Returns(Mock.Of<IEmailSender>());
         var controller = CreateController(routeSettings.Object, selectedSettings.Object,
             melissaFactory, emailFactory, out _);
-        controller.ModelState.AddModelError(nameof(Registration.User5), "Route provider required this field.");
+        var exception = Assert.ThrowsException<InvalidOperationException>(() =>
+            controller.Submit(ValidRegistration(routeSettings.Object, user5: null)));
 
-        var result = controller.Submit(ValidRegistration(routeSettings.Object, user5: null));
-
-        Assert.IsFalse(result.Errors.Any(error => error.Key == nameof(Registration.User5)));
+        Assert.AreEqual("selected branch workflow reached", exception.Message);
         melissaFactory.Verify(factory => factory.Create(It.IsAny<string>()), Times.Once);
     }
 
@@ -74,7 +73,8 @@ public sealed class RegistrationBranchScopeTests
         var controller = CreateController(routeSettings.Object, selectedSettings.Object,
             melissaFactory, emailFactory, out _);
 
-        controller.Submit(ValidRegistration(routeSettings.Object, user5: null));
+        Assert.ThrowsException<InvalidOperationException>(() =>
+            controller.Submit(ValidRegistration(routeSettings.Object, user5: null)));
 
         melissaFactory.Verify(factory => factory.Create("branch-melissa"), Times.Once);
         melissaFactory.Verify(factory => factory.Create("route-melissa"), Times.Never);
@@ -95,7 +95,8 @@ public sealed class RegistrationBranchScopeTests
         var controller = CreateController(routeSettings.Object, selectedSettings.Object,
             melissaFactory, emailFactory, out _);
 
-        controller.Submit(ValidRegistration(routeSettings.Object, user5: null));
+        Assert.ThrowsException<InvalidOperationException>(() =>
+            controller.Submit(ValidRegistration(routeSettings.Object, user5: null)));
 
         emailFactory.Verify(factory => factory.Create("branch-postmark"), Times.Once);
         emailFactory.Verify(factory => factory.Create("route-postmark"), Times.Never);
@@ -118,7 +119,8 @@ public sealed class RegistrationBranchScopeTests
         var controller = CreateController(routeSettings.Object, selectedSettings.Object,
             melissaFactory, emailFactory, out var scopeResolver, selectedBranchId: 3);
 
-        controller.Submit(ValidRegistration(routeSettings.Object, user5: null));
+        Assert.ThrowsException<InvalidOperationException>(() =>
+            controller.Submit(ValidRegistration(routeSettings.Object, user5: null)));
 
         scopeResolver.Verify(value => value.ResolveForSubmission(
             It.IsAny<HttpContext>(), routeSettings.Object, 3), Times.Once);
@@ -319,6 +321,7 @@ public sealed class RegistrationBranchScopeTests
         var services = new ServiceCollection();
         services.AddLogging();
         services.AddControllersWithViews();
+        services.AddSingleton<ISettingProvider>(routeSettings);
         var provider = services.BuildServiceProvider();
         var httpContext = new DefaultHttpContext { RequestServices = provider };
         new HttpContextAccessor().HttpContext = httpContext;
@@ -398,6 +401,7 @@ public sealed class RegistrationBranchScopeTests
         NameFirst = "Jane",
         NameLast = "Doe",
         Birthdate = new DateTime(2000, 1, 1),
+        EmailAddress = "jane@example.com",
         User5 = user5,
         Password = "1234",
         Password2 = "1234",

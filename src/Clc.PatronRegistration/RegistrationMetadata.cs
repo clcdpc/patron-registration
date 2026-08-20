@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
 using Microsoft.AspNetCore.Mvc.Rendering;
+using Microsoft.AspNetCore.Mvc.ModelBinding.Validation;
 using Clc.PatronRegistration.Validators;
 using Clc.PatronRegistration.Configuration;
 using NLog;
@@ -115,7 +116,7 @@ namespace Clc.PatronRegistration
         public int? RequestPickupBranchID { get; set; }
 
         [DbConfiguredDisplayName]
-        public string User1 { get; set; } = string.Empty;
+        public string? User1 { get; set; } = string.Empty;
 
         [DbConfiguredDisplayName]
         public bool DeliverCardToSchool { get; set; }
@@ -169,6 +170,7 @@ namespace Clc.PatronRegistration
         public bool ShowDlButton { get; set; }
 
         [JsonIgnore]
+        [ValidateNever]
         public ISettingProvider Settings { get; set; } = default!;
     }
 }
