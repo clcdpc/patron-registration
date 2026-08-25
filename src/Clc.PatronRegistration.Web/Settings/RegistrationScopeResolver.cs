@@ -53,7 +53,7 @@ public sealed class RegistrationScopeResolver(
     private IReadOnlyList<OrganizationsGetRow> GetCandidateBranches(ISettingProvider requestSettings)
     {
         var scope = cache.GetOrg(requestSettings.OrganizationId);
-        return scope.OrganizationCodeID switch
+        var branches = scope.OrganizationCodeID switch
         {
             // A branch route remains scoped to its parent library for the
             // optional home-branch selector. The submitted branch is still
@@ -63,5 +63,18 @@ public sealed class RegistrationScopeResolver(
             2 => db.GetSelfRegistrationBranches(scope.OrganizationID).ToList(),
             _ => db.GetSelfRegistrationBranches().ToList()
         };
+
+        if (requestSettings.EnablePatronBranchSelectOption)
+        {
+            return branches;
+        }
+
+        // Without the selector, the route's current/default branch is the only
+        // valid registration target. Keep this rule in the resolver so a forged
+        // PatronBranchID cannot select another provider or its credentials.
+        var fixedBranch = scope.OrganizationCodeID == 3
+            ? branches.FirstOrDefault(branch => branch.OrganizationID == scope.OrganizationID)
+            : branches.MinBy(branch => branch.OrganizationID);
+        return fixedBranch is null ? [] : [fixedBranch];
     }
 }

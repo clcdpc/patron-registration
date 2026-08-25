@@ -201,6 +201,7 @@ public sealed class DisableBranchRegistrationTests
         var cache = new Mock<ICache>();
         cache.SetupGet(value => value.OrganizationCache).Returns(organizations);
         cache.SetupGet(value => value.SettingsCache).Returns([
+            Setting(2, "enable_patron_branch_select_option", "true", "form"),
             Setting(3, "disable_branch", "true", "form")
         ]);
         cache.Setup(value => value.GetOrg(It.IsAny<int>())).Returns((int id) => organizations.Single(value => value.OrganizationID == id));

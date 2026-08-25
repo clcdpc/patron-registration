@@ -103,6 +103,13 @@ namespace Clc.PatronRegistration.Web.Controllers
                 renderSettings = selectedBranchResolution.Settings;
             }
 
+            // A selected branch may supply the form's effective settings, but it
+            // cannot broaden a route that did not allow branch selection. This
+            // also keeps a forged ChangeBranch request on a disabled library
+            // route from turning the fixed default into an editable selector.
+            var branchSelectionEnabled = settings.EnablePatronBranchSelectOption &&
+                renderSettings.EnablePatronBranchSelectOption;
+
             var model = submittedRegistration ?? Registration.BuildBaseRegistration(
                 effectiveSelectedBranchId ?? organizationId,
                 forceDl, Request.GetTrueClientIP(), renderSettings, db);
@@ -134,7 +141,7 @@ namespace Clc.PatronRegistration.Web.Controllers
                 }
             }
 
-            if (renderSettings.EnablePatronBranchSelectOption)
+            if (branchSelectionEnabled)
             {
                 var availableBranches = registrationScopeResolver.GetAvailableBranches(HttpContext, settings);
                 model.Branches = new SelectList(availableBranches, "OrganizationID", "DisplayName");
@@ -171,9 +178,25 @@ namespace Clc.PatronRegistration.Web.Controllers
                 renderSettings = resolution.Settings;
                 model.UseSettings(renderSettings);
                 model.LibraryId = renderSettings.LibraryId;
+
+                var fixedBranch = organizations
+                    .Where(organization => organization.OrganizationID == model.PatronBranchID)
+                    .ToList();
+                if (fixedBranch.Count == 0)
+                {
+                    return RegistrationUnavailableView();
+                }
+
+                // A model supplied by ChangeBranch does not carry the original
+                // GET model's Branches collection. Keep the fixed branch present
+                // so the replacement form remains submittable and can display
+                // its authoritative home branch.
+                model.Branches = new SelectList(
+                    fixedBranch, "OrganizationID", "DisplayName", model.PatronBranchID);
             }
 
             model.BypassAgreement = agreementAccepted;
+            ViewData["RegistrationBranchSelectionEnabled"] = branchSelectionEnabled;
             RegistrationSettingsContext.Set(HttpContext, renderSettings);
 
             return HttpContext.IsInjectedForm() ? PartialView("Create", model) : View("Create", model);

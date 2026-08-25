@@ -95,3 +95,20 @@ test("branch responses regenerate selected-branch validation and workflow settin
     assert.match(markup, /Settings\.GetFieldRequired\(nameof\(Model\.PhoneVoice1\)\)/);
     assert.match(markup, /cache: "no-store"/);
 });
+
+test("disabled branch selection renders a fixed value and cannot reload siblings", () => {
+    assert.match(markup, /var branchSelectionEnabled = ViewData\["RegistrationBranchSelectionEnabled"\]/);
+    assert.match(markup, /var branchReloadUrlPattern = !isSettingsPreview && branchSelectionEnabled/);
+
+    const branchStart = markup.indexOf("@if (branchSelectionEnabled)");
+    const disabledStart = markup.indexOf("else", branchStart);
+    const disabledEnd = markup.indexOf("@if (Settings.DisplayECardCheckbox", disabledStart);
+    assert.ok(branchStart >= 0);
+    assert.ok(disabledStart > branchStart);
+    assert.ok(disabledEnd > disabledStart);
+
+    const disabledBranchMarkup = markup.slice(disabledStart, disabledEnd);
+    assert.match(disabledBranchMarkup, /Html\.HiddenFor\(m => m\.PatronBranchID\)/);
+    assert.match(disabledBranchMarkup, /PatronBranchIDDisplay/);
+    assert.doesNotMatch(disabledBranchMarkup, /DropDownListFor|<select/i);
+});

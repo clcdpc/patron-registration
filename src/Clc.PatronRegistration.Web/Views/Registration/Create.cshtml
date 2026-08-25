@@ -10,11 +10,15 @@
     var forceDl = ViewData["RegistrationForceDl"] as bool? == true;
     var agreementAccepted = ViewData["RegistrationAgreementAccepted"] as bool? == true;
     var registrationScopeOrganizationId = ViewData["RegistrationScopeOrganizationId"] as int? ?? Settings.OrganizationId;
+    var branchSelectionEnabled = ViewData["RegistrationBranchSelectionEnabled"] as bool? ?? Settings.EnablePatronBranchSelectOption;
+    var fixedBranchDisplayName = Model.Branches
+        .FirstOrDefault(branch => branch.Value == Model.PatronBranchID.ToString())?.Text
+        ?? Model.PatronBranchID.ToString();
     var resetSeconds = Settings is IResetSecondsSettingStateProvider resetStateProvider
         ? resetStateProvider.GetResetSecondsState().Value.GetValueOrDefault()
         : ResetSecondsSettingParser.Normalize(Settings.ResetSeconds);
     var resetDelayMilliseconds = ResetSecondsSettingParser.ToJavaScriptMilliseconds(resetSeconds);
-    var branchReloadUrlPattern = !isSettingsPreview && Settings.EnablePatronBranchSelectOption
+    var branchReloadUrlPattern = !isSettingsPreview && branchSelectionEnabled
         ? Url.Action("ChangeBranch", "Registration", new
         {
             orgId = registrationScopeOrganizationId,
@@ -109,13 +113,14 @@ else
         {
             <div asp-for="PatronBranchID">
                 <label asp-for="PatronBranchID"></label>
-                @if (Settings.EnablePatronBranchSelectOption)
+                @if (branchSelectionEnabled)
                 {
                     @Html.DropDownListFor(m => m.PatronBranchID, Model.Branches, "Select your branch", new { @aria_required = "true" })
                 }
                 else
                 {
-                    <select asp-for="PatronBranchID" asp-items="@Model.Branches"></select>
+                    @Html.HiddenFor(m => m.PatronBranchID)
+                    <span id="PatronBranchIDDisplay">@fixedBranchDisplayName</span>
                 }
 
                 @if (Settings.DisplayECardCheckbox && !Settings.ForceEcardRemotely)

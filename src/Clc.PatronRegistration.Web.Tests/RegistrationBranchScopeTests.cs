@@ -143,7 +143,9 @@ public sealed class RegistrationBranchScopeTests
         };
         var cache = new Mock<ICache>();
         cache.SetupGet(value => value.OrganizationCache).Returns(organizations);
-        cache.SetupGet(value => value.SettingsCache).Returns([]);
+        cache.SetupGet(value => value.SettingsCache).Returns([
+            Setting(2, "enable_patron_branch_select_option", "true", "form")
+        ]);
         cache.Setup(value => value.GetOrg(It.IsAny<int>()))
             .Returns((int id) => organizations.Single(value => value.OrganizationID == id));
         var db = new Mock<IDbHelper>();
@@ -185,7 +187,9 @@ public sealed class RegistrationBranchScopeTests
         };
         var cache = new Mock<ICache>();
         cache.SetupGet(value => value.OrganizationCache).Returns(organizations);
-        cache.SetupGet(value => value.SettingsCache).Returns([]);
+        cache.SetupGet(value => value.SettingsCache).Returns([
+            Setting(3, "enable_patron_branch_select_option", "true", "form")
+        ]);
         cache.Setup(value => value.GetOrg(It.IsAny<int>()))
             .Returns((int id) => organizations.Single(value => value.OrganizationID == id));
         var db = new Mock<IDbHelper>();
@@ -208,6 +212,100 @@ public sealed class RegistrationBranchScopeTests
         Assert.AreEqual(4, sibling.Settings.OrganizationId);
         Assert.AreEqual(2, sibling.Settings.LibraryId);
         Assert.IsFalse(outOfLibrary.IsValid);
+    }
+
+    [TestMethod]
+    public void BranchScopedRoute_WithBranchSelectionDisabled_FixesRouteBranchAndNeverResolvesSibling()
+    {
+        var organizations = new List<OrganizationsGetRow>
+        {
+            Organization(1, null, 1),
+            Organization(2, 1, 2),
+            Organization(3, 2),
+            Organization(4, 2)
+        };
+        var cache = new Mock<ICache>();
+        cache.SetupGet(value => value.OrganizationCache).Returns(organizations);
+        cache.Setup(value => value.GetOrg(It.IsAny<int>()))
+            .Returns((int id) => organizations.Single(value => value.OrganizationID == id));
+        var db = new Mock<IDbHelper>();
+        db.Setup(value => value.GetSelfRegistrationBranches(2)).Returns([organizations[2], organizations[3]]);
+        var routeSettings = Settings(requiredUser5: false, organizationId: 3, libraryId: 2,
+            branchSelectionEnabled: false);
+        var siblingSettings = Settings(requiredUser5: false, organizationId: 4, libraryId: 2);
+        var httpContext = new DefaultHttpContext();
+        var settingResolver = new Mock<IRequestSettingProviderResolver>();
+        settingResolver.Setup(value => value.ResolveForOrganization(httpContext, 3))
+            .Returns(routeSettings.Object);
+        settingResolver.Setup(value => value.ResolveForOrganization(httpContext, 4))
+            .Returns(siblingSettings.Object);
+        var resolver = new RegistrationScopeResolver(db.Object, cache.Object, settingResolver.Object);
+
+        var route = resolver.ResolveForSubmission(httpContext, routeSettings.Object, 3);
+        var forgedSibling = resolver.ResolveForSubmission(httpContext, routeSettings.Object, 4);
+        var available = resolver.GetAvailableBranches(httpContext, routeSettings.Object);
+
+        Assert.IsTrue(route.IsValid);
+        Assert.AreSame(routeSettings.Object, route.Settings);
+        Assert.IsFalse(forgedSibling.IsValid);
+        CollectionAssert.AreEquivalent(new[] { 3 }, available.Select(value => value.OrganizationID).ToArray());
+        settingResolver.Verify(value => value.ResolveForOrganization(httpContext, 4), Times.Never);
+
+        var controller = new RegistrationController(
+            Mock.Of<IPapiClient>(), db.Object, routeSettings.Object,
+            Mock.Of<IEmailSenderFactory>(), Mock.Of<IMelissaClientFactory>(),
+            Mock.Of<IObjectModelValidator>(), resolver)
+        {
+            ControllerContext = new ControllerContext { HttpContext = httpContext }
+        };
+        var forgedRegistration = ValidRegistration(routeSettings.Object, user5: null);
+        forgedRegistration.PatronBranchID = 4;
+
+        var submission = controller.Submit(forgedRegistration);
+
+        Assert.AreEqual(RegistrationStatus.Error, submission.Status);
+        settingResolver.Verify(value => value.ResolveForOrganization(httpContext, 4), Times.Never);
+    }
+
+    [TestMethod]
+    public void LibraryScopedRoute_WithBranchSelectionDisabled_UsesDefaultBranchAndRejectsSibling()
+    {
+        var organizations = new List<OrganizationsGetRow>
+        {
+            Organization(1, null, 1),
+            Organization(2, 1, 2),
+            Organization(3, 2),
+            Organization(4, 2)
+        };
+        var cache = new Mock<ICache>();
+        cache.SetupGet(value => value.OrganizationCache).Returns(organizations);
+        cache.Setup(value => value.GetOrg(It.IsAny<int>()))
+            .Returns((int id) => organizations.Single(value => value.OrganizationID == id));
+        var db = new Mock<IDbHelper>();
+        // Deliberately return the branches out of order; the default is the
+        // lowest eligible branch ID, matching base-registration assignment.
+        db.Setup(value => value.GetSelfRegistrationBranches(2)).Returns([organizations[3], organizations[2]]);
+        var routeSettings = Settings(requiredUser5: false, organizationId: 2, libraryId: 2,
+            branchSelectionEnabled: false);
+        var defaultSettings = Settings(requiredUser5: false, organizationId: 3, libraryId: 2);
+        var siblingSettings = Settings(requiredUser5: false, organizationId: 4, libraryId: 2);
+        var httpContext = new DefaultHttpContext();
+        var settingResolver = new Mock<IRequestSettingProviderResolver>();
+        settingResolver.Setup(value => value.ResolveForOrganization(httpContext, 3))
+            .Returns(defaultSettings.Object);
+        settingResolver.Setup(value => value.ResolveForOrganization(httpContext, 4))
+            .Returns(siblingSettings.Object);
+        var resolver = new RegistrationScopeResolver(db.Object, cache.Object, settingResolver.Object);
+
+        var defaultBranch = resolver.ResolveForSubmission(httpContext, routeSettings.Object, 3);
+        var forgedSibling = resolver.ResolveForSubmission(httpContext, routeSettings.Object, 4);
+        var available = resolver.GetAvailableBranches(httpContext, routeSettings.Object);
+
+        Assert.IsTrue(defaultBranch.IsValid);
+        Assert.AreSame(defaultSettings.Object, defaultBranch.Settings);
+        Assert.IsFalse(forgedSibling.IsValid);
+        CollectionAssert.AreEquivalent(new[] { 3 }, available.Select(value => value.OrganizationID).ToArray());
+        settingResolver.Verify(value => value.ResolveForOrganization(httpContext, 4), Times.Never);
     }
 
     [TestMethod]
@@ -348,7 +446,8 @@ public sealed class RegistrationBranchScopeTests
         };
         var routeSettings = Settings(requiredUser5: false, organizationId: 2, libraryId: 2);
         var selectedSettings = Settings(requiredUser5: true, organizationId: 4, libraryId: 2,
-            melissaKey: "selected-melissa", postmarkKey: "selected-postmark");
+            melissaKey: "selected-melissa", postmarkKey: "selected-postmark",
+            branchSelectionEnabled: false);
         selectedSettings.SetupGet(value => value.WarningText).Returns("Selected branch agreement");
         var db = new Mock<IDbHelper>();
         db.Setup(value => value.GetSelfRegistrationOrganizations(null)).Returns(organizations);
@@ -382,10 +481,12 @@ public sealed class RegistrationBranchScopeTests
         Assert.AreEqual("1234", model.Password);
         Assert.AreEqual("1234", model.Password2);
         Assert.AreEqual(4, model.PatronBranchID);
+        CollectionAssert.AreEquivalent(new[] { "4" }, model.Branches.Select(value => value.Value).ToArray());
+        Assert.AreEqual(false, controller.ViewData["RegistrationBranchSelectionEnabled"]);
         Assert.IsTrue(model.BypassAgreement);
         Assert.AreEqual("no-store", controller.Response.Headers.CacheControl.ToString());
         scopeResolver.Verify(value => value.ResolveForSubmission(
-            It.IsAny<HttpContext>(), routeSettings.Object, 4), Times.Once);
+            It.IsAny<HttpContext>(), routeSettings.Object, 4), Times.Exactly(2));
     }
 
     [TestMethod]
@@ -463,7 +564,7 @@ public sealed class RegistrationBranchScopeTests
 
     private static Mock<ISettingProvider> Settings(bool requiredUser5, string? melissaKey = null,
         string? postmarkKey = null, string? dlFormat = null, int organizationId = 3,
-        int libraryId = 2, bool disabled = false)
+        int libraryId = 2, bool disabled = false, bool branchSelectionEnabled = true)
     {
         var settings = new Mock<ISettingProvider>();
         settings.Setup(value => value.GetFieldRequired(nameof(Registration.User5))).Returns(requiredUser5);
@@ -472,7 +573,7 @@ public sealed class RegistrationBranchScopeTests
         settings.SetupGet(value => value.DisableBranch).Returns(disabled);
         settings.SetupGet(value => value.OrganizationId).Returns(organizationId);
         settings.SetupGet(value => value.LibraryId).Returns(libraryId);
-        settings.SetupGet(value => value.EnablePatronBranchSelectOption).Returns(true);
+        settings.SetupGet(value => value.EnablePatronBranchSelectOption).Returns(branchSelectionEnabled);
         settings.SetupGet(value => value.EnableDriversLicenseSwipe).Returns(false);
         settings.SetupGet(value => value.DriversLicenseButtonEnabledIpAddresses).Returns([]);
         settings.SetupGet(value => value.DisplayMailingListCheckbox).Returns(false);
@@ -484,6 +585,14 @@ public sealed class RegistrationBranchScopeTests
         settings.SetupGet(value => value.DriversLicenseFormat).Returns(dlFormat ?? string.Empty);
         return settings;
     }
+
+    private static RegistrationFormSetting Setting(int organizationId, string key, string value, string formCode = "") => new()
+    {
+        OrganizationID = organizationId,
+        Setting = key,
+        Value = value,
+        FormCode = formCode
+    };
 
     private static Registration ValidRegistration(ISettingProvider settings, string? user5) => new(settings)
     {
