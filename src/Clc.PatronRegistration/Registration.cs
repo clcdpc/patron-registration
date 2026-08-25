@@ -857,34 +857,83 @@ namespace Clc.PatronRegistration
             return SafeHtmlPolicy.Sanitize(message);
         }
 
-        public static Registration BuildBaseRegistration(int orgId, bool forceDl, string ip, ISettingProvider settings, IDbHelper db)
+        public static Registration BuildBaseRegistration(
+            int orgId,
+            bool forceDl,
+            string ip,
+            ISettingProvider settings,
+            IDbHelper db,
+            int? effectiveBranchId = null,
+            IEnumerable<OrganizationsGetRow>? branches = null,
+            Registration? submittedRegistration = null,
+            bool defaultAddToMailingList = true)
         {
-            var p = new Registration(settings)
+            var isNewRegistration = submittedRegistration is null;
+            var p = submittedRegistration ?? new Registration(settings);
+            p.UseSettings(settings);
+            if (isNewRegistration)
             {
-                State = "OH",
-                Genders = db.GetGendersToOrganizations(orgId).Select(g => new SelectListItem { Value = g.GenderID.ToString(), Text = g.Description }).ToList(),
-                ShowDlButton = forceDl || settings.EnableDriversLicenseSwipe && CheckIp(ip, settings.DriversLicenseButtonEnabledIpAddresses),
-                IsECard = settings.ForceEcardRemotely && !CheckIp(ip, settings.DriversLicenseButtonEnabledIpAddresses)
-            };
+                p.State = "OH";
+            }
 
-            if (settings.DisplayMailingListCheckbox) { p.AddToMailingList = true; }
-
-            var org = CacheHelper.OrganizationCache.Single(o => o.OrganizationID == orgId);
-
-            if (settings.EnablePatronBranchSelectOption)
+            var genderOrganizationId = effectiveBranchId ?? orgId;
+            p.Genders = db.GetGendersToOrganizations(genderOrganizationId)
+                .Select(g => new SelectListItem { Value = g.GenderID.ToString(), Text = g.Description })
+                .ToList();
+            p.ShowDlButton = forceDl || settings.EnableDriversLicenseSwipe && CheckIp(ip, settings.DriversLicenseButtonEnabledIpAddresses);
+            if (settings.ForceEcardRemotely)
             {
-                p.PatronBranchID = 0;
+                p.IsECard = !CheckIp(ip, settings.DriversLicenseButtonEnabledIpAddresses);
+            }
+            else if (isNewRegistration || !settings.DisplayECardCheckbox)
+            {
+                p.IsECard = false;
+            }
+
+            if (!settings.DisplayMailingListCheckbox)
+            {
+                p.AddToMailingList = false;
+            }
+            else if (defaultAddToMailingList)
+            {
+                p.AddToMailingList = true;
+            }
+
+            if (effectiveBranchId is int selectedBranchId)
+            {
+                p.PatronBranchID = selectedBranchId;
+                if (isNewRegistration && !settings.EnablePatronBranchSelectOption)
+                {
+                    p.RequestPickupBranchID = selectedBranchId;
+                }
             }
             else
             {
-                p.PatronBranchID = org.OrganizationCodeID == 3 ? org.OrganizationID : (db.GetSelfRegistrationBranches(org.OrganizationID).MinBy(b => b.OrganizationID)?.OrganizationID).GetValueOrDefault();
-                p.RequestPickupBranchID = p.PatronBranchID;
+                var org = CacheHelper.OrganizationCache.Single(o => o.OrganizationID == orgId);
+
+                if (settings.EnablePatronBranchSelectOption)
+                {
+                    p.PatronBranchID = 0;
+                }
+                else
+                {
+                    p.PatronBranchID = org.OrganizationCodeID == 3
+                        ? org.OrganizationID
+                        : (db.GetSelfRegistrationBranches(org.OrganizationID).MinBy(b => b.OrganizationID)?.OrganizationID).GetValueOrDefault();
+                    p.RequestPickupBranchID = p.PatronBranchID;
+                }
             }
 
-            p.LibraryId = org.OrganizationCodeID == 3 ? org.ParentOrganizationID.GetValueOrDefault(p.PatronBranchID) : org.OrganizationID;
+            p.LibraryId = settings.LibraryId;
 
-            p.Branches = new SelectList(db.GetSelfRegistrationBranches(p.LibraryId), "OrganizationID", "DisplayName");
-            p.PickupBranches = new SelectList(db.GetPickupBranches(p.LibraryId), "OrganizationID", "DisplayName");
+            p.Branches = new SelectList(
+                branches ?? db.GetSelfRegistrationBranches(p.LibraryId),
+                "OrganizationID",
+                "DisplayName",
+                p.PatronBranchID);
+            p.PickupBranches = settings.DisplayPreferredPickupLocation
+                ? new SelectList(db.GetPickupBranches(p.LibraryId), "OrganizationID", "DisplayName")
+                : new SelectList(Array.Empty<string>());
 
             return p;
         }

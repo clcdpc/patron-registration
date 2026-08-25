@@ -16,7 +16,6 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Filters;
 using Microsoft.AspNetCore.Mvc.ModelBinding;
 using Microsoft.AspNetCore.Mvc.ModelBinding.Validation;
-using Microsoft.AspNetCore.Mvc.Rendering;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
@@ -85,120 +84,48 @@ namespace Clc.PatronRegistration.Web.Controllers
             var routeOrganization = organizations.FirstOrDefault(organization => organization.OrganizationID == organizationId);
             if (routeOrganization is null) { return RedirectToAction("SelectLibrary"); }
 
+            var renderContext = ResolveRenderContext(organizationId, routeOrganization, selectedBranchId);
+            if (renderContext is null)
+            {
+                return RegistrationUnavailableView();
+            }
+
+            var modelBranches = renderContext.BranchSelectionEnabled
+                ? renderContext.AvailableBranches
+                : organizations
+                    .Where(organization => organization.OrganizationID == renderContext.EffectiveBranchId)
+                    .ToList();
+            if (modelBranches.Count == 0)
+            {
+                return RegistrationUnavailableView();
+            }
+
+            var defaultAddToMailingList = submittedRegistration is null ||
+                !Request.HasFormContentType ||
+                !Request.Form.ContainsKey(nameof(Registration.AddToMailingList));
+            var model = Registration.BuildBaseRegistration(
+                renderContext.EffectiveBranchId ?? organizationId,
+                forceDl,
+                Request.GetTrueClientIP(),
+                renderContext.EffectiveSettings,
+                db,
+                renderContext.EffectiveBranchId,
+                modelBranches,
+                submittedRegistration,
+                defaultAddToMailingList);
+
+            // A branch replacement is a new agreement context. The client-provided
+            // Boolean may preserve the current page state, but it is never allowed to
+            // bypass a nonblank agreement on the newly effective branch.
+            var effectiveAgreementAccepted = agreementAccepted &&
+                (!renderFragment || string.IsNullOrWhiteSpace(renderContext.EffectiveSettings.WarningText));
+            model.BypassAgreement = effectiveAgreementAccepted;
+
             ViewData["RegistrationForceDl"] = forceDl;
-            ViewData["RegistrationAgreementAccepted"] = agreementAccepted;
+            ViewData["RegistrationAgreementAccepted"] = effectiveAgreementAccepted;
             ViewData["RegistrationScopeOrganizationId"] = organizationId;
-
-            var renderSettings = settings;
-            var effectiveSelectedBranchId = selectedBranchId ??
-                (routeOrganization.OrganizationCodeID == 3 ? routeOrganization.OrganizationID : null);
-            if (effectiveSelectedBranchId.HasValue)
-            {
-                var selectedBranchResolution = registrationScopeResolver.ResolveForSubmission(
-                    HttpContext, settings, effectiveSelectedBranchId.Value);
-                if (!selectedBranchResolution.IsValid || selectedBranchResolution.Settings.DisableBranch)
-                {
-                    return RegistrationUnavailableView();
-                }
-
-                renderSettings = selectedBranchResolution.Settings;
-            }
-
-            // A selected branch may supply the form's effective settings, but it
-            // cannot broaden a route that did not allow branch selection. This
-            // also keeps a forged ChangeBranch request on a disabled library
-            // route from turning the fixed default into an editable selector.
-            var branchSelectionEnabled = settings.EnablePatronBranchSelectOption &&
-                renderSettings.EnablePatronBranchSelectOption;
-
-            var model = submittedRegistration ?? Registration.BuildBaseRegistration(
-                effectiveSelectedBranchId ?? organizationId,
-                forceDl, Request.GetTrueClientIP(), renderSettings, db);
-
-            if (submittedRegistration is not null)
-            {
-                model.UseSettings(renderSettings);
-                model.Genders = db.GetGendersToOrganizations(effectiveSelectedBranchId ?? organizationId)
-                    .Select(g => new SelectListItem { Value = g.GenderID.ToString(), Text = g.Description })
-                    .ToList();
-                model.PickupBranches = renderSettings.DisplayPreferredPickupLocation
-                    ? new SelectList(
-                        db.GetPickupBranches(renderSettings.LibraryId),
-                        "OrganizationID",
-                        "DisplayName")
-                    : new SelectList(Array.Empty<string>());
-                model.ShowDlButton = forceDl || renderSettings.EnableDriversLicenseSwipe &&
-                    Registration.CheckIp(Request.GetTrueClientIP(), renderSettings.DriversLicenseButtonEnabledIpAddresses);
-                if (renderSettings.ForceEcardRemotely)
-                {
-                    model.IsECard = !Registration.CheckIp(
-                        Request.GetTrueClientIP(), renderSettings.DriversLicenseButtonEnabledIpAddresses);
-                }
-                else if (renderSettings.DisplayMailingListCheckbox &&
-                    (!Request.HasFormContentType ||
-                     !Request.Form.ContainsKey(nameof(Registration.AddToMailingList))))
-                {
-                    model.AddToMailingList = true;
-                }
-            }
-
-            if (branchSelectionEnabled)
-            {
-                var availableBranches = registrationScopeResolver.GetAvailableBranches(HttpContext, settings);
-                model.Branches = new SelectList(availableBranches, "OrganizationID", "DisplayName");
-                if (availableBranches.Count == 0)
-                {
-                    return RegistrationUnavailableView();
-                }
-
-                var selectedBranch = availableBranches
-                    .FirstOrDefault(branch => branch.OrganizationID == effectiveSelectedBranchId);
-                if (effectiveSelectedBranchId.HasValue && selectedBranch is null)
-                {
-                    return RegistrationUnavailableView();
-                }
-
-                if (selectedBranch is not null)
-                {
-                    model.PatronBranchID = selectedBranch.OrganizationID;
-                }
-                else if (availableBranches.Count == 1)
-                {
-                    model.PatronBranchID = availableBranches[0].OrganizationID;
-                }
-            }
-            else
-            {
-                var resolution = registrationScopeResolver.ResolveForSubmission(
-                    HttpContext, settings, model.PatronBranchID);
-                if (!resolution.IsValid || resolution.Settings.DisableBranch)
-                {
-                    return RegistrationUnavailableView();
-                }
-
-                renderSettings = resolution.Settings;
-                model.UseSettings(renderSettings);
-                model.LibraryId = renderSettings.LibraryId;
-
-                var fixedBranch = organizations
-                    .Where(organization => organization.OrganizationID == model.PatronBranchID)
-                    .ToList();
-                if (fixedBranch.Count == 0)
-                {
-                    return RegistrationUnavailableView();
-                }
-
-                // A model supplied by ChangeBranch does not carry the original
-                // GET model's Branches collection. Keep the fixed branch present
-                // so the replacement form remains submittable and can display
-                // its authoritative home branch.
-                model.Branches = new SelectList(
-                    fixedBranch, "OrganizationID", "DisplayName", model.PatronBranchID);
-            }
-
-            model.BypassAgreement = agreementAccepted;
-            ViewData["RegistrationBranchSelectionEnabled"] = branchSelectionEnabled;
-            RegistrationSettingsContext.Set(HttpContext, renderSettings);
+            ViewData["RegistrationBranchSelectionEnabled"] = renderContext.BranchSelectionEnabled;
+            RegistrationSettingsContext.Set(HttpContext, renderContext.EffectiveSettings);
 
             if (renderFragment)
             {
@@ -206,6 +133,97 @@ namespace Clc.PatronRegistration.Web.Controllers
             }
 
             return HttpContext.IsInjectedForm() ? PartialView("Create", model) : View("Create", model);
+        }
+
+        private RegistrationRenderContext? ResolveRenderContext(
+            int organizationId,
+            OrganizationsGetRow routeOrganization,
+            int? selectedBranchId)
+        {
+            if (selectedBranchId is int explicitlySelectedBranchId)
+            {
+                var selectedResolution = registrationScopeResolver.ResolveForSubmission(
+                    HttpContext, settings, explicitlySelectedBranchId);
+                if (!selectedResolution.IsValid || selectedResolution.Settings.DisableBranch)
+                {
+                    return null;
+                }
+
+                return CompleteRenderContext(
+                    explicitlySelectedBranchId,
+                    selectedResolution.Settings,
+                    branchSelectionEnabled: settings.EnablePatronBranchSelectOption &&
+                        selectedResolution.Settings.EnablePatronBranchSelectOption);
+            }
+
+            if (routeOrganization.OrganizationCodeID == 3)
+            {
+                var routeBranchResolution = registrationScopeResolver.ResolveForSubmission(
+                    HttpContext, settings, organizationId);
+                if (!routeBranchResolution.IsValid || routeBranchResolution.Settings.DisableBranch)
+                {
+                    return null;
+                }
+
+                return CompleteRenderContext(
+                    organizationId,
+                    routeBranchResolution.Settings,
+                    branchSelectionEnabled: settings.EnablePatronBranchSelectOption &&
+                        routeBranchResolution.Settings.EnablePatronBranchSelectOption);
+            }
+
+            var availableBranches = registrationScopeResolver.GetAvailableBranches(HttpContext, settings) ?? [];
+            if (availableBranches.Count == 0)
+            {
+                return null;
+            }
+
+            var shouldImplicitlySelectBranch = !settings.EnablePatronBranchSelectOption || availableBranches.Count == 1;
+            if (!shouldImplicitlySelectBranch)
+            {
+                return new RegistrationRenderContext(
+                    EffectiveBranchId: null,
+                    EffectiveSettings: settings,
+                    AvailableBranches: availableBranches,
+                    BranchSelectionEnabled: true);
+            }
+
+            var implicitBranchId = availableBranches[0].OrganizationID;
+            var implicitResolution = registrationScopeResolver.ResolveForSubmission(
+                HttpContext, settings, implicitBranchId);
+            if (!implicitResolution.IsValid || implicitResolution.Settings.DisableBranch)
+            {
+                return null;
+            }
+
+            return CompleteRenderContext(
+                implicitBranchId,
+                implicitResolution.Settings,
+                branchSelectionEnabled: settings.EnablePatronBranchSelectOption &&
+                    implicitResolution.Settings.EnablePatronBranchSelectOption,
+                availableBranches);
+        }
+
+        private RegistrationRenderContext? CompleteRenderContext(
+            int effectiveBranchId,
+            ISettingProvider effectiveSettings,
+            bool branchSelectionEnabled,
+            IReadOnlyList<OrganizationsGetRow>? availableBranches = null)
+        {
+            var branches = branchSelectionEnabled
+                ? registrationScopeResolver.GetAvailableBranches(HttpContext, settings) ?? []
+                : availableBranches ?? [];
+            if (branchSelectionEnabled &&
+                (branches.Count == 0 || !branches.Any(branch => branch.OrganizationID == effectiveBranchId)))
+            {
+                return null;
+            }
+
+            return new RegistrationRenderContext(
+                EffectiveBranchId: effectiveBranchId,
+                EffectiveSettings: effectiveSettings,
+                AvailableBranches: branches,
+                BranchSelectionEnabled: branchSelectionEnabled);
         }
 
 
@@ -384,5 +402,11 @@ namespace Clc.PatronRegistration.Web.Controllers
             ViewData["Title"] = "Registration currently unavailable";
             return HttpContext.IsInjectedForm() ? PartialView("Unavailable") : View("Unavailable");
         }
+
+        private sealed record RegistrationRenderContext(
+            int? EffectiveBranchId,
+            ISettingProvider EffectiveSettings,
+            IReadOnlyList<OrganizationsGetRow> AvailableBranches,
+            bool BranchSelectionEnabled);
     }
 }

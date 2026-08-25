@@ -37,6 +37,9 @@ public sealed class RegistrationBranchFragmentRenderingTests
         Assert.IsInstanceOfType<PartialViewResult>(result);
         var view = (PartialViewResult)result;
         Assert.AreEqual("_RegistrationForm", view.ViewName);
+        var model = (Registration)view.Model!;
+        Assert.IsTrue(model.BypassAgreement);
+        Assert.IsFalse(model.ShouldDisplayAgreement);
         var markup = await fixture.RenderAsync(view);
 
         AssertLayoutFree(markup);
@@ -45,6 +48,7 @@ public sealed class RegistrationBranchFragmentRenderingTests
         StringAssert.Contains(markup, "data-registration-header-image-url=\"https://example.test/assets/42\"");
         Assert.IsFalse(markup.Contains("id=\"registration-configured-stylesheet\"", StringComparison.Ordinal));
         Assert.IsFalse(markup.Contains("id=\"registration-header-image\"", StringComparison.Ordinal));
+        Assert.IsFalse(markup.Contains("1234", StringComparison.Ordinal));
     }
 
     [TestMethod]
@@ -63,6 +67,24 @@ public sealed class RegistrationBranchFragmentRenderingTests
         StringAssert.Contains(markup, "data-registration-header-image-url=\"\"");
         Assert.IsFalse(markup.Contains("id=\"registration-configured-stylesheet\"", StringComparison.Ordinal));
         Assert.IsFalse(markup.Contains("id=\"registration-header-image\"", StringComparison.Ordinal));
+    }
+
+    [TestMethod]
+    public async Task ChangeBranch_RendersSelectedBranchRequirednessAndLabel()
+    {
+        using var fixture = BranchFixture.Create(
+            headerImageAssetId: null,
+            cssFile: string.Empty,
+            selectedUser5Required: true);
+
+        var result = fixture.Controller.ChangeBranch(
+            fixture.SubmittedRegistration(), 2, agreementAccepted: true);
+
+        var markup = await fixture.RenderAsync((PartialViewResult)result);
+
+        StringAssert.Contains(markup, "Branch responsible person");
+        StringAssert.Contains(markup, "name=\"User5\"");
+        StringAssert.Contains(markup, "aria-required=\"true\"");
     }
 
     private static void AssertLayoutFree(string markup)
@@ -98,12 +120,20 @@ public sealed class RegistrationBranchFragmentRenderingTests
             Db = db;
         }
 
-        public static BranchFixture Create(int? headerImageAssetId, string cssFile)
+        public static BranchFixture Create(
+            int? headerImageAssetId,
+            string cssFile,
+            bool selectedUser5Required = false)
         {
             var routeSettings = Settings(2, branchSelectionEnabled: true);
             var selectedSettings = Settings(4, branchSelectionEnabled: false);
             selectedSettings.SetupGet(value => value.HeaderImageAssetId).Returns(headerImageAssetId);
             selectedSettings.SetupGet(value => value.CssFile).Returns(cssFile);
+            selectedSettings.SetupGet(value => value.DisplayResponsiblePersonField).Returns(selectedUser5Required);
+            selectedSettings.Setup(value => value.GetFieldRequired(nameof(Registration.User5)))
+                .Returns(selectedUser5Required);
+            selectedSettings.Setup(value => value.GetFieldLabel(nameof(Registration.User5)))
+                .Returns("Branch responsible person");
 
             var organizations = new List<OrganizationsGetRow>
             {

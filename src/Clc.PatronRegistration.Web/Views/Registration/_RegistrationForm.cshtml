@@ -437,7 +437,23 @@ else
         }
     }
 
-    async function reloadRegistrationForm(branchReloadUrl, branchFormData) {
+    function capturePinValues(form) {
+        return {
+            password: form?.querySelector?.('#Password')?.value ?? "",
+            password2: form?.querySelector?.('#Password2')?.value ?? ""
+        };
+    }
+
+    function applyPinValues(fragment, pinValues) {
+        if (!pinValues) return;
+
+        const password = fragment?.querySelector?.('#Password');
+        const password2 = fragment?.querySelector?.('#Password2');
+        if (password) password.value = pinValues.password;
+        if (password2) password2.value = pinValues.password2;
+    }
+
+    async function reloadRegistrationForm(branchReloadUrl, branchFormData, pinValues) {
         const errorMessage = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(
             string.Equals(Settings.FormCode, "kiosk", StringComparison.OrdinalIgnoreCase)
                 ? "An error has occurred. Please see library staff for assistance."
@@ -471,6 +487,7 @@ else
 
             updateRegistrationBranding(nextFragment);
             currentFragment.replaceWith(nextFragment);
+            applyPinValues(nextFragment, pinValues);
             nextFragment.querySelectorAll('script').forEach(script => {
                 const source = script.textContent;
                 script.remove();
@@ -490,6 +507,7 @@ else
             if (!patronBranchId.value) return;
 
             const branchFormData = new FormData(theform);
+            const pinValues = capturePinValues(theform);
             branchFormData.set("PatronBranchID", patronBranchId.value);
             patronBranchId.disabled = true;
 
@@ -497,7 +515,7 @@ else
             branchReloadUrl.searchParams.set("forceDl", forcedDriverLicense ? "true" : "false");
             branchReloadUrl.searchParams.set("agreementAccepted", agreementAccepted ? "true" : "false");
 
-            const replaced = await reloadRegistrationForm(branchReloadUrl.toString(), branchFormData);
+            const replaced = await reloadRegistrationForm(branchReloadUrl.toString(), branchFormData, pinValues);
             if (!replaced && document.contains(patronBranchId)) {
                 patronBranchId.disabled = false;
             }

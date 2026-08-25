@@ -23,7 +23,8 @@ test("branch switching submits the live form transiently and replaces it with th
 
     assert.match(source, /new FormData\(theform\)/);
     assert.match(source, /branchFormData\.set\("PatronBranchID", patronBranchId\.value\)/);
-    assert.match(source, /await reloadRegistrationForm\(branchReloadUrl\.toString\(\), branchFormData\)/);
+    assert.match(source, /const pinValues = capturePinValues\(theform\)/);
+    assert.match(source, /await reloadRegistrationForm\(branchReloadUrl\.toString\(\), branchFormData, pinValues\)/);
     assert.doesNotMatch(source, /window\.location\.assign/);
 
     let changeHandler;
@@ -58,6 +59,7 @@ test("branch switching submits the live form transiently and replaces it with th
         agreementAccepted: true,
         branchReloadUrlPattern: "/Registration/ChangeBranch?orgId=2&agreementAccepted=__AGREEMENT__",
         document: { contains: () => false },
+        capturePinValues: () => ({ password: "1234", password2: "1234" }),
         forcedDriverLicense: true,
         FormData: FormDataMock,
         patronBranchId: branch,
@@ -80,6 +82,38 @@ test("branch switching submits the live form transiently and replaces it with th
     assert.equal(reloadRequest.formData.get("PatronBranchID"), "4");
     assert.match(reloadRequest.url, /forceDl=true/);
     assert.match(reloadRequest.url, /agreementAccepted=true/);
+});
+
+test("branch replacement puts both transient PIN values onto the inserted password controls", async () => {
+    const applyStart = markup.indexOf("    function applyPinValues");
+    const applyEnd = markup.indexOf("\n\n    async function reloadRegistrationForm", applyStart);
+    assert.ok(applyStart >= 0);
+    assert.ok(applyEnd > applyStart);
+    assert.match(markup, /currentFragment\.replaceWith\(nextFragment\);[\s\S]*applyPinValues\(nextFragment, pinValues\)/);
+
+    class Fragment {
+        constructor() {
+            this.controls = new Map([
+                ["#Password", { value: "" }],
+                ["#Password2", { value: "" }]
+            ]);
+        }
+
+        querySelector(selector) {
+            return this.controls.get(selector) ?? null;
+        }
+    }
+
+    const fragment = new Fragment();
+    const sandbox = {};
+    vm.runInNewContext(`${markup.slice(applyStart, applyEnd)}
+        globalThis.applyPinValues = applyPinValues;`, sandbox);
+    sandbox.applyPinValues(fragment, { password: "1234", password2: "5678" });
+
+    const nextPassword = fragment.querySelector("#Password");
+    const nextPassword2 = fragment.querySelector("#Password2");
+    assert.equal(nextPassword.value, "1234");
+    assert.equal(nextPassword2.value, "5678");
 });
 
 test("abandoning a registration cannot restore a previous patron from Web Storage", () => {

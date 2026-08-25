@@ -309,6 +309,109 @@ public sealed class RegistrationBranchScopeTests
     }
 
     [TestMethod]
+    public void LibraryRoute_WithSelectionDisabled_UsesDefaultBranchSettingsBeforeBuildingModel()
+    {
+        var organizations = new List<OrganizationsGetRow>
+        {
+            Organization(1, null, 1),
+            Organization(2, 1, 2),
+            Organization(3, 2),
+            Organization(4, 2)
+        };
+        var routeSettings = Settings(requiredUser5: false, organizationId: 2, libraryId: 2,
+            branchSelectionEnabled: false);
+        var defaultSettings = Settings(requiredUser5: true, organizationId: 3, libraryId: 2,
+            branchSelectionEnabled: true);
+        defaultSettings.SetupGet(value => value.EnableDriversLicenseSwipe).Returns(true);
+        defaultSettings.SetupGet(value => value.ForceEcardRemotely).Returns(true);
+        defaultSettings.SetupGet(value => value.DisplayMailingListCheckbox).Returns(true);
+        defaultSettings.SetupGet(value => value.DisplayPreferredPickupLocation).Returns(true);
+        defaultSettings.SetupGet(value => value.WarningText).Returns("Default branch agreement");
+
+        var gender = new GetGendersToOrganizations_Result { GenderID = 17, Description = "Branch gender" };
+        var db = new Mock<IDbHelper>();
+        db.Setup(value => value.GetSelfRegistrationOrganizations(null)).Returns(organizations);
+        db.Setup(value => value.GetGendersToOrganizations(3)).Returns([gender]);
+        db.Setup(value => value.GetPickupBranches(2)).Returns([Organization(3, 2)]);
+
+        var scopeResolver = new Mock<IRegistrationScopeResolver>();
+        scopeResolver.Setup(value => value.GetAvailableBranches(
+                It.IsAny<HttpContext>(), routeSettings.Object))
+            .Returns([organizations[2]]);
+        scopeResolver.Setup(value => value.ResolveForSubmission(
+                It.IsAny<HttpContext>(), routeSettings.Object, 3))
+            .Returns(new RegistrationScopeResolution(true, defaultSettings.Object));
+
+        var controller = CreateGetController(routeSettings.Object, db.Object, scopeResolver.Object);
+        controller.HttpContext.Connection.RemoteIpAddress =
+            System.Net.IPAddress.Loopback;
+
+        var result = (ViewResult)controller.Create(2);
+        var model = (Registration)result.Model!;
+
+        Assert.AreSame(defaultSettings.Object, model.Settings);
+        Assert.AreEqual(2, model.LibraryId);
+        Assert.AreEqual(3, model.PatronBranchID);
+        Assert.IsTrue(model.ShowDlButton);
+        Assert.IsFalse(model.IsECard);
+        Assert.IsTrue(model.AddToMailingList);
+        Assert.IsTrue(model.ShouldDisplayAgreement);
+        Assert.AreEqual("17", model.Genders.Single().Value);
+        Assert.AreEqual("3", model.PickupBranches.Single().Value);
+        Assert.IsTrue(model.Settings.GetFieldRequired(nameof(Registration.User5)));
+        Assert.AreEqual(false, controller.ViewData["RegistrationBranchSelectionEnabled"]);
+        CollectionAssert.AreEquivalent(new[] { "3" }, model.Branches.Select(value => value.Value).ToArray());
+
+        controller.HttpContext.Connection.RemoteIpAddress =
+            System.Net.IPAddress.Parse("203.0.113.10");
+        var remoteModel = (Registration)((ViewResult)controller.Create(2)).Model!;
+        Assert.IsTrue(remoteModel.IsECard);
+    }
+
+    [TestMethod]
+    public void LibraryRoute_WithOneEligibleBranch_UsesBranchSettingsForRenderingAndSubmit()
+    {
+        var organizations = new List<OrganizationsGetRow>
+        {
+            Organization(1, null, 1),
+            Organization(2, 1, 2),
+            Organization(3, 2),
+            Organization(4, 2)
+        };
+        var routeSettings = Settings(requiredUser5: false, organizationId: 2, libraryId: 2);
+        var branchSettings = Settings(requiredUser5: true, organizationId: 3, libraryId: 2);
+        var db = new Mock<IDbHelper>();
+        db.Setup(value => value.GetSelfRegistrationOrganizations(null)).Returns(organizations);
+        db.Setup(value => value.GetGendersToOrganizations(3)).Returns([]);
+
+        var scopeResolver = new Mock<IRegistrationScopeResolver>();
+        scopeResolver.Setup(value => value.GetAvailableBranches(
+                It.IsAny<HttpContext>(), routeSettings.Object))
+            .Returns([organizations[2]]);
+        scopeResolver.Setup(value => value.ResolveForSubmission(
+                It.IsAny<HttpContext>(), routeSettings.Object, 3))
+            .Returns(new RegistrationScopeResolution(true, branchSettings.Object));
+
+        var controller = CreateGetController(routeSettings.Object, db.Object, scopeResolver.Object);
+        var result = (ViewResult)controller.Create(2);
+        var model = (Registration)result.Model!;
+
+        Assert.AreSame(branchSettings.Object, model.Settings);
+        Assert.AreEqual(3, model.PatronBranchID);
+        Assert.IsTrue(model.Settings.GetFieldRequired(nameof(Registration.User5)));
+        Assert.AreEqual(true, controller.ViewData["RegistrationBranchSelectionEnabled"]);
+
+        var submitted = ValidRegistration(routeSettings.Object, user5: null);
+        submitted.PatronBranchID = 3;
+        var submission = controller.Submit(submitted);
+
+        Assert.AreEqual(RegistrationStatus.Error, submission.Status);
+        Assert.AreEqual("Responsible person is required.",
+            submission.Errors.Single(error => error.Key == nameof(Registration.User5)).Value);
+        Assert.AreSame(branchSettings.Object, submitted.Settings);
+    }
+
+    [TestMethod]
     public void BranchScopedRoute_RendersSelectedSiblingSettingsAndRejectsOutOfLibrarySelection()
     {
         var organizations = new List<OrganizationsGetRow>
@@ -483,10 +586,12 @@ public sealed class RegistrationBranchScopeTests
         Assert.AreEqual(4, model.PatronBranchID);
         CollectionAssert.AreEquivalent(new[] { "4" }, model.Branches.Select(value => value.Value).ToArray());
         Assert.AreEqual(false, controller.ViewData["RegistrationBranchSelectionEnabled"]);
-        Assert.IsTrue(model.BypassAgreement);
+        Assert.IsFalse(model.BypassAgreement);
+        Assert.IsTrue(model.ShouldDisplayAgreement);
+        Assert.AreEqual(false, controller.ViewData["RegistrationAgreementAccepted"]);
         Assert.AreEqual("no-store", controller.Response.Headers.CacheControl.ToString());
         scopeResolver.Verify(value => value.ResolveForSubmission(
-            It.IsAny<HttpContext>(), routeSettings.Object, 4), Times.Exactly(2));
+            It.IsAny<HttpContext>(), routeSettings.Object, 4), Times.Once);
     }
 
     [TestMethod]
