@@ -67,7 +67,7 @@ namespace Clc.PatronRegistration.Web.Controllers
             // A branch change is not a registration submission. Do not carry binding
             // or validation errors into the newly rendered branch-specific form.
             ModelState.Clear();
-            return RenderCreate(orgId, forceDl, agreementAccepted, p.PatronBranchID, p);
+            return RenderCreate(orgId, forceDl, agreementAccepted, p.PatronBranchID, p, renderFragment: true);
         }
 
         private IActionResult RenderCreate(
@@ -75,7 +75,8 @@ namespace Clc.PatronRegistration.Web.Controllers
             bool forceDl,
             bool agreementAccepted,
             int? selectedBranchId = null,
-            Registration? submittedRegistration = null)
+            Registration? submittedRegistration = null,
+            bool renderFragment = false)
         {
             var organizations = db.GetSelfRegistrationOrganizations().ToList();
             if (!orgId.HasValue) { return RedirectToAction("SelectLibrary"); }
@@ -198,6 +199,11 @@ namespace Clc.PatronRegistration.Web.Controllers
             model.BypassAgreement = agreementAccepted;
             ViewData["RegistrationBranchSelectionEnabled"] = branchSelectionEnabled;
             RegistrationSettingsContext.Set(HttpContext, renderSettings);
+
+            if (renderFragment)
+            {
+                return PartialView("_RegistrationForm", model);
+            }
 
             return HttpContext.IsInjectedForm() ? PartialView("Create", model) : View("Create", model);
         }

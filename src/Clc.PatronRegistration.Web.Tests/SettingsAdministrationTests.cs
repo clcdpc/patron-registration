@@ -486,7 +486,7 @@ public class SettingsAdministrationTests
     public void RegistrationCheckboxes_UseSupportedRazorMetadataLabelsOnly()
     {
         var root = FindRepositoryRoot();
-        var view = File.ReadAllText(Path.Combine(root, "src/Clc.PatronRegistration.Web/Views/Registration/Create.cshtml"));
+        var view = File.ReadAllText(Path.Combine(root, "src/Clc.PatronRegistration.Web/Views/Registration/_RegistrationForm.cshtml"));
         foreach (var property in new[] { "UseLegalName", "IsECard", "AddToMailingList" })
         {
             StringAssert.Contains(view, $"<input asp-for=\"{property}\" />");
@@ -499,7 +499,7 @@ public class SettingsAdministrationTests
     public void RegistrationView_RendersSupportedFooterAndSafeBranchAndResetBehavior()
     {
         var root = FindRepositoryRoot();
-        var view = File.ReadAllText(Path.Combine(root, "src/Clc.PatronRegistration.Web/Views/Registration/Create.cshtml"));
+        var view = File.ReadAllText(Path.Combine(root, "src/Clc.PatronRegistration.Web/Views/Registration/_RegistrationForm.cshtml"));
 
         StringAssert.Contains(view, "Settings.CustomFormFooterHtml");
         StringAssert.Contains(view, "@Html.Raw(Settings.CustomFormFooterHtml)");
@@ -859,7 +859,7 @@ public class SettingsAdministrationTests
     {
         var root = FindRepositoryRoot();
         var registrationView = File.ReadAllText(Path.Combine(root,
-            "src/Clc.PatronRegistration.Web/Views/Registration/Create.cshtml"));
+            "src/Clc.PatronRegistration.Web/Views/Registration/_RegistrationForm.cshtml"));
         var validationScript = File.ReadAllText(Path.Combine(root,
             "src/Clc.PatronRegistration.Web/wwwroot/js/aspnet-validation.js"));
 

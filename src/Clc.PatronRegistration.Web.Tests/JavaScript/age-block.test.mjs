@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import * as vm from "node:vm";
 
-const markup = readFileSync(new URL("../../Clc.PatronRegistration.Web/Views/Registration/Create.cshtml", import.meta.url), "utf8");
+const markup = readFileSync(new URL("../../Clc.PatronRegistration.Web/Views/Registration/_RegistrationForm.cshtml", import.meta.url), "utf8");
 
 test("registration view uses live and preview age-block endpoints", () => {
     assert.match(markup, /var ageBlockCheckUrl = isSettingsPreview[\s\S]*?Url\.Action\("AgeBlockCheck", "Preview", new \{ token = previewToken \}\)[\s\S]*?this\.BuildAction\("AgeBlockCheck"\)/);

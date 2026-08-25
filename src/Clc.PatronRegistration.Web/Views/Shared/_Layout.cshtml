@@ -26,20 +26,22 @@
     <title>@(ViewData["Title"] as string ?? "New Library Card Registration")</title>
 </head>
 <body class="@bodyClass" aria-live="polite">
-    <link rel="stylesheet" href="~/css/site.css" asp-append-version="true" />
-    <div id="regFormContainer">
-        @if (!@Context.IsInjectedForm())
-        {
-            @if (!string.IsNullOrWhiteSpace(safeSettingsStylesheet))
+    <link id="registration-site-stylesheet" rel="stylesheet" href="~/css/site.css" asp-append-version="true" />
+    <div id="regFormContainer" data-registration-branding-enabled="@((!Context.IsInjectedForm()).ToJavascriptBool())">
+        <div id="registration-branding">
+            @if (!@Context.IsInjectedForm())
             {
-                <link rel="stylesheet" href="@this.BuildUrl(safeSettingsStylesheet)" />
+                @if (!string.IsNullOrWhiteSpace(safeSettingsStylesheet))
+                {
+                    <link id="registration-configured-stylesheet" rel="stylesheet" href="@this.BuildUrl(safeSettingsStylesheet)" />
+                }
+
+                if (headerImageRoute is not null)
+                {
+                    <img id="registration-header-image" alt="header image containing the library's logo" src="@headerImageRoute" role="banner" />
+                }
             }
-            
-            if (headerImageRoute is not null)
-            {
-                <img alt="header image containing the library's logo" src="@headerImageRoute" role="banner" />
-            }
-        }
+        </div>
         @if (!string.IsNullOrWhiteSpace(pageStylesheet))
         {
             <link rel="stylesheet" href="@pageStylesheet" asp-append-version="true" />

@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import * as vm from "node:vm";
 
-const markup = readFileSync(new URL("../../Clc.PatronRegistration.Web/Views/Registration/Create.cshtml", import.meta.url), "utf8");
+const markup = readFileSync(new URL("../../Clc.PatronRegistration.Web/Views/Registration/_RegistrationForm.cshtml", import.meta.url), "utf8");
 
 test("registration branch switching never uses browser storage for patron data", () => {
     assert.doesNotMatch(markup, /sessionStorage|localStorage|indexedDB|document\.cookie/i);
@@ -84,8 +84,9 @@ test("branch switching submits the live form transiently and replaces it with th
 
 test("abandoning a registration cannot restore a previous patron from Web Storage", () => {
     assert.doesNotMatch(markup, /restore|persist|storage/i);
-    assert.match(markup, /registrationContainer\.innerHTML = await response\.text\(\)/);
-    assert.match(markup, /registrationContainer\.querySelectorAll\('script'\)/);
+    assert.match(markup, /template\.innerHTML = \(await response\.text\(\)\)\.trim\(\)/);
+    assert.match(markup, /currentFragment\.replaceWith\(nextFragment\)/);
+    assert.match(markup, /nextFragment\.querySelectorAll\('script'\)/);
 });
 
 test("branch responses regenerate selected-branch validation and workflow settings", () => {
@@ -111,4 +112,141 @@ test("disabled branch selection renders a fixed value and cannot reload siblings
     assert.match(disabledBranchMarkup, /Html\.HiddenFor\(m => m\.PatronBranchID\)/);
     assert.match(disabledBranchMarkup, /PatronBranchIDDisplay/);
     assert.doesNotMatch(disabledBranchMarkup, /DropDownListFor|<select/i);
+});
+
+test("branch responses replace one fragment root and never introduce a nested layout container", () => {
+    assert.equal((markup.match(/<div id="registration-form-fragment"/g) || []).length, 1);
+    assert.doesNotMatch(markup, /<div id="regFormContainer"/);
+    assert.doesNotMatch(markup, /<!DOCTYPE|<html|<head|<body/i);
+    assert.match(markup, /nextFragment\.querySelector\('#regFormContainer, html, head, body'\)/);
+    assert.match(markup, /template\.content\.childElementCount !== 1/);
+    assert.match(markup, /const scriptId = "registration-validation-script"/);
+});
+
+class ElementMock {
+    constructor(tagName) {
+        this.tagName = tagName;
+        this.id = "";
+        this.dataset = {};
+        this.children = [];
+        this.parentNode = null;
+    }
+
+    appendChild(child) {
+        child.parentNode = this;
+        this.children.push(child);
+        return child;
+    }
+
+    insertBefore(child, reference) {
+        child.parentNode = this;
+        const index = reference ? this.children.indexOf(reference) : -1;
+        if (index < 0) {
+            this.children.push(child);
+        } else {
+            this.children.splice(index, 0, child);
+        }
+        return child;
+    }
+
+    remove() {
+        if (!this.parentNode) return;
+        const index = this.parentNode.children.indexOf(this);
+        if (index >= 0) this.parentNode.children.splice(index, 1);
+        this.parentNode = null;
+    }
+}
+
+function createBrandingHarness() {
+    const container = new ElementMock("div");
+    container.id = "regFormContainer";
+    container.dataset.registrationBrandingEnabled = "true";
+    const branding = new ElementMock("div");
+    branding.id = "registration-branding";
+    const stylesheet = new ElementMock("link");
+    stylesheet.id = "registration-configured-stylesheet";
+    stylesheet.href = "https://example.test/route.css";
+    const image = new ElementMock("img");
+    image.id = "registration-header-image";
+    image.src = "https://example.test/route.png";
+    branding.appendChild(stylesheet);
+    branding.appendChild(image);
+    container.appendChild(branding);
+
+    const document = {
+        querySelector(selector) {
+            const id = selector.startsWith("#") ? selector.slice(1) : null;
+            if (!id) return null;
+
+            function find(element) {
+                if (element.id === id) return element;
+                for (const child of element.children) {
+                    const found = find(child);
+                    if (found) return found;
+                }
+                return null;
+            }
+
+            return find(container);
+        },
+        createElement(tagName) {
+            return new ElementMock(tagName);
+        }
+    };
+
+    const sandbox = { document };
+    const updateSource = markup.match(/(function updateRegistrationBranding\(fragment\) \{[\s\S]*?\n    \})(?=\r?\n\r?\n    async function reloadRegistrationForm)/)?.[1];
+    assert.ok(updateSource);
+    vm.runInNewContext(`
+        const q = document.querySelector.bind(document);
+        ${updateSource}
+        globalThis.updateRegistrationBranding = updateRegistrationBranding;
+    `, sandbox);
+
+    return {
+        apply(cssUrl, headerImageUrl) {
+            sandbox.updateRegistrationBranding({
+                dataset: {
+                    registrationCssUrl: cssUrl,
+                    registrationHeaderImageUrl: headerImageUrl
+                }
+            });
+        },
+        elements() {
+            return {
+                stylesheet: document.querySelector("#registration-configured-stylesheet"),
+                image: document.querySelector("#registration-header-image"),
+                branding
+            };
+        }
+    };
+}
+
+test("branch branding updates, clears, and reuses the same DOM elements across repeated switches", () => {
+    const harness = createBrandingHarness();
+
+    harness.apply("https://example.test/a.css", "https://example.test/a.png");
+    let elements = harness.elements();
+    assert.equal(elements.stylesheet.href, "https://example.test/a.css");
+    assert.equal(elements.image.src, "https://example.test/a.png");
+    assert.equal(elements.branding.children.filter(child => child.id === "registration-configured-stylesheet").length, 1);
+    assert.equal(elements.branding.children.filter(child => child.id === "registration-header-image").length, 1);
+
+    harness.apply("https://example.test/b.css", "https://example.test/b.png");
+    elements = harness.elements();
+    assert.equal(elements.stylesheet.href, "https://example.test/b.css");
+    assert.equal(elements.image.src, "https://example.test/b.png");
+    assert.equal(elements.branding.children.length, 2);
+
+    harness.apply("", "");
+    elements = harness.elements();
+    assert.equal(elements.stylesheet, null);
+    assert.equal(elements.image, null);
+    assert.equal(elements.branding.children.length, 0);
+
+    harness.apply("https://example.test/a.css", "https://example.test/a.png");
+    elements = harness.elements();
+    assert.equal(elements.stylesheet.href, "https://example.test/a.css");
+    assert.equal(elements.image.src, "https://example.test/a.png");
+    assert.equal(elements.branding.children.length, 2);
 });

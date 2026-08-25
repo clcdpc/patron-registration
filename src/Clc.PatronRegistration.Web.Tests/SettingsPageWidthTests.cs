@@ -43,7 +43,7 @@ public class SettingsPageWidthTests
     public void OrdinaryAndRegistrationViews_DoNotAssignSettingsBodyClass()
     {
         var rootViewStart = ReadWebFile("Views", "_ViewStart.cshtml");
-        var registration = ReadWebFile("Views", "Registration", "Create.cshtml");
+        var registration = ReadWebFile("Views", "Registration", "_RegistrationForm.cshtml");
 
         Assert.IsFalse(rootViewStart.Contains("settings-administration-page", StringComparison.Ordinal));
         Assert.IsFalse(registration.Contains("settings-administration-page", StringComparison.Ordinal));
