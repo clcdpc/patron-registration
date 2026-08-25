@@ -641,6 +641,86 @@ update dbo.RegistrationSettingsCacheGeneration set Generation=0,ModifiedAtUtc=SY
     }
 
     [TestMethod]
+    public async Task LivePreviewAdmission_AllowsIndependentAdmissionsWhileSerializingPublication()
+    {
+        var firstDraftId = SeedDraftAtScope(101, "preview-one", "Active");
+        var secondDraftId = SeedDraftAtScope(101, "preview-two", "Active");
+        var firstLinkId = repository.CreatePreviewLink(firstDraftId,
+            Enumerable.Repeat((byte)80, 32).ToArray(), true, 101, 1, Catalog, true, Audit());
+        var secondLinkId = repository.CreatePreviewLink(secondDraftId,
+            Enumerable.Repeat((byte)81, 32).ToArray(), true, 101, 1, Catalog, true, Audit());
+        var generation = repository.GetCacheGeneration();
+        Assert.AreEqual(generation, repository.GetPreviewLink(firstLinkId)!.LiveSettingsGeneration);
+        Assert.AreEqual(generation, repository.GetPreviewLink(secondLinkId)!.LiveSettingsGeneration);
+
+        var firstAdmission = repository.TryAdmitLivePreviewSubmission(firstLinkId, generation);
+        Assert.IsNotNull(firstAdmission);
+        ILivePreviewSubmissionAdmission? secondAdmission = null;
+        var secondAdmissionTask = Task.Run(() =>
+            repository.TryAdmitLivePreviewSubmission(secondLinkId, generation));
+        Task<Exception?>? publication = null;
+        var generationUpdateAttempted = CompletionSource();
+        try
+        {
+            secondAdmission = await secondAdmissionTask.WaitAsync(ConcurrencyTestTimeout);
+            Assert.IsNotNull(secondAdmission,
+                "An independent preview at the same generation should be admitted while the first lease is held.");
+
+            SettingsAdministrationRepository.BeforeLiveSettingsGenerationIncrementForTesting = () =>
+                generationUpdateAttempted.TrySetResult(true);
+            publication = Task.Run(() =>
+            {
+                try
+                {
+                    repository.DirectSave(202, "publication", 0,
+                        [Upsert(First, "published")], Catalog, Audit());
+                    return (Exception?)null;
+                }
+                catch (Exception exception)
+                {
+                    return exception;
+                }
+            });
+
+            await generationUpdateAttempted.Task.WaitAsync(ConcurrencyTestTimeout);
+            Assert.IsFalse(publication.IsCompleted,
+                "Live-settings publication passed the generation lock while both admissions were held.");
+
+            firstAdmission.Dispose();
+            var secondLeaseProbe = Task.Delay(TimeSpan.FromMilliseconds(250));
+            var completedWhileSecondHeld = await Task.WhenAny(publication, secondLeaseProbe);
+            Assert.AreSame(secondLeaseProbe, completedWhileSecondHeld,
+                "Live-settings publication completed while the second admission was still held.");
+
+            secondAdmission.Dispose();
+            await publication.WaitAsync(ConcurrencyTestTimeout);
+            Assert.IsNull(publication.Result, publication.Result?.ToString());
+            Assert.AreEqual(generation + 1, repository.GetCacheGeneration());
+
+            using var staleFirstAdmission = repository.TryAdmitLivePreviewSubmission(firstLinkId, generation);
+            using var staleSecondAdmission = repository.TryAdmitLivePreviewSubmission(secondLinkId, generation);
+            Assert.IsNull(staleFirstAdmission, "The first old-generation preview must fail admission after publication.");
+            Assert.IsNull(staleSecondAdmission, "The second old-generation preview must fail admission after publication.");
+        }
+        finally
+        {
+            firstAdmission.Dispose();
+            SettingsAdministrationRepository.BeforeLiveSettingsGenerationIncrementForTesting = null;
+            if (!secondAdmissionTask.IsCompleted)
+            {
+                try { secondAdmission = await secondAdmissionTask.WaitAsync(ConcurrencyTestTimeout); }
+                catch { /* Preserve the original test failure. */ }
+            }
+            secondAdmission?.Dispose();
+            if (publication is not null)
+            {
+                try { await publication.WaitAsync(ConcurrencyTestTimeout); }
+                catch { /* Preserve the original test failure. */ }
+            }
+        }
+    }
+
+    [TestMethod]
     public async Task LivePreviewAdmission_SerializesCommitDraftAndRejectsRevokedAdmission()
     {
         SeedVersion(0);

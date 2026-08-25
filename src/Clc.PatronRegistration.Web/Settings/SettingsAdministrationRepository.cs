@@ -748,8 +748,11 @@ where p.PreviewLinkId=@previewLinkId and p.DraftId=@draftId
                     return null;
                 }
 
+                // A transaction-held shared lock is sufficient: publications
+                // need an exclusive lock to increment this row, while unrelated
+                // admitted previews at the same generation may coexist.
                 var currentGeneration = connection.QuerySingle<long>(
-                    "select Generation from dbo.RegistrationSettingsCacheGeneration with(updlock,holdlock)",
+                    "select Generation from dbo.RegistrationSettingsCacheGeneration with(holdlock)",
                     transaction: transaction);
                 if (link.LiveSettingsGeneration != expectedGeneration || currentGeneration != expectedGeneration)
                 {

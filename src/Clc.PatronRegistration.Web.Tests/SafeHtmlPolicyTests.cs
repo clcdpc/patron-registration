@@ -86,6 +86,21 @@ public sealed class SafeHtmlPolicyTests
         StringAssert.Contains(encoded, "\\u003C");
     }
 
+    [DataTestMethod]
+    [DataRow("custom.css")]
+    [DataRow("css/custom.css")]
+    [DataRow("./css/custom.css")]
+    [DataRow("~/css/custom.css")]
+    [DataRow("/css/custom.css")]
+    [DataRow("/css/custom.css?v=2#theme")]
+    [DataRow("http://cdn.example.test/custom.css")]
+    [DataRow("https://cdn.example.test/custom.css?v=2")]
+    [DataRow("HTTPS://cdn.example.test/custom.css")]
+    public void StylesheetReferencePolicyAcceptsSupportedLocalAndHttpReferences(string reference)
+    {
+        Assert.IsTrue(SafeHtmlPolicy.IsSafeStylesheetReference(reference));
+    }
+
     [TestMethod]
     public void StylesheetReferencePolicyRejectsExecutableSchemes()
     {
@@ -94,5 +109,35 @@ public sealed class SafeHtmlPolicyTests
         Assert.IsFalse(SafeHtmlPolicy.IsSafeStylesheetReference("javascript:alert(1)"));
         Assert.IsFalse(SafeHtmlPolicy.IsSafeStylesheetReference("data:text/css,body{}"));
         Assert.IsFalse(SafeHtmlPolicy.IsSafeStylesheetReference("//cdn.example.test/custom.css"));
+    }
+
+    [DataTestMethod]
+    [DataRow("")]
+    [DataRow("   ")]
+    [DataRow("//cdn.example.test/custom.css")]
+    [DataRow("///cdn.example.test/custom.css")]
+    [DataRow("javascript:alert(1)")]
+    [DataRow("JaVaScRiPt:alert(1)")]
+    [DataRow("data:text/css,body{}")]
+    [DataRow("vbscript:msgbox(1)")]
+    [DataRow("file:///etc/passwd")]
+    [DataRow("ftp://cdn.example.test/custom.css")]
+    [DataRow("mailto:styles@example.test")]
+    [DataRow("C:/css/custom.css")]
+    [DataRow("\\css\\custom.css")]
+    [DataRow("https:\\cdn.example.test\\custom.css")]
+    [DataRow("/css/custom\n.css")]
+    [DataRow("/css/custom\u0000.css")]
+    [DataRow("http://")]
+    [DataRow("https:///custom.css")]
+    public void StylesheetReferencePolicyRejectsHostileOrUnsupportedReferences(string reference)
+    {
+        Assert.IsFalse(SafeHtmlPolicy.IsSafeStylesheetReference(reference));
+    }
+
+    [TestMethod]
+    public void StylesheetReferencePolicyRejectsNull()
+    {
+        Assert.IsFalse(SafeHtmlPolicy.IsSafeStylesheetReference(null));
     }
 }

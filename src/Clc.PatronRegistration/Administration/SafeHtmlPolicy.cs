@@ -103,19 +103,24 @@ public static class SafeHtmlPolicy
         }
 
         var candidate = value.Trim();
-        if (candidate.StartsWith("//", StringComparison.Ordinal) ||
-            candidate.Contains("javascript:", StringComparison.OrdinalIgnoreCase) ||
-            candidate.Contains("vbscript:", StringComparison.OrdinalIgnoreCase) ||
-            candidate.Contains("data:", StringComparison.OrdinalIgnoreCase))
+        if (candidate.StartsWith("//", StringComparison.Ordinal))
         {
             return false;
         }
 
-        if (Uri.TryCreate(candidate, UriKind.Absolute, out var absolute))
+        var isHttpUrl = candidate.StartsWith("http://", StringComparison.OrdinalIgnoreCase);
+        var isHttpsUrl = candidate.StartsWith("https://", StringComparison.OrdinalIgnoreCase);
+        if (isHttpUrl || isHttpsUrl)
         {
-            return absolute.Scheme is "http" or "https";
+            return Uri.TryCreate(candidate, UriKind.Absolute, out var absolute) &&
+                absolute.Scheme is "http" or "https" &&
+                !string.IsNullOrEmpty(absolute.Host);
         }
 
+        // A local reference is classified lexically so root-relative paths are
+        // not reinterpreted as file: URIs on Unix. Colons are not needed in the
+        // supported local path forms and rejecting them also rejects every
+        // executable or otherwise unsupported URI scheme.
         return candidate.IndexOf(':') < 0;
     }
 }
