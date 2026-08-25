@@ -132,6 +132,83 @@ namespace Clc.PatronRegistration.Tests
         }
 
         [TestMethod]
+        public void CreateRegistration_ForgedEcardSelectionIsIgnoredWhenCheckboxIsHidden()
+        {
+            _mockSettings.Setup(s => s.PatronCodeId).Returns(10);
+            _mockSettings.Setup(s => s.DisplayECardCheckbox).Returns(false);
+            _mockSettings.Setup(s => s.ForceEcardRemotely).Returns(false);
+            _mockSettings.Setup(s => s.DriversLicenseButtonEnabledIpAddresses).Returns([]);
+            _mockSettings.Setup(s => s.EcardBarcodePrefix).Returns("ECARD-");
+            _mockSettings.Setup(s => s.EcardPatronCodeId).Returns(42);
+            _mockSettings.Setup(s => s.RegistrationText).Returns("Registration complete");
+            _mockDbHelper.Setup(db => db.CheckPatronIsDuplicate(
+                It.IsAny<int>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<DateTime>())).Returns(false);
+            _mockMelissaClient.Setup(client => client.PersonatorRequest(It.IsAny<Clc.Melissa.Models.PersonatorRequestRecord>()))
+                .Returns(new RestResponse<Clc.Melissa.Models.PersonatorResponse>
+                {
+                    Data = new Clc.Melissa.Models.PersonatorResponse
+                    {
+                        Records =
+                        [
+                            new Clc.Melissa.Models.Record
+                            {
+                                Results = "AS01",
+                                AddressLine1 = "123 Main Street",
+                                AddressLine2 = "",
+                                City = "Columbus",
+                                State = "OH",
+                                PostalCode = "43215"
+                            }
+                        ]
+                    }
+                });
+            PatronRegistrationParams? captured = null;
+            _mockPapiClient.Setup(client => client.PatronRegistrationCreate(It.IsAny<PatronRegistrationParams>()))
+                .Callback<PatronRegistrationParams>(value => captured = value)
+                .Returns(new RestResponse<PatronRegistrationCreateResult>
+                {
+                    Data = new PatronRegistrationCreateResult
+                    {
+                        PatronID = 123,
+                        Barcode = "2000000000123",
+                        PAPIErrorCode = 0
+                    }
+                });
+            var registration = new Registration(_mockSettings.Object)
+            {
+                NameFirst = "Pat",
+                NameLast = "Reader",
+                Birthdate = new DateTime(1990, 1, 1),
+                PatronBranchID = 1,
+                StreetOne = "123 Main Street",
+                City = "Columbus",
+                State = "OH",
+                PostalCode = "43215",
+                IsECard = true // Simulates a forged IsECard=true POST value.
+            };
+
+            var previousGlobal = DbHelper.Global;
+            try
+            {
+                DbHelper.Global = _mockDbHelper.Object;
+                var result = registration.CreateRegistration(
+                    "203.0.113.1", new ModelStateDictionary(), _mockSettings.Object, _mockDbHelper.Object,
+                    _mockPapiClient.Object, _mockMelissaClient.Object, _mockEmailSender.Object);
+
+                Assert.AreEqual(RegistrationStatus.Success, result.Status);
+                Assert.IsFalse(registration.IsECard);
+                Assert.IsFalse(registration.Barcode.StartsWith("ECARD-", StringComparison.Ordinal));
+                Assert.IsNotNull(captured);
+                Assert.AreEqual(10, captured!.PatronCode);
+                Assert.IsFalse(captured.Barcode.StartsWith("ECARD-", StringComparison.Ordinal));
+            }
+            finally
+            {
+                DbHelper.Global = previousGlobal;
+            }
+        }
+
+        [TestMethod]
         public void DefaultPatronCode_RemainsWhenAddressVerificationHasNoResult()
         {
             _mockSettings.Setup(s => s.PatronCodeId).Returns(10);
@@ -410,9 +487,10 @@ namespace Clc.PatronRegistration.Tests
         }
 
         [TestMethod]
-        public void ApplyForceEcardSetting_DoesNotOverrideSelection_WhenForceEcardRemotelyIsFalse()
+        public void ApplyForceEcardSetting_DisablesForgedSelection_WhenCheckboxIsHidden()
         {
             _mockSettings.Setup(s => s.ForceEcardRemotely).Returns(false);
+            _mockSettings.Setup(s => s.DisplayECardCheckbox).Returns(false);
             _mockSettings.Setup(s => s.DriversLicenseButtonEnabledIpAddresses).Returns(new List<string> { "127.0.0.1" });
             var registration = new Registration(_mockSettings.Object)
             {
@@ -421,7 +499,47 @@ namespace Clc.PatronRegistration.Tests
 
             registration.ApplyForceEcardSetting("192.168.0.1");
 
+            Assert.IsFalse(registration.IsECard);
+        }
+
+        [TestMethod]
+        public void ApplyForceEcardSetting_PreservesSubmittedEcardSelection_WhenCheckboxIsVisible()
+        {
+            _mockSettings.Setup(s => s.ForceEcardRemotely).Returns(false);
+            _mockSettings.Setup(s => s.DisplayECardCheckbox).Returns(true);
+            _mockSettings.Setup(s => s.DriversLicenseButtonEnabledIpAddresses).Returns(new List<string> { "127.0.0.1" });
+            _mockSettings.Setup(s => s.EcardBarcodePrefix).Returns("SELECTED-");
+            _mockSettings.Setup(s => s.EcardPatronCodeId).Returns(42);
+            _mockSettings.As<IIdentifierSettingStateProvider>()
+                .Setup(s => s.GetIdentifierState("ecard_patron_code_id"))
+                .Returns(new IdentifierSettingResult(IdentifierSettingState.Positive, 42));
+            var registration = new Registration(_mockSettings.Object)
+            {
+                IsECard = true
+            };
+
+            registration.ApplyForceEcardSetting("192.168.0.1");
+            registration.HandleECardSettings();
+
             Assert.IsTrue(registration.IsECard);
+            StringAssert.StartsWith(registration.Barcode, "SELECTED-");
+            Assert.AreEqual(42, registration.PatronCode);
+        }
+
+        [TestMethod]
+        public void ApplyForceEcardSetting_PreservesSubmittedStandardCard_WhenCheckboxIsVisible()
+        {
+            _mockSettings.Setup(s => s.ForceEcardRemotely).Returns(false);
+            _mockSettings.Setup(s => s.DisplayECardCheckbox).Returns(true);
+            _mockSettings.Setup(s => s.DriversLicenseButtonEnabledIpAddresses).Returns(Array.Empty<string>());
+            var registration = new Registration(_mockSettings.Object)
+            {
+                IsECard = false
+            };
+
+            registration.ApplyForceEcardSetting("203.0.113.10");
+
+            Assert.IsFalse(registration.IsECard);
         }
 
         [TestMethod]

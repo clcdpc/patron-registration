@@ -305,6 +305,7 @@
             @Html.AntiForgeryToken()
             <input type="hidden" name="organizationId" value="@Model.OrganizationId" />
             <input type="hidden" name="formCode" value="@Model.FormCode" />
+            <input type="hidden" name="ExpectedDraftRevision" value="@Model.ActiveDraft.Revision" />
             <button type="submit">Publish @draftChangeCount @(draftChangeCount == 1 ? "change" : "changes")</button>
             <button type="button" data-dialog-cancel>Cancel</button>
         </form>
@@ -316,6 +317,7 @@
             @Html.AntiForgeryToken()
             <input type="hidden" name="organizationId" value="@Model.OrganizationId" />
             <input type="hidden" name="formCode" value="@Model.FormCode" />
+            <input type="hidden" name="ExpectedDraftRevision" value="@Model.ActiveDraft.Revision" />
             <button type="submit" class="danger-button">Discard shared draft</button>
             <button type="button" data-dialog-cancel>Cancel</button>
         </form>

@@ -1371,6 +1371,42 @@ public class SettingsControllerTests
         var view = File.ReadAllText(Path.GetFullPath(Path.Combine(AppContext.BaseDirectory,
             "../../../../../src/Clc.PatronRegistration.Web/Views/Settings/Index.cshtml")));
         StringAssert.Contains(view, "name=\"ExpectedVersion\" value=\"@Model.ScopeVersion\"");
+        Assert.AreEqual(3, view.Split("name=\"ExpectedDraftRevision\" value=\"@Model.ActiveDraft.Revision\"").Length - 1);
+    }
+
+    [TestMethod]
+    public void DraftLifecycle_ForwardsExpectedRevisionToRepository()
+    {
+        var repository = new Mock<ISettingsAdministrationRepository>();
+        var draft = NonSensitiveDraft() with { Revision = 7 };
+        repository.Setup(service => service.GetDraft(draft.DraftId)).Returns(draft);
+        var controller = CreateController(repository, LibraryAuthorization());
+
+        Assert.IsInstanceOfType<RedirectToActionResult>(controller.CommitDraft(
+            draft.DraftId, 3, expectedDraftRevision: draft.Revision));
+        Assert.IsInstanceOfType<RedirectToActionResult>(controller.DiscardDraft(
+            draft.DraftId, 3, expectedDraftRevision: draft.Revision));
+
+        repository.Verify(service => service.CommitDraft(draft.DraftId,
+            It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), false, It.IsAny<AuditContext>(), 7), Times.Once);
+        repository.Verify(service => service.DiscardDraft(draft.DraftId,
+            It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), false, It.IsAny<AuditContext>(), 7), Times.Once);
+    }
+
+    [TestMethod]
+    public void DraftLifecycle_MissingExpectedRevisionUsesDraftConflictUx()
+    {
+        var repository = new Mock<ISettingsAdministrationRepository>();
+        var draft = NonSensitiveDraft() with { Revision = 7 };
+        repository.Setup(service => service.GetDraft(draft.DraftId)).Returns(draft);
+        repository.Setup(service => service.CommitDraft(draft.DraftId,
+                It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), false, It.IsAny<AuditContext>(), null))
+            .Throws(new System.Data.DBConcurrencyException("revision required"));
+        var controller = CreateController(repository, LibraryAuthorization());
+
+        var result = controller.CommitDraft(draft.DraftId, 3);
+
+        AssertDraftConflictRedirect(controller, result, 3, string.Empty);
     }
 
     [DataTestMethod]
@@ -1751,7 +1787,7 @@ public class SettingsControllerTests
         Assert.IsInstanceOfType<ForbidResult>(controller.RevokePreviewLink(12));
         Assert.IsInstanceOfType<ForbidResult>(controller.RemoveDraftChange(draft.DraftId, 3, string.Empty, "postmark_api_key"));
 
-        repository.Verify(service => service.CommitDraft(It.IsAny<long>(), It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), It.IsAny<bool>(), It.IsAny<AuditContext>()), Times.Never);
+        repository.Verify(service => service.CommitDraft(It.IsAny<long>(), It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), It.IsAny<bool>(), It.IsAny<AuditContext>(), It.IsAny<long?>()), Times.Never);
         repository.Verify(service => service.RemoveDraftChange(It.IsAny<long>(), It.IsAny<string>(), It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), It.IsAny<bool>(), It.IsAny<AuditContext>()), Times.Never);
     }
 
@@ -1790,8 +1826,8 @@ public class SettingsControllerTests
         url.Setup(helper => helper.Action(It.IsAny<UrlActionContext>())).Returns("https://example.test/preview/token");
         controller.Url = url.Object;
 
-        Assert.IsInstanceOfType<RedirectToActionResult>(controller.CommitDraft(draft.DraftId, 3));
-        Assert.IsInstanceOfType<RedirectToActionResult>(controller.DiscardDraft(draft.DraftId, 3));
+        Assert.IsInstanceOfType<RedirectToActionResult>(controller.CommitDraft(draft.DraftId, 3, expectedDraftRevision: draft.Revision));
+        Assert.IsInstanceOfType<RedirectToActionResult>(controller.DiscardDraft(draft.DraftId, 3, expectedDraftRevision: draft.Revision));
         Assert.IsInstanceOfType<ViewResult>(controller.CreatePreviewLink(draft.DraftId, new PreviewLinkRequest { OrganizationId = 3, OperationalBranchId = 3 }));
         Assert.IsInstanceOfType<RedirectToActionResult>(controller.ReplacePreviewLinkMode(12, true));
         Assert.IsInstanceOfType<RedirectToActionResult>(controller.RevokePreviewLink(12));
@@ -1807,8 +1843,8 @@ public class SettingsControllerTests
         repository.Setup(service => service.GetDraft(draft.DraftId)).Returns(draft);
         var controller = CreateController(repository, LibraryAuthorization());
 
-        Assert.IsInstanceOfType<RedirectToActionResult>(controller.CommitDraft(draft.DraftId, 3));
-        Assert.IsInstanceOfType<RedirectToActionResult>(controller.DiscardDraft(draft.DraftId, 3));
+        Assert.IsInstanceOfType<RedirectToActionResult>(controller.CommitDraft(draft.DraftId, 3, expectedDraftRevision: draft.Revision));
+        Assert.IsInstanceOfType<RedirectToActionResult>(controller.DiscardDraft(draft.DraftId, 3, expectedDraftRevision: draft.Revision));
     }
 
     [TestMethod]
@@ -1831,20 +1867,20 @@ public class SettingsControllerTests
     public void CommitDraft_SensitiveMutationAddedAfterPrecheck_ReturnsForbid()
     {
         var repository = RaceRepository();
-        repository.Setup(service => service.CommitDraft(24, It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), false, It.IsAny<AuditContext>()))
+        repository.Setup(service => service.CommitDraft(24, It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), false, It.IsAny<AuditContext>(), It.IsAny<long?>()))
             .Throws(new UnauthorizedAccessException());
 
-        Assert.IsInstanceOfType<ForbidResult>(CreateController(repository, LibraryAuthorization()).CommitDraft(24, 3));
+        Assert.IsInstanceOfType<ForbidResult>(CreateController(repository, LibraryAuthorization()).CommitDraft(24, 3, expectedDraftRevision: 0));
     }
 
     [TestMethod]
     public void DiscardDraft_SensitiveMutationAddedAfterPrecheck_ReturnsForbid()
     {
         var repository = RaceRepository();
-        repository.Setup(service => service.DiscardDraft(24, It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), false, It.IsAny<AuditContext>()))
+        repository.Setup(service => service.DiscardDraft(24, It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), false, It.IsAny<AuditContext>(), It.IsAny<long?>()))
             .Throws(new UnauthorizedAccessException());
 
-        Assert.IsInstanceOfType<ForbidResult>(CreateController(repository, LibraryAuthorization()).DiscardDraft(24, 3));
+        Assert.IsInstanceOfType<ForbidResult>(CreateController(repository, LibraryAuthorization()).DiscardDraft(24, 3, expectedDraftRevision: 0));
     }
 
     [TestMethod]
@@ -1895,11 +1931,11 @@ public class SettingsControllerTests
     public void CommittingAfterConcurrentDraftEdit_RedirectsWithContextualConflictMessage()
     {
         var repository = RaceRepository();
-        repository.Setup(service => service.CommitDraft(24, It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), false, It.IsAny<AuditContext>()))
+        repository.Setup(service => service.CommitDraft(24, It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), false, It.IsAny<AuditContext>(), It.IsAny<long?>()))
             .Throws(new System.Data.DBConcurrencyException("The draft baseline is stale."));
 
         var controller = CreateController(repository, LibraryAuthorization());
-        var result = controller.CommitDraft(24, 3);
+        var result = controller.CommitDraft(24, 3, expectedDraftRevision: 0);
 
         AssertDraftConflictRedirect(controller, result, 3, string.Empty);
     }
@@ -1908,14 +1944,14 @@ public class SettingsControllerTests
     public void DiscardingOrPreviewingAfterConcurrentCommit_RedirectsWithContextualConflictMessage()
     {
         var repository = RaceRepository();
-        repository.Setup(service => service.DiscardDraft(24, It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), false, It.IsAny<AuditContext>()))
+        repository.Setup(service => service.DiscardDraft(24, It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), false, It.IsAny<AuditContext>(), It.IsAny<long?>()))
             .Throws(new System.Data.DBConcurrencyException("The shared draft is no longer active."));
         repository.Setup(service => service.CreatePreviewLink(24, It.IsAny<byte[]>(), false, 3, It.IsAny<int>(),
                 It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), false, It.IsAny<AuditContext>()))
             .Throws(new System.Data.DBConcurrencyException("The shared draft is no longer active."));
         var controller = CreateController(repository, LibraryAuthorization());
 
-        AssertDraftConflictRedirect(controller, controller.DiscardDraft(24, 3), 3, string.Empty);
+        AssertDraftConflictRedirect(controller, controller.DiscardDraft(24, 3, expectedDraftRevision: 0), 3, string.Empty);
         AssertDraftConflictRedirect(controller, controller.CreatePreviewLink(24,
             new PreviewLinkRequest { OrganizationId = 3, OperationalBranchId = 3 }), 3, string.Empty);
     }

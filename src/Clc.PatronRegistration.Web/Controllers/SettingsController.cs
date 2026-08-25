@@ -478,7 +478,7 @@ public sealed class SettingsController(
 
     [HttpPost("drafts/{draftId:long}/commit")]
     [ValidateAntiForgeryToken]
-    public IActionResult CommitDraft(long draftId, int organizationId, string formCode = "")
+    public IActionResult CommitDraft(long draftId, int organizationId, string formCode = "", long? expectedDraftRevision = null)
     {
         formCode = FormCodeNormalizer.Normalize(formCode);
         var draft = AuthorizedActiveDraft(draftId, organizationId, formCode);
@@ -493,7 +493,8 @@ public sealed class SettingsController(
         }
         try
         {
-            repository.CommitDraft(draftId, CatalogByKey, authorization.Describe(User).IsGlobal, CreateAudit(organizationId, formCode));
+            repository.CommitDraft(draftId, CatalogByKey, authorization.Describe(User).IsGlobal,
+                CreateAudit(organizationId, formCode), expectedDraftRevision);
             cacheInvalidator.LiveSettingsChanged($"CommitDraft draft={draftId} organization={organizationId} form={formCode}");
             TempData["SettingsStatus"] = $"Shared draft #{draftId} was published.";
         }
@@ -520,7 +521,7 @@ public sealed class SettingsController(
 
     [HttpPost("drafts/{draftId:long}/discard")]
     [ValidateAntiForgeryToken]
-    public IActionResult DiscardDraft(long draftId, int organizationId, string formCode = "")
+    public IActionResult DiscardDraft(long draftId, int organizationId, string formCode = "", long? expectedDraftRevision = null)
     {
         formCode = FormCodeNormalizer.Normalize(formCode);
         var draft = AuthorizedActiveDraft(draftId, organizationId, formCode);
@@ -535,7 +536,8 @@ public sealed class SettingsController(
         }
         try
         {
-            repository.DiscardDraft(draftId, CatalogByKey, authorization.Describe(User).IsGlobal, CreateAudit(organizationId, formCode));
+            repository.DiscardDraft(draftId, CatalogByKey, authorization.Describe(User).IsGlobal,
+                CreateAudit(organizationId, formCode), expectedDraftRevision);
             TempData["SettingsStatus"] = $"Shared draft #{draftId} was discarded.";
         }
         catch (UnauthorizedAccessException)

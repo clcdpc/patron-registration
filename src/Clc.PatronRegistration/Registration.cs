@@ -891,12 +891,20 @@ namespace Clc.PatronRegistration
 
         public void ApplyForceEcardSetting(string ip)
         {
-            if (!Settings.ForceEcardRemotely)
+            if (Settings.ForceEcardRemotely)
             {
+                IsECard = !CheckIp(ip, Settings.DriversLicenseButtonEnabledIpAddresses);
                 return;
             }
 
-            IsECard = !CheckIp(ip, Settings.DriversLicenseButtonEnabledIpAddresses);
+            // The checkbox is a presentation affordance, not the authorization
+            // boundary for e-card registrations. A forged POST must not enable
+            // e-card-specific behavior when the effective form configuration
+            // does not expose that choice.
+            if (!Settings.DisplayECardCheckbox)
+            {
+                IsECard = false;
+            }
         }
     }
 }

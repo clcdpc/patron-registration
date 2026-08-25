@@ -306,7 +306,7 @@ update dbo.RegistrationSettingsCacheGeneration set Generation=0,ModifiedAtUtc=SY
         CollectionAssert.AreEquivalent(new[] { "header_image_url|Upsert|https://example.test/discarded.png" }, ReadChanges(discardedDraft).ToArray());
         CollectionAssert.AreEquivalent(new[] { "header_image_url|Upsert|https://example.test/invalidated.png" }, ReadChanges(invalidatedDraft).ToArray());
 
-        repository.CommitDraft(activeDraft.DraftId, catalog, true, Audit());
+        repository.CommitDraft(activeDraft.DraftId, catalog, true, Audit(), activeDraft.DraftRevision);
 
         Assert.AreEqual(DraftStatus.Committed, repository.GetDraft(activeDraft.DraftId)!.Status);
         var persisted = QuerySingle("select Value from dbo.RegistrationFormSettings where OrganizationID=101 and FormCode='form' and Setting='registration_text'",
@@ -338,7 +338,7 @@ update dbo.RegistrationSettingsCacheGeneration set Generation=0,ModifiedAtUtc=SY
         Assert.AreEqual(0, remainingActiveDraft.Changes.Count);
         Assert.AreEqual(0, ReadChanges(activeDraft).Count);
 
-        repository.CommitDraft(activeDraft, catalog, true, Audit());
+        repository.CommitDraft(activeDraft, catalog, true, Audit(), 0);
 
         Assert.AreEqual(DraftStatus.Committed, repository.GetDraft(activeDraft)!.Status);
         Assert.AreEqual(1L, repository.GetVersion(101, "form"));
@@ -595,7 +595,7 @@ update dbo.RegistrationSettingsCacheGeneration set Generation=0,ModifiedAtUtc=SY
             {
                 try
                 {
-                    repository.CommitDraft(draftId, Catalog, true, Audit());
+                    repository.CommitDraft(draftId, Catalog, true, Audit(), 0);
                     return (Exception?)null;
                 }
                 catch (Exception exception)
@@ -649,7 +649,7 @@ update dbo.RegistrationSettingsCacheGeneration set Generation=0,ModifiedAtUtc=SY
                 new SettingMutation("require.PhoneVoice1", DraftOperation.Upsert, "false"),
                 new SettingMutation("alert.NameFirst", DraftOperation.Upsert, "Draft validation message")
             ], catalog, Audit());
-        repository.CommitDraft(draft.DraftId, catalog, true, Audit());
+        repository.CommitDraft(draft.DraftId, catalog, true, Audit(), draft.DraftRevision);
 
         Assert.AreEqual("Draft first name", ReadSettingValue(102, "dynamic", "label.NameFirst"));
         Assert.AreEqual("false", ReadSettingValue(102, "dynamic", "require.PhoneVoice1"));
@@ -690,7 +690,7 @@ update dbo.RegistrationSettingsCacheGeneration set Generation=0,ModifiedAtUtc=SY
 
         var draft = repository.SaveToSharedDraft(101, "form", 0, null,
             [new SettingMutation("header_image_asset_id", DraftOperation.Upsert, asset.AssetId.ToString())], catalog, Audit());
-        repository.CommitDraft(draft.DraftId, catalog, true, Audit());
+        repository.CommitDraft(draft.DraftId, catalog, true, Audit(), draft.DraftRevision);
 
         var row = QuerySingle("select Value,OrganizationID,FormCode from dbo.RegistrationFormSettings where Setting='header_image_asset_id'",
             null, reader => new { Value = reader.GetString(0), OrganizationId = reader.GetInt32(1), FormCode = reader.GetString(2) });
@@ -1068,7 +1068,7 @@ update dbo.RegistrationSettingsCacheGeneration set Generation=0,ModifiedAtUtc=SY
         {
             var commit = Task.Run(() =>
             {
-                repository.CommitDraft(draft.DraftId, catalog, true, Audit());
+                repository.CommitDraft(draft.DraftId, catalog, true, Audit(), draft.DraftRevision);
                 return true;
             });
             await commitGateHeld.Task.WaitAsync(ConcurrencyTestTimeout);
@@ -1216,7 +1216,7 @@ update dbo.RegistrationSettingsCacheGeneration set Generation=0,ModifiedAtUtc=SY
         Assert.IsFalse(assetRepository.Exists(anotherScope.AssetId));
         Assert.IsTrue(assetRepository.Exists(draftOnly.AssetId));
 
-        repository.DiscardDraft(draft.DraftId, catalog, true, Audit());
+        repository.DiscardDraft(draft.DraftId, catalog, true, Audit(), draft.DraftRevision);
         Assert.AreEqual(1, assetRepository.DeleteOrphanedAssets(now.AddDays(-1), 100));
         Assert.IsFalse(assetRepository.Exists(draftOnly.AssetId));
     }
@@ -1316,6 +1316,100 @@ update dbo.RegistrationSettingsCacheGeneration set Generation=0,ModifiedAtUtc=SY
         repository.RemoveDraftChange(initial.DraftId, First.Key, Catalog, true, Audit(), changed.DraftRevision);
         Assert.IsFalse(ReadChanges(initial.DraftId).Any(change => change.StartsWith("test.first|", StringComparison.Ordinal)));
         Assert.AreEqual(changed.DraftRevision + 1, repository.GetDraft(initial.DraftId)!.Revision);
+    }
+
+    [TestMethod]
+    public void CommitDraft_SucceedsWhenExpectedRevisionIsCurrent()
+    {
+        SeedVersion(0);
+        var draft = repository.SaveToSharedDraft(101, "form", 0, null,
+            [Upsert(First, "current")], Catalog, Audit());
+
+        repository.CommitDraft(draft.DraftId, Catalog, true, Audit(), draft.DraftRevision);
+
+        Assert.AreEqual(DraftStatus.Committed, repository.GetDraft(draft.DraftId)!.Status);
+        Assert.AreEqual("current", ReadSettingValue(101, "form", First.Key));
+        Assert.AreEqual(1L, repository.GetVersion(101, "form"));
+        AssertAuditCount("DraftCommitted", 1);
+    }
+
+    [TestMethod]
+    public void CommitDraft_StaleRevisionPublishesNothingAndLeavesNewerDraftActive()
+    {
+        SeedVersion(0);
+        var initial = repository.SaveToSharedDraft(101, "form", 0, null,
+            [Upsert(First, "initial")], Catalog, Audit());
+        var newer = repository.SaveToSharedDraft(101, "form", 0, initial.DraftId,
+            [Upsert(Second, "newer")], Catalog, Audit(), initial.DraftRevision);
+
+        Assert.ThrowsException<DBConcurrencyException>(() => repository.CommitDraft(
+            initial.DraftId, Catalog, true, Audit(), initial.DraftRevision));
+
+        var remaining = repository.GetDraft(initial.DraftId)!;
+        Assert.AreEqual(DraftStatus.Active, remaining.Status);
+        Assert.AreEqual(newer.DraftRevision, remaining.Revision);
+        CollectionAssert.AreEquivalent(
+            new[] { "test.first|Upsert|initial", "test.second|Upsert|newer" },
+            ReadChanges(initial.DraftId).ToArray());
+        Assert.AreEqual(0, Scalar<int>("select count(*) from dbo.RegistrationFormSettings where OrganizationID=101 and FormCode='form'"));
+        Assert.AreEqual(0L, repository.GetVersion(101, "form"));
+        AssertAuditCount("DraftCommitted", 0);
+    }
+
+    [TestMethod]
+    public void DiscardDraft_SucceedsWhenExpectedRevisionIsCurrent()
+    {
+        SeedVersion(0);
+        var draft = repository.SaveToSharedDraft(101, "form", 0, null,
+            [Upsert(First, "current")], Catalog, Audit());
+
+        repository.DiscardDraft(draft.DraftId, Catalog, true, Audit(), draft.DraftRevision);
+
+        Assert.AreEqual(DraftStatus.Discarded, repository.GetDraft(draft.DraftId)!.Status);
+        Assert.AreEqual(draft.DraftRevision + 1, repository.GetDraft(draft.DraftId)!.Revision);
+        CollectionAssert.AreEquivalent(new[] { "test.first|Upsert|current" }, ReadChanges(draft.DraftId).ToArray());
+        Assert.AreEqual(0L, repository.GetVersion(101, "form"));
+        AssertAuditCount("DraftDiscarded", 1);
+    }
+
+    [TestMethod]
+    public void DiscardDraft_StaleRevisionLeavesNewerDraftAndChangesActive()
+    {
+        SeedVersion(0);
+        var initial = repository.SaveToSharedDraft(101, "form", 0, null,
+            [Upsert(First, "initial")], Catalog, Audit());
+        var newer = repository.SaveToSharedDraft(101, "form", 0, initial.DraftId,
+            [Upsert(Second, "newer")], Catalog, Audit(), initial.DraftRevision);
+
+        Assert.ThrowsException<DBConcurrencyException>(() => repository.DiscardDraft(
+            initial.DraftId, Catalog, true, Audit(), initial.DraftRevision));
+
+        var remaining = repository.GetDraft(initial.DraftId)!;
+        Assert.AreEqual(DraftStatus.Active, remaining.Status);
+        Assert.AreEqual(newer.DraftRevision, remaining.Revision);
+        CollectionAssert.AreEquivalent(
+            new[] { "test.first|Upsert|initial", "test.second|Upsert|newer" },
+            ReadChanges(initial.DraftId).ToArray());
+        AssertAuditCount("DraftDiscarded", 0);
+    }
+
+    [TestMethod]
+    public void CommitAndDiscardDraft_RequireAnExpectedRevision()
+    {
+        SeedVersion(0);
+        var draft = repository.SaveToSharedDraft(101, "form", 0, null,
+            [Upsert(First, "current")], Catalog, Audit());
+
+        Assert.ThrowsException<DBConcurrencyException>(() => repository.CommitDraft(
+            draft.DraftId, Catalog, true, Audit(), null));
+        Assert.AreEqual(DraftStatus.Active, repository.GetDraft(draft.DraftId)!.Status);
+
+        Assert.ThrowsException<DBConcurrencyException>(() => repository.DiscardDraft(
+            draft.DraftId, Catalog, true, Audit(), null));
+        Assert.AreEqual(DraftStatus.Active, repository.GetDraft(draft.DraftId)!.Status);
+        CollectionAssert.AreEquivalent(new[] { "test.first|Upsert|current" }, ReadChanges(draft.DraftId).ToArray());
+        AssertAuditCount("DraftCommitted", 0);
+        AssertAuditCount("DraftDiscarded", 0);
     }
 
     [TestMethod]
@@ -1755,7 +1849,7 @@ values(@draftId,@hash,0,101,'legacy','legacy',null)", parameters: command =>
         var discard = Task.Run(() =>
         {
             barrier.SignalAndWait(TimeSpan.FromSeconds(10));
-            try { new SettingsAdministrationRepository(databaseConnectionString!, clock).DiscardDraft(draftId, Catalog, true, Audit()); }
+            try { new SettingsAdministrationRepository(databaseConnectionString!, clock).DiscardDraft(draftId, Catalog, true, Audit(), 0); }
             catch (Exception exception) { discardError = exception; }
         });
         await Task.WhenAll(restore, discard).WaitAsync(TimeSpan.FromSeconds(40));
