@@ -13,7 +13,10 @@ using System.Threading.Tasks;
 
 namespace Clc.PatronRegistration.Helpers
 {
-    public class MemoryCache(IPapiClient papi, IDbHelper db) : ICache, ICacheSnapshotProvider
+    public class MemoryCache(
+        IPapiClient papi,
+        IDbHelper db,
+        ISettingsCacheGenerationProvider? generationProvider = null) : ICache, IGenerationAwareCacheSnapshotProvider
     {
         private sealed record PublishedCacheSnapshot(
             List<RegistrationFormSetting> Settings,
@@ -66,16 +69,83 @@ namespace Clc.PatronRegistration.Helpers
         {
             lock (rebuildLock)
             {
-                var orgResult = papi.OrganizationsGet(OrganizationType.All);
-                var organizations = orgResult.Data.OrganizationsGetRows.ToList();
-                var settings = db.GetAllSettings().ToList();
-                Volatile.Write(ref snapshot, new PublishedCacheSnapshot(
-                    settings,
-                    organizations,
-                    new CacheSnapshot(
-                        Array.AsReadOnly(settings.ToArray()),
-                        Array.AsReadOnly(organizations.ToArray()))));
+                PublishLoadedCache(null);
             }
+        }
+
+        public CacheSnapshot GetSnapshotAtGeneration(long generation)
+        {
+            var current = Volatile.Read(ref snapshot);
+            if (current?.Snapshot.Generation == generation)
+            {
+                return current.Snapshot;
+            }
+
+            RebuildCacheAtGeneration(generation);
+            current = Volatile.Read(ref snapshot);
+            if (current?.Snapshot.Generation != generation)
+            {
+                throw new CacheSnapshotConsistencyException(
+                    $"The local settings cache did not publish generation {generation}.");
+            }
+
+            return current.Snapshot;
+        }
+
+        public void RebuildCacheAtGeneration(long generation)
+        {
+            lock (rebuildLock)
+            {
+                if (generationProvider is null)
+                {
+                    throw new CacheSnapshotConsistencyException(
+                        "An authoritative settings-cache generation provider is not configured.");
+                }
+                var before = generationProvider.GetCacheGeneration();
+                if (before != generation)
+                {
+                    throw new CacheSnapshotConsistencyException(
+                        $"The requested settings-cache generation {generation} is no longer current; current generation is {before}.");
+                }
+
+                var loaded = LoadCache();
+
+                var after = generationProvider.GetCacheGeneration();
+                if (after != generation)
+                {
+                    throw new CacheSnapshotConsistencyException(
+                        $"The settings-cache generation changed while generation {generation} was being rebuilt.");
+                }
+
+                PublishLoadedCache(loaded, generation);
+            }
+        }
+
+        private void PublishLoadedCache(long? generation)
+        {
+            PublishLoadedCache(LoadCache(), generation);
+        }
+
+        private void PublishLoadedCache(
+            (List<RegistrationFormSetting> Settings, List<OrganizationsGetRow> Organizations) loaded,
+            long? generation)
+        {
+            var settings = loaded.Settings;
+            var organizations = loaded.Organizations;
+            var organizationsSnapshot = Array.AsReadOnly(organizations.ToArray());
+            var settingsSnapshot = Array.AsReadOnly(settings.ToArray());
+            Volatile.Write(ref snapshot, new PublishedCacheSnapshot(
+                settings,
+                organizations,
+                new CacheSnapshot(settingsSnapshot, organizationsSnapshot, generation)));
+        }
+
+        private (List<RegistrationFormSetting> Settings, List<OrganizationsGetRow> Organizations) LoadCache()
+        {
+            var orgResult = papi.OrganizationsGet(OrganizationType.All);
+            var organizations = orgResult.Data.OrganizationsGetRows.ToList();
+            var settings = db.GetAllSettings().ToList();
+            return (settings, organizations);
         }
         public OrganizationsGetRow GetOrg(int orgId) => OrganizationCache.Single(o => o.OrganizationID == orgId);
         public List<OrganizationsGetRow> GetBranches(int orgId)

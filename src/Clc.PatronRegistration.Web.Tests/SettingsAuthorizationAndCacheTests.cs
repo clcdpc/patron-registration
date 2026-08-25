@@ -1,6 +1,10 @@
 using System.Security.Claims;
+using Clc.PatronRegistration.Data;
 using Clc.PatronRegistration.Helpers;
+using Clc.Polaris.Api;
+using Clc.Polaris.Api.Models;
 using Clc.PatronRegistration.Web.Settings;
+using Clc.Rest;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Moq;
@@ -112,6 +116,33 @@ public class SettingsAuthorizationAndCacheTests
     }
 
     [TestMethod]
+    public void MemoryCache_OrdinaryRebuildRetainsEventualConsistencyWithoutReadingGeneration()
+    {
+        var (papi, db) = MemoryCacheDependencies();
+        var generation = new Mock<ISettingsCacheGenerationProvider>(MockBehavior.Strict);
+        var cache = new MemoryCache(papi.Object, db.Object, generation.Object);
+
+        cache.RebuildCache();
+
+        generation.Verify(service => service.GetCacheGeneration(), Times.Never);
+        Assert.IsNull(cache.GetSnapshot().Generation);
+    }
+
+    [TestMethod]
+    public void MemoryCache_GenerationBoundRebuildPublishesOnlyAfterStableRead()
+    {
+        var (papi, db) = MemoryCacheDependencies();
+        var generation = new Mock<ISettingsCacheGenerationProvider>(MockBehavior.Strict);
+        generation.SetupSequence(service => service.GetCacheGeneration()).Returns(1).Returns(2);
+        var cache = new MemoryCache(papi.Object, db.Object, generation.Object);
+
+        Assert.ThrowsException<CacheSnapshotConsistencyException>(() => cache.RebuildCacheAtGeneration(1));
+
+        Assert.IsFalse(cache.IsInitialized);
+        generation.Verify(service => service.GetCacheGeneration(), Times.Exactly(2));
+    }
+
+    [TestMethod]
     public void LocalLiveChange_RebuildsImmediatelyAndObservesGeneration()
     {
         var cache = new Mock<ICache>();
@@ -165,6 +196,23 @@ public class SettingsAuthorizationAndCacheTests
         await invalidator.CheckForRemoteChangesAsync();
 
         cache.Verify(service => service.RebuildCache(), Times.Once);
+    }
+
+    private static (Mock<IPapiClient> Papi, Mock<IDbHelper> Db) MemoryCacheDependencies()
+    {
+        var response = new Mock<IRestResponse<OrganizationsGetResult>>();
+        response.SetupGet(value => value.Data).Returns(new OrganizationsGetResult
+        {
+            OrganizationsGetRows =
+            [
+                new() { OrganizationID = 1, OrganizationCodeID = 1, Name = "System" }
+            ]
+        });
+        var papi = new Mock<IPapiClient>();
+        papi.Setup(service => service.OrganizationsGet(OrganizationType.All)).Returns(response.Object);
+        var db = new Mock<IDbHelper>();
+        db.Setup(service => service.GetAllSettings()).Returns([]);
+        return (papi, db);
     }
 
     [TestMethod]

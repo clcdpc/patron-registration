@@ -101,7 +101,26 @@ public sealed class SettingsCacheInvalidator(
         var before = generationBefore ?? repository.GetCacheGeneration();
         for (var attempt = 0; attempt < maximumRebuilds; attempt++)
         {
-            cache.RebuildCache();
+            try
+            {
+                if (cache is IGenerationAwareCacheSnapshotProvider generationAwareCache)
+                {
+                    generationAwareCache.RebuildCacheAtGeneration(before);
+                }
+                else
+                {
+                    cache.RebuildCache();
+                }
+            }
+            catch (CacheSnapshotConsistencyException)
+            {
+                // A publication raced the rebuild. Do not publish the data
+                // that was read around that commit; retry against the newest
+                // authoritative generation instead.
+                before = repository.GetCacheGeneration();
+                continue;
+            }
+
             var after = repository.GetCacheGeneration();
             if (after == before)
             {

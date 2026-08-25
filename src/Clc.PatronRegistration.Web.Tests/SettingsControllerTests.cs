@@ -2007,6 +2007,106 @@ public class SettingsControllerTests
         new(assetId, fileName, "image/png", $"hash-{assetId}", DateTime.UtcNow, DateTime.UtcNow,
             assetId == 10 ? 1 : 3, string.Empty);
 
+    [TestMethod]
+    public void Index_StaleNodeFailsClosedInsteadOfPairingOldSettingsWithNewVersion()
+    {
+        // Instance B has published generation N+1 while instance A still has
+        // its independently published generation-N snapshot.
+        var instanceA = new TestCache
+        {
+            SettingsCache =
+            [
+                new() { OrganizationID = 3, Setting = "registration_text", Value = "generation N" }
+            ]
+        };
+        var instanceB = new TestCache
+        {
+            Generation = 2,
+            SettingsCache =
+            [
+                new() { OrganizationID = 3, Setting = "registration_text", Value = "generation N+1" }
+            ]
+        };
+        var repository = new Mock<ISettingsAdministrationRepository>();
+        repository.Setup(service => service.GetFormCodes(It.IsAny<int>(), It.IsAny<int>())).Returns([]);
+        repository.Setup(service => service.GetLegacyFormCodes()).Returns([]);
+        repository.Setup(service => service.GetVersion(3, string.Empty)).Returns(2);
+        var controller = CreateController(repository, LibraryAuthorization(), instanceA);
+        repository.Setup(service => service.GetCacheGeneration()).Returns(2);
+
+        var result = controller.Index(3);
+
+        Assert.AreEqual(2, instanceB.GetSnapshot().Generation);
+        var unavailable = result as ObjectResult;
+        Assert.IsNotNull(unavailable);
+        Assert.AreEqual(StatusCodes.Status503ServiceUnavailable, unavailable!.StatusCode);
+        Assert.IsFalse(result is ViewResult);
+    }
+
+    [TestMethod]
+    public void Index_RetriesWhenGenerationChangesBetweenSnapshotAndVersionRead()
+    {
+        var cache = new TestCache
+        {
+            SettingsCache =
+            [
+                new() { OrganizationID = 3, Setting = "registration_text", Value = "generation N" }
+            ]
+        };
+        var repository = new Mock<ISettingsAdministrationRepository>();
+        repository.Setup(service => service.GetFormCodes(It.IsAny<int>(), It.IsAny<int>())).Returns([]);
+        repository.Setup(service => service.GetLegacyFormCodes()).Returns([]);
+        var versionReads = 0;
+        repository.Setup(service => service.GetVersion(3, string.Empty)).Returns(() =>
+        {
+            versionReads++;
+            if (versionReads == 1)
+            {
+                cache.SettingsCache =
+                [
+                    new() { OrganizationID = 3, Setting = "registration_text", Value = "generation N+1" }
+                ];
+                cache.Generation = 2;
+            }
+            return 2;
+        });
+        var controller = CreateController(repository, LibraryAuthorization(), cache);
+        var generationReads = 0;
+        repository.Setup(service => service.GetCacheGeneration()).Returns(() =>
+        {
+            generationReads++;
+            return generationReads == 1 ? 1 : 2;
+        });
+
+        var result = (ViewResult)controller.Index(3);
+        var model = (SettingsIndexViewModel)result.Model!;
+
+        Assert.AreEqual(2, model.ScopeVersion);
+        Assert.AreEqual("generation N+1", model.Settings.Single(setting => setting.Definition.Key == "registration_text")
+            .Resolution.EffectiveValue);
+        Assert.AreEqual(2, versionReads);
+        Assert.AreEqual(4, generationReads);
+    }
+
+    [TestMethod]
+    public void Index_CacheRefreshFailureReturnsServiceUnavailable()
+    {
+        var cache = new Mock<ICache>();
+        cache.As<IGenerationAwareCacheSnapshotProvider>()
+            .Setup(provider => provider.GetSnapshotAtGeneration(1))
+            .Throws(new CacheSnapshotConsistencyException("refresh failed"));
+        var repository = new Mock<ISettingsAdministrationRepository>();
+        var controller = CreateController(repository, LibraryAuthorization(), cache.Object);
+        repository.Setup(service => service.GetCacheGeneration()).Returns(1);
+
+        var result = controller.Index(3);
+
+        var unavailable = result as ObjectResult;
+        Assert.IsNotNull(unavailable);
+        Assert.AreEqual(StatusCodes.Status503ServiceUnavailable, unavailable!.StatusCode);
+        repository.Verify(service => service.GetVersion(It.IsAny<int>(), It.IsAny<string>()), Times.Never);
+    }
+
     private static Mock<ISettingsAdministrationRepository> RaceRepository()
     {
         var repository = new Mock<ISettingsAdministrationRepository>();

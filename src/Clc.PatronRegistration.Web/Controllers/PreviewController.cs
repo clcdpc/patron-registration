@@ -140,6 +140,11 @@ public sealed class PreviewController(
             return NotFound("This live preview link is no longer current. Create a new preview link from the latest draft.");
         }
 
+        if (context.Settings.SnapshotGeneration != context.Link.LiveSettingsGeneration)
+        {
+            return NotFound("This live preview link is no longer current. Create a new preview link from the latest draft.");
+        }
+
         using var admission = repository.TryAdmitLivePreviewSubmission(
             context.Link.PreviewLinkId,
             context.Link.LiveSettingsGeneration.Value);

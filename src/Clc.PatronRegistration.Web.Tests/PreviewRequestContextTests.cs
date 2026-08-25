@@ -2,6 +2,7 @@ using Clc.Melissa;
 using Clc.PatronRegistration.Administration;
 using Clc.PatronRegistration.Configuration;
 using Clc.PatronRegistration.Data;
+using Clc.PatronRegistration.Helpers;
 using Clc.PatronRegistration.Web.Controllers;
 using Clc.PatronRegistration.Web.Settings;
 using Clc.Polaris.Api;
@@ -618,6 +619,140 @@ public class PreviewRequestContextTests
         Assert.IsInstanceOfType<BadRequestObjectResult>(result);
     }
 
+    [TestMethod]
+    public void LivePreviewLinkAtNewGeneration_IsRejectedByStaleNodeCache()
+    {
+        // Instance B creates the link after publishing N+1; instance A has
+        // not yet observed that publication.
+        var instanceA = new TestCache
+        {
+            Generation = 1,
+            SettingsCache =
+            [
+                new() { OrganizationID = 3, Setting = "registration_text", Value = "generation N" }
+            ]
+        };
+        var instanceB = new TestCache
+        {
+            Generation = 2,
+            SettingsCache =
+            [
+                new() { OrganizationID = 3, Setting = "registration_text", Value = "generation N+1" }
+            ]
+        };
+        var draft = ActiveDraft();
+        var link = Link("Active", allowLiveSubmission: true) with { LiveSettingsGeneration = instanceB.Generation };
+        var repository = new Mock<ISettingsAdministrationRepository>();
+        repository.Setup(service => service.ResolvePreviewContext(It.IsAny<byte[]>()))
+            .Returns(new PreviewContextSnapshot(link, draft, 2));
+        repository.Setup(service => service.GetCacheGeneration()).Returns(2);
+        var eligibility = new Mock<IPreviewBranchEligibilityService>();
+        eligibility.Setup(service => service.IsEligible(3, 3, 1)).Returns(true);
+        var resolver = new PreviewContextResolver(repository.Object, new PreviewTokenService(), eligibility.Object,
+            instanceA, Options.Create(new SettingsAdministrationOptions()));
+
+        var context = resolver.Resolve("stale-node-token");
+
+        Assert.AreEqual(2, instanceB.GetSnapshot().Generation);
+        Assert.IsNull(context);
+    }
+
+    [TestMethod]
+    public void LivePreviewAfterSynchronization_UsesNewBaselineAndDraftOverlay()
+    {
+        var cache = new TestCache
+        {
+            Generation = 2,
+            SettingsCache =
+            [
+                new() { OrganizationID = 3, Setting = "registration_text", Value = "generation N+1" },
+                new() { OrganizationID = 3, Setting = "display_responsible_person_field", Value = "false" }
+            ]
+        };
+        var draft = ActiveDraft(new SettingMutation("registration_text", DraftOperation.Upsert, "draft overlay"));
+        var link = Link("Active", allowLiveSubmission: true) with { LiveSettingsGeneration = 2 };
+        var repository = new Mock<ISettingsAdministrationRepository>();
+        repository.Setup(service => service.ResolvePreviewContext(It.IsAny<byte[]>()))
+            .Returns(new PreviewContextSnapshot(link, draft, 2));
+        repository.Setup(service => service.GetCacheGeneration()).Returns(2);
+        var eligibility = new Mock<IPreviewBranchEligibilityService>();
+        eligibility.Setup(service => service.IsEligible(3, 3, 1)).Returns(true);
+        var resolver = new PreviewContextResolver(repository.Object, new PreviewTokenService(), eligibility.Object,
+            cache, Options.Create(new SettingsAdministrationOptions()));
+
+        var context = resolver.Resolve("synchronized-node-token");
+
+        Assert.IsNotNull(context);
+        Assert.AreEqual(2, context!.Settings.SnapshotGeneration);
+        Assert.AreEqual("draft overlay", context.Settings.RegistrationText);
+        Assert.IsFalse(context.Settings.DisplayResponsiblePersonField);
+    }
+
+    [TestMethod]
+    public void PreviewCacheRefreshFailure_FailsClosedBeforeRegistrationClients()
+    {
+        var cache = new Mock<ICache>();
+        cache.As<IGenerationAwareCacheSnapshotProvider>()
+            .Setup(provider => provider.GetSnapshotAtGeneration(2))
+            .Throws(new CacheSnapshotConsistencyException("refresh failed"));
+        var draft = ActiveDraft();
+        var link = Link("Active", allowLiveSubmission: true) with { LiveSettingsGeneration = 2 };
+        var repository = new Mock<ISettingsAdministrationRepository>();
+        repository.Setup(service => service.ResolvePreviewContext(It.IsAny<byte[]>()))
+            .Returns(new PreviewContextSnapshot(link, draft, 2));
+        repository.Setup(service => service.GetCacheGeneration()).Returns(2);
+        var eligibility = new Mock<IPreviewBranchEligibilityService>();
+        eligibility.Setup(service => service.IsEligible(3, 3, 1)).Returns(true);
+        var resolver = new PreviewContextResolver(repository.Object, new PreviewTokenService(), eligibility.Object,
+            cache.Object, Options.Create(new SettingsAdministrationOptions()));
+        var melissa = new Mock<IMelissaRestClient>();
+        var papi = new Mock<IPapiClient>();
+        var email = new Mock<IEmailSender>();
+
+        var resolved = resolver.Resolve("refresh-failure-token");
+        Assert.IsNull(resolved);
+        var controller = new PreviewController(repository.Object,
+            new PreviewRequestContextAccessor { IsPreviewRequest = true, Current = resolved },
+            cache.Object, Mock.Of<IDbHelper>(), papi.Object, melissa.Object, email.Object)
+        {
+            ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() }
+        };
+        var result = controller.Submit("refresh-failure-token", null!);
+
+        Assert.IsInstanceOfType<NotFoundObjectResult>(result);
+        repository.Verify(service => service.TryAdmitLivePreviewSubmission(It.IsAny<long>(), It.IsAny<long>()), Times.Never);
+        Assert.AreEqual(0, melissa.Invocations.Count);
+        Assert.AreEqual(0, papi.Invocations.Count);
+        Assert.AreEqual(0, email.Invocations.Count);
+    }
+
+    [TestMethod]
+    public void LivePreviewProviderGenerationMismatch_IsRejectedBeforeAdmissionOrExternalClients()
+    {
+        var cache = new TestCache { Generation = 1 };
+        var draft = ActiveDraft();
+        var link = Link("Active", allowLiveSubmission: true) with { LiveSettingsGeneration = 2 };
+        var repository = new Mock<ISettingsAdministrationRepository>();
+        var melissa = new Mock<IMelissaRestClient>();
+        var papi = new Mock<IPapiClient>();
+        var email = new Mock<IEmailSender>();
+        var context = new PreviewRequestContext(link, draft, new PreviewSettingProvider(draft, 3, cache, 1));
+        var controller = new PreviewController(repository.Object,
+            new PreviewRequestContextAccessor { IsPreviewRequest = true, Current = context },
+            cache, Mock.Of<IDbHelper>(), papi.Object, melissa.Object, email.Object)
+        {
+            ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() }
+        };
+
+        var result = controller.Submit("mismatched-generation-token", new Registration(context.Settings));
+
+        Assert.IsInstanceOfType<NotFoundObjectResult>(result);
+        repository.Verify(service => service.TryAdmitLivePreviewSubmission(It.IsAny<long>(), It.IsAny<long>()), Times.Never);
+        Assert.AreEqual(0, melissa.Invocations.Count);
+        Assert.AreEqual(0, papi.Invocations.Count);
+        Assert.AreEqual(0, email.Invocations.Count);
+    }
+
     private static PreviewContextResolver CreateResolver(
         SettingDraft? draft = null,
         PreviewLinkRecord? link = null,
@@ -626,11 +761,12 @@ public class PreviewRequestContextTests
         draft ??= ActiveDraft();
         link ??= Link("Active");
         var repository = new Mock<ISettingsAdministrationRepository>();
+        repository.Setup(service => service.GetCacheGeneration()).Returns(1);
         var validSnapshot = link.RevokedAtUtc is null &&
             (link.ExpiresAtUtc is not { } expiration || expiration > DateTime.UtcNow);
         repository.Setup(service => service.ResolvePreviewContext(It.IsAny<byte[]>()))
             .Returns(validSnapshot && link.DraftStatus == DraftStatus.Active.ToString() && draft.Status == DraftStatus.Active
-                ? new PreviewContextSnapshot(link, draft)
+                ? new PreviewContextSnapshot(link, draft, 1)
                 : null);
         if (eligibility is null)
         {

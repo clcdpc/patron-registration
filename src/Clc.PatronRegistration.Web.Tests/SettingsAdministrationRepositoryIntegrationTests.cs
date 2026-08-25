@@ -521,6 +521,27 @@ update dbo.RegistrationSettingsCacheGeneration set Generation=0,ModifiedAtUtc=SY
     }
 
     [TestMethod]
+    public void ResolvePreviewContext_ReturnsTheAuthoritativeGenerationForSafeAndLiveLinks()
+    {
+        SeedVersion(0);
+        var draftId = SeedActiveDraft(0, First, "draft");
+
+        var safeHash = Enumerable.Repeat((byte)78, 32).ToArray();
+        var safeLinkId = repository.CreatePreviewLink(draftId, safeHash, false, 101, 1, Catalog, true, Audit());
+        var safe = repository.ResolvePreviewContext(safeHash);
+        Assert.IsNotNull(safe);
+        Assert.AreEqual(repository.GetCacheGeneration(), safe!.CacheGeneration);
+        Assert.IsNull(repository.GetPreviewLink(safeLinkId)!.LiveSettingsGeneration);
+
+        var liveHash = Enumerable.Repeat((byte)79, 32).ToArray();
+        var liveLinkId = repository.CreatePreviewLink(draftId, liveHash, true, 101, 1, Catalog, true, Audit());
+        var liveLink = repository.GetPreviewLink(liveLinkId)!;
+        var live = repository.ResolvePreviewContext(liveHash);
+        Assert.IsNotNull(live);
+        Assert.AreEqual(liveLink.LiveSettingsGeneration, live!.CacheGeneration);
+    }
+
+    [TestMethod]
     public async Task LivePreviewAdmission_SerializesDirectSaveAndRejectsStaleAdmission()
     {
         SeedVersion(0);

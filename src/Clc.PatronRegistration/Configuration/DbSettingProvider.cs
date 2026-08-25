@@ -23,6 +23,8 @@ namespace Clc.PatronRegistration.Configuration
         protected IReadOnlyList<OrganizationsGetRow> OrganizationSnapshot { get; }
         [JsonIgnore]
         public SettingsResolverSnapshot ResolutionSnapshot => SettingsSnapshot;
+        [JsonIgnore]
+        public long? SnapshotGeneration { get; }
 
         public DbSettingProvider(int orgId, ICache cache) : this(orgId, cache, "", 1) { }
 
@@ -37,6 +39,7 @@ namespace Clc.PatronRegistration.Configuration
             FormCode = formCode;
             Cache = cache;
             SystemOrganizationId = systemOrganizationId;
+            SnapshotGeneration = snapshot.Generation;
             SettingsSnapshot = snapshot.IndexedSettings;
             OrganizationSnapshot = snapshot.Organizations;
             _ = OrganizationSnapshot.Single(o => o.OrganizationID == OrganizationId);

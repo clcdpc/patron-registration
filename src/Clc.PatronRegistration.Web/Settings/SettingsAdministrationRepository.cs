@@ -4,6 +4,7 @@ using System.Security.Cryptography;
 using System.Text;
 using Clc.PatronRegistration.Administration;
 using Clc.PatronRegistration.Configuration;
+using Clc.PatronRegistration.Helpers;
 using Dapper;
 using Microsoft.Data.SqlClient;
 
@@ -57,7 +58,10 @@ public sealed record PreviewLinkRecord(
     int OperationalBranchId,
     long? LiveSettingsGeneration = null);
 
-public sealed record PreviewContextSnapshot(PreviewLinkRecord Link, SettingDraft Draft);
+public sealed record PreviewContextSnapshot(
+    PreviewLinkRecord Link,
+    SettingDraft Draft,
+    long? CacheGeneration = null);
 
 public sealed record PreviewLinkActions(bool Replace, bool Revoke, bool Restore, bool Remove);
 
@@ -259,7 +263,7 @@ public interface ISettingsAdministrationRepository
     void WriteAudit(string eventType, bool succeeded, AuditContext audit, string? failureReason = null, long? draftId = null, long? previewLinkId = null, string? metadataJson = null);
 }
 
-public sealed class SettingsAdministrationRepository : ISettingsAdministrationRepository
+public sealed class SettingsAdministrationRepository : ISettingsAdministrationRepository, ISettingsCacheGenerationProvider
 {
     private readonly string connectionString;
     private readonly TimeProvider timeProvider;
@@ -666,20 +670,20 @@ where p.TokenHash=@tokenHash and p.DraftId=@draftId and p.RevokedAtUtc is null
             return null;
         }
 
-        if (link.AllowLiveSubmission)
+        // Read the generation for every preview, including safe previews. The
+        // resolver must bind its live baseline to the same authoritative
+        // generation before it captures the process-local cache snapshot.
+        var currentGeneration = connection.QuerySingle<long>(
+            "select Generation from dbo.RegistrationSettingsCacheGeneration with(holdlock)",
+            transaction: transaction);
+        if (link.AllowLiveSubmission && link.LiveSettingsGeneration != currentGeneration)
         {
-            var currentGeneration = connection.QuerySingle<long>(
-                "select Generation from dbo.RegistrationSettingsCacheGeneration with(holdlock)",
-                transaction: transaction);
-            if (link.LiveSettingsGeneration != currentGeneration)
-            {
-                transaction.Commit();
-                return null;
-            }
+            transaction.Commit();
+            return null;
         }
 
         transaction.Commit();
-        return new PreviewContextSnapshot(link, draft);
+        return new PreviewContextSnapshot(link, draft, currentGeneration);
     }
 
     /// <summary>

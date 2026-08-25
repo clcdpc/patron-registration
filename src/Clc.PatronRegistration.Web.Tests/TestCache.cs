@@ -8,6 +8,16 @@ namespace Clc.PatronRegistration.Tests
     {
         public bool IsInitialized { get; set; } = true;
         private List<RegistrationFormSetting> settings = [];
+        private long? generation = 1;
+        public long? Generation
+        {
+            get => generation;
+            set
+            {
+                generation = value;
+                snapshot = null;
+            }
+        }
         private List<OrganizationsGetRow> organizations =
         [
             new() { OrganizationID = 1, Name = "System", OrganizationCodeID = 1, Abbreviation = "SYS" },
@@ -29,7 +39,8 @@ namespace Clc.PatronRegistration.Tests
 
         public CacheSnapshot GetSnapshot() => snapshot ??= new(
             Array.AsReadOnly(SettingsCache.ToArray()),
-            Array.AsReadOnly(OrganizationCache.ToArray()));
+            Array.AsReadOnly(OrganizationCache.ToArray()),
+            Generation);
 
         public List<RegistrationFormSetting> SettingsCache
         {

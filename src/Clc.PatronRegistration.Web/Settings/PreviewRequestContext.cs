@@ -39,20 +39,68 @@ public sealed class PreviewContextResolver(
         {
             return null;
         }
-        var snapshot = repository.ResolvePreviewContext(tokenService.Hash(token));
-        if (snapshot is null)
+
+        const int maximumAttempts = 3;
+        var tokenHash = tokenService.Hash(token);
+        for (var attempt = 0; attempt < maximumAttempts; attempt++)
         {
-            return null;
+            var contextSnapshot = repository.ResolvePreviewContext(tokenHash);
+            if (contextSnapshot is null)
+            {
+                return null;
+            }
+
+            var link = contextSnapshot.Link;
+            var draft = contextSnapshot.Draft;
+            if (!branchEligibility.IsEligible(draft.OrganizationId, link.OperationalBranchId, options.Value.SystemOrganizationId))
+            {
+                return null;
+            }
+
+            var generation = contextSnapshot.CacheGeneration ??
+                (link.AllowLiveSubmission ? link.LiveSettingsGeneration : null);
+            if (!generation.HasValue)
+            {
+                // A consistency-sensitive preview cannot safely fall back to
+                // an unversioned local cache snapshot.
+                return null;
+            }
+
+            CacheSnapshot cacheSnapshot;
+            try
+            {
+                cacheSnapshot = CacheSnapshot.CaptureAtGeneration(cache, generation.Value);
+            }
+            catch (CacheSnapshotConsistencyException)
+            {
+                return null;
+            }
+
+            // The SQL lookup and cache capture are separate operations. If a
+            // publication completed while the context was being assembled,
+            // retry so safe previews do not knowingly overlay a stale baseline
+            // on newer authoritative state. Live submissions also retain the
+            // final admission transaction as their check/use boundary.
+            bool generationStillCurrent;
+            try
+            {
+                generationStillCurrent = repository.GetCacheGeneration() == generation;
+            }
+            catch
+            {
+                return null;
+            }
+
+            if (cacheSnapshot.Generation != generation || !generationStillCurrent)
+            {
+                continue;
+            }
+
+            return new(link, draft, new PreviewSettingProvider(
+                draft, link.OperationalBranchId, cache, cacheSnapshot, options.Value.SystemOrganizationId));
         }
-        var link = snapshot.Link;
-        var draft = snapshot.Draft;
-        if (!branchEligibility.IsEligible(draft.OrganizationId, link.OperationalBranchId, options.Value.SystemOrganizationId))
-        {
-            return null;
-        }
-        var cacheSnapshot = CacheSnapshot.Capture(cache);
-        return new(link, draft, new PreviewSettingProvider(
-            draft, link.OperationalBranchId, cache, cacheSnapshot, options.Value.SystemOrganizationId));
+
+        return null;
     }
 }
 

@@ -96,7 +96,55 @@ public sealed class SettingsController(
             return Forbid();
         }
 
-        var cacheSnapshot = CacheSnapshot.Capture(cache);
+        const int maximumConsistencyAttempts = 3;
+        for (var attempt = 0; attempt < maximumConsistencyAttempts; attempt++)
+        {
+            long generation;
+            try
+            {
+                generation = repository.GetCacheGeneration();
+            }
+            catch
+            {
+                return SettingsConsistencyUnavailableResult();
+            }
+
+            CacheSnapshot cacheSnapshot;
+            try
+            {
+                cacheSnapshot = CacheSnapshot.CaptureAtGeneration(cache, generation);
+            }
+            catch (CacheSnapshotConsistencyException)
+            {
+                return SettingsConsistencyUnavailableResult();
+            }
+
+            var model = BuildIndexModel(principal, target, formCode, cacheSnapshot);
+            long currentGeneration;
+            try
+            {
+                currentGeneration = repository.GetCacheGeneration();
+            }
+            catch
+            {
+                return SettingsConsistencyUnavailableResult();
+            }
+
+            if (cacheSnapshot.Generation == generation && currentGeneration == generation)
+            {
+                return View(model);
+            }
+        }
+
+        return SettingsConsistencyUnavailableResult();
+    }
+
+    private SettingsIndexViewModel BuildIndexModel(
+        SettingsPrincipal principal,
+        int target,
+        string formCode,
+        CacheSnapshot cacheSnapshot)
+    {
         var libraryId = target == settingsOptions.SystemOrganizationId
             ? settingsOptions.SystemOrganizationId
             : cacheSnapshot.Organizations.GetLibrary(target).OrganizationID;
@@ -146,7 +194,7 @@ public sealed class SettingsController(
                 definition.IsSensitive ? null : draftChange?.Value,
                 draftChange?.Operation,
                 draft?.DraftId,
-                DescribeSource(resolution),
+                DescribeSource(resolution, cacheSnapshot),
                 definition.IsSensitive ? null : inheritedResolution?.EffectiveValue,
                 inheritedResolution?.SourceOrganizationId.HasValue == true,
                 effectiveAsset,
@@ -155,7 +203,7 @@ public sealed class SettingsController(
                 stagedAssetMissing,
                 inheritedAsset,
                 inheritedAssetMissing,
-                inheritedResolution is null ? null : DescribeSource(inheritedResolution),
+                inheritedResolution is null ? null : DescribeSource(inheritedResolution, cacheSnapshot),
                 DraftRevision: draft?.Revision));
         }
 
@@ -163,10 +211,10 @@ public sealed class SettingsController(
         var formDisplayName = formCodes.FirstOrDefault(form => form.FormCode.Equals(formCode, StringComparison.OrdinalIgnoreCase))?.DisplayName
             ?? (formCode.Length == 0 ? "Default form" : formCode);
 
-        var model = new SettingsIndexViewModel
+        return new SettingsIndexViewModel
         {
             OrganizationId = target,
-            OrganizationName = GetOrganizationName(target),
+            OrganizationName = GetOrganizationName(target, cacheSnapshot),
             LibraryId = libraryId,
             FormCode = formCode,
             FormDisplayName = formDisplayName,
@@ -177,12 +225,15 @@ public sealed class SettingsController(
             CanManageRestrictedDraft = principal.IsGlobal,
             PreviewLinks = draft is null ? [] : repository.GetPreviewLinks(draft.DraftId),
             PreviewBranches = GetPreviewBranches(target),
-            Scopes = GetAuthorizedScopes(principal),
+            Scopes = GetAuthorizedScopesAtSnapshot(principal, cacheSnapshot),
             FormCodes = formCodes,
             Settings = rows
         };
-        return View(model);
     }
+
+    private IActionResult SettingsConsistencyUnavailableResult() =>
+        StatusCode(StatusCodes.Status503ServiceUnavailable,
+            "Settings are temporarily unavailable. Reload and try again.");
 
     private SettingAssetPresentation? ResolveAsset(string? value, int organizationId, string formCode, out bool missing)
     {
@@ -208,7 +259,7 @@ public sealed class SettingsController(
         return new SettingAssetPresentation(metadata.AssetId, metadata.FileName, previewUrl);
     }
 
-    private string DescribeSource(ResolvedSetting resolution)
+    private string DescribeSource(ResolvedSetting resolution, CacheSnapshot? snapshot = null)
     {
         if (!resolution.SourceOrganizationId.HasValue)
         {
@@ -219,7 +270,7 @@ public sealed class SettingsController(
             return "System defaults";
         }
         var formName = resolution.SourceFormCode.Length == 0 ? "Default form" : $"{resolution.SourceFormCode} form";
-        return $"{GetOrganizationName(resolution.SourceOrganizationId.Value)} — {formName}";
+        return $"{GetOrganizationName(resolution.SourceOrganizationId.Value, snapshot)} — {formName}";
     }
 
     [HttpGet("help")]
@@ -1106,11 +1157,15 @@ public sealed class SettingsController(
         return result;
     }
 
-    private List<ScopeOption> GetAuthorizedScopes(SettingsPrincipal principal)
+    private List<ScopeOption> GetAuthorizedScopes(SettingsPrincipal principal) =>
+        GetAuthorizedScopesAtSnapshot(principal, null);
+
+    private List<ScopeOption> GetAuthorizedScopesAtSnapshot(SettingsPrincipal principal, CacheSnapshot? snapshot)
     {
+        var organizations = snapshot?.Organizations ?? cache.OrganizationCache;
         if (principal.IsGlobal)
         {
-            var libraries = cache.OrganizationCache.Where(organization => organization.OrganizationCodeID == 2)
+            var libraries = organizations.Where(organization => organization.OrganizationCodeID == 2)
                 .ToDictionary(organization => organization.OrganizationID);
             var scopes = new List<ScopeOption>
             {
@@ -1118,7 +1173,7 @@ public sealed class SettingsController(
             };
             scopes.AddRange(libraries.Values.OrderBy(library => library.Name, StringComparer.OrdinalIgnoreCase)
                 .Select(library => new ScopeOption(library.OrganizationID, library.Name, ScopeOptionGroup.Libraries)));
-            scopes.AddRange(cache.OrganizationCache.Where(organization => organization.OrganizationCodeID == 3)
+            scopes.AddRange(organizations.Where(organization => organization.OrganizationCodeID == 3)
                 .Select(branch =>
                 {
                     var parentName = branch.ParentOrganizationID.HasValue && libraries.TryGetValue(branch.ParentOrganizationID.Value, out var parent)
@@ -1130,10 +1185,11 @@ public sealed class SettingsController(
                 .ThenBy(branch => branch.DisplayName, StringComparer.OrdinalIgnoreCase));
             return scopes;
         }
-        var libraryId = GetLibraryId(principal.OrganizationId!.Value);
-        var libraryName = cache.GetOrg(libraryId).Name;
+        var libraryId = organizations.GetLibrary(principal.OrganizationId!.Value).OrganizationID;
+        var libraryName = organizations.Single(organization => organization.OrganizationID == libraryId).Name;
         var result = new List<ScopeOption> { new(libraryId, libraryName, ScopeOptionGroup.Libraries) };
-        result.AddRange(cache.GetBranches(libraryId).OrderBy(branch => branch.Name, StringComparer.OrdinalIgnoreCase)
+        result.AddRange(organizations.Where(organization => organization.ParentOrganizationID == libraryId)
+            .OrderBy(branch => branch.Name, StringComparer.OrdinalIgnoreCase)
             .Select(branch => new ScopeOption(branch.OrganizationID, $"{libraryName} — {branch.Name}", ScopeOptionGroup.Branches, libraryName)));
         return result;
     }
@@ -1201,9 +1257,9 @@ public sealed class SettingsController(
         : cache.OrganizationCache.FirstOrDefault(organization => organization.OrganizationID == organizationId)?.Name
             ?? $"Organization {organizationId}";
 
-    private string GetOrganizationName(int organizationId) => organizationId == settingsOptions.SystemOrganizationId
+    private string GetOrganizationName(int organizationId, CacheSnapshot? snapshot = null) => organizationId == settingsOptions.SystemOrganizationId
         ? "System defaults"
-        : cache.GetOrg(organizationId).DisplayName;
+        : (snapshot?.Organizations ?? cache.OrganizationCache).Single(organization => organization.OrganizationID == organizationId).DisplayName;
 
     private AuditContext CreateAudit(int organizationId, string formCode)
     {
