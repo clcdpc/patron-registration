@@ -558,7 +558,7 @@ update dbo.RegistrationSettingsCacheGeneration set Generation=0,ModifiedAtUtc=SY
         foreach (var (scope, value) in new[] { (101, "branch"), (2, "library"), (1, "system") })
         {
             var hash = Enumerable.Repeat((byte)scope, 32).ToArray();
-            var linkId = repository.CreatePreviewLink(draftId, hash, true, 101, 1, Catalog, true, Audit());
+            var linkId = CreatePreviewLinkAtCurrentRevision(draftId, hash, true, 101, 1, Catalog, true, Audit());
             var issued = repository.GetPreviewLink(linkId)!;
             Assert.AreEqual(repository.GetCacheGeneration(), issued.LiveSettingsGeneration);
             Assert.IsNotNull(repository.ResolvePreviewContext(hash));
@@ -577,14 +577,14 @@ update dbo.RegistrationSettingsCacheGeneration set Generation=0,ModifiedAtUtc=SY
         var draftId = SeedActiveDraft(0, First, "draft");
 
         var safeHash = Enumerable.Repeat((byte)78, 32).ToArray();
-        var safeLinkId = repository.CreatePreviewLink(draftId, safeHash, false, 101, 1, Catalog, true, Audit());
+        var safeLinkId = CreatePreviewLinkAtCurrentRevision(draftId, safeHash, false, 101, 1, Catalog, true, Audit());
         var safe = repository.ResolvePreviewContext(safeHash);
         Assert.IsNotNull(safe);
         Assert.AreEqual(repository.GetCacheGeneration(), safe!.CacheGeneration);
         Assert.IsNull(repository.GetPreviewLink(safeLinkId)!.LiveSettingsGeneration);
 
         var liveHash = Enumerable.Repeat((byte)79, 32).ToArray();
-        var liveLinkId = repository.CreatePreviewLink(draftId, liveHash, true, 101, 1, Catalog, true, Audit());
+        var liveLinkId = CreatePreviewLinkAtCurrentRevision(draftId, liveHash, true, 101, 1, Catalog, true, Audit());
         var liveLink = repository.GetPreviewLink(liveLinkId)!;
         var live = repository.ResolvePreviewContext(liveHash);
         Assert.IsNotNull(live);
@@ -597,7 +597,7 @@ update dbo.RegistrationSettingsCacheGeneration set Generation=0,ModifiedAtUtc=SY
         SeedVersion(0);
         var draftId = SeedActiveDraft(0, First, "draft");
         var hash = Enumerable.Repeat((byte)77, 32).ToArray();
-        var linkId = repository.CreatePreviewLink(draftId, hash, true, 101, 1, Catalog, true, Audit());
+        var linkId = CreatePreviewLinkAtCurrentRevision(draftId, hash, true, 101, 1, Catalog, true, Audit());
         var issued = repository.GetPreviewLink(linkId)!;
         var admission = repository.TryAdmitLivePreviewSubmission(linkId, issued.LiveSettingsGeneration!.Value);
         Assert.IsNotNull(admission);
@@ -645,9 +645,9 @@ update dbo.RegistrationSettingsCacheGeneration set Generation=0,ModifiedAtUtc=SY
     {
         var firstDraftId = SeedDraftAtScope(101, "preview-one", "Active");
         var secondDraftId = SeedDraftAtScope(101, "preview-two", "Active");
-        var firstLinkId = repository.CreatePreviewLink(firstDraftId,
+        var firstLinkId = CreatePreviewLinkAtCurrentRevision(firstDraftId,
             Enumerable.Repeat((byte)80, 32).ToArray(), true, 101, 1, Catalog, true, Audit());
-        var secondLinkId = repository.CreatePreviewLink(secondDraftId,
+        var secondLinkId = CreatePreviewLinkAtCurrentRevision(secondDraftId,
             Enumerable.Repeat((byte)81, 32).ToArray(), true, 101, 1, Catalog, true, Audit());
         var generation = repository.GetCacheGeneration();
         Assert.AreEqual(generation, repository.GetPreviewLink(firstLinkId)!.LiveSettingsGeneration);
@@ -726,7 +726,7 @@ update dbo.RegistrationSettingsCacheGeneration set Generation=0,ModifiedAtUtc=SY
         SeedVersion(0);
         var draftId = SeedActiveDraft(0, Html, "draft");
         var hash = Enumerable.Repeat((byte)78, 32).ToArray();
-        var linkId = repository.CreatePreviewLink(draftId, hash, true, 101, 1, Catalog, true, Audit());
+        var linkId = CreatePreviewLinkAtCurrentRevision(draftId, hash, true, 101, 1, Catalog, true, Audit());
         var issued = repository.GetPreviewLink(linkId)!;
         var admission = repository.TryAdmitLivePreviewSubmission(linkId, issued.LiveSettingsGeneration!.Value);
         Assert.IsNotNull(admission);
@@ -1686,7 +1686,7 @@ update dbo.RegistrationSettingsCacheGeneration set Generation=0,ModifiedAtUtc=SY
         SeedVersion(1);
         var draftId = SeedActiveDraft(1, First, "draft");
         var hash = Enumerable.Repeat((byte)31, 32).ToArray();
-        var linkId = repository.CreatePreviewLink(draftId, hash, true, 101, 1, Catalog, true, Audit());
+        var linkId = CreatePreviewLinkAtCurrentRevision(draftId, hash, true, 101, 1, Catalog, true, Audit());
         Assert.IsNotNull(repository.ResolvePreviewContext(hash));
 
         repository.SaveToSharedDraft(101, "form", 1, draftId,
@@ -1703,7 +1703,7 @@ update dbo.RegistrationSettingsCacheGeneration set Generation=0,ModifiedAtUtc=SY
         SeedVersion(1);
         var draftId = SeedActiveDraft(1, First, "draft");
         var hash = Enumerable.Repeat((byte)32, 32).ToArray();
-        var linkId = repository.CreatePreviewLink(draftId, hash, true, 101, 1, Catalog, true, Audit());
+        var linkId = CreatePreviewLinkAtCurrentRevision(draftId, hash, true, 101, 1, Catalog, true, Audit());
         Assert.IsNotNull(repository.ResolvePreviewContext(hash));
 
         repository.RemoveDraftChange(draftId, First.Key, Catalog, true, Audit(), 0);
@@ -1739,10 +1739,72 @@ update dbo.RegistrationSettingsCacheGeneration set Generation=0,ModifiedAtUtc=SY
     {
         SeedVersion(1);
         var draftId = SeedActiveDraft(1, First, "draft");
-        var linkId = repository.CreatePreviewLink(draftId, new byte[32], false, 101, lifetimeHours, Catalog, true, Audit());
+        var linkId = CreatePreviewLinkAtCurrentRevision(draftId, new byte[32], false, 101, lifetimeHours, Catalog, true, Audit());
 
         Assert.AreEqual(clock.GetUtcNow().UtcDateTime.AddHours(lifetimeHours), ReadPreviewExpiration(linkId));
         AssertAuditCount("PreviewLinkCreated", 1);
+    }
+
+    [DataTestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public void CreatePreviewLink_RejectsStaleDraftRevisionBeforeWritingLinkOrSuccessAudit(bool allowLiveSubmission)
+    {
+        SeedVersion(1);
+        var created = repository.SaveToSharedDraft(101, "form", 1, null,
+            [Upsert(First, "revision N")], Catalog, Audit());
+        var loaded = repository.GetDraft(created.DraftId)!;
+        var expectedRevision = loaded.Revision;
+
+        var newer = repository.SaveToSharedDraft(101, "form", 1, created.DraftId,
+            [Upsert(Second, "revision N+1")], Catalog, Audit(), expectedRevision);
+        Assert.AreEqual(expectedRevision + 1, newer.DraftRevision);
+
+        Assert.ThrowsException<DBConcurrencyException>(() => repository.CreatePreviewLink(created.DraftId,
+            Enumerable.Repeat((byte)(allowLiveSubmission ? 91 : 90), 32).ToArray(), allowLiveSubmission,
+            101, 1, Catalog, true, Audit(), expectedRevision));
+
+        Assert.AreEqual(0, Scalar<int>("select count(*) from dbo.RegistrationSettingPreviewLinks"));
+        Assert.AreEqual(0, Scalar<int>("select count(*) from dbo.RegistrationSettingAuditEvents where EventType='PreviewLinkCreated' and Succeeded=1"));
+    }
+
+    [DataTestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public void CreatePreviewLink_RejectsMissingDraftRevisionInsteadOfUsingCurrent(bool allowLiveSubmission)
+    {
+        SeedVersion(1);
+        var created = repository.SaveToSharedDraft(101, "form", 1, null,
+            [Upsert(First, "current revision")], Catalog, Audit());
+        var current = repository.GetDraft(created.DraftId)!;
+
+        Assert.ThrowsException<DBConcurrencyException>(() => repository.CreatePreviewLink(created.DraftId,
+            Enumerable.Repeat((byte)(allowLiveSubmission ? 93 : 92), 32).ToArray(), allowLiveSubmission,
+            101, 1, Catalog, true, Audit(), null));
+
+        Assert.AreEqual(0, Scalar<int>("select count(*) from dbo.RegistrationSettingPreviewLinks"));
+        Assert.AreEqual(0, Scalar<int>("select count(*) from dbo.RegistrationSettingAuditEvents where EventType='PreviewLinkCreated' and Succeeded=1"));
+        Assert.AreEqual(current.Revision, repository.GetDraft(created.DraftId)!.Revision);
+    }
+
+    [DataTestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public void CreatePreviewLink_SucceedsWithCurrentDraftRevision(bool allowLiveSubmission)
+    {
+        SeedVersion(1);
+        var created = repository.SaveToSharedDraft(101, "form", 1, null,
+            [Upsert(First, "current revision")], Catalog, Audit());
+        var current = repository.GetDraft(created.DraftId)!;
+        var linkId = repository.CreatePreviewLink(created.DraftId,
+            Enumerable.Repeat((byte)(allowLiveSubmission ? 95 : 94), 32).ToArray(), allowLiveSubmission,
+            101, 1, Catalog, true, Audit(), current.Revision);
+
+        var link = repository.GetPreviewLink(linkId)!;
+        Assert.AreEqual(allowLiveSubmission, link.AllowLiveSubmission);
+        Assert.AreEqual(allowLiveSubmission ? repository.GetCacheGeneration() : null, link.LiveSettingsGeneration);
+        Assert.AreEqual(1, Scalar<int>("select count(*) from dbo.RegistrationSettingPreviewLinks"));
+        Assert.AreEqual(1, Scalar<int>("select count(*) from dbo.RegistrationSettingAuditEvents where EventType='PreviewLinkCreated' and Succeeded=1"));
     }
 
     [DataTestMethod]
@@ -1753,7 +1815,7 @@ update dbo.RegistrationSettingsCacheGeneration set Generation=0,ModifiedAtUtc=SY
     {
         SeedVersion(1);
         var draftId = SeedActiveDraft(1, First, "draft");
-        Assert.ThrowsException<ArgumentOutOfRangeException>(() => repository.CreatePreviewLink(draftId,
+        Assert.ThrowsException<ArgumentOutOfRangeException>(() => CreatePreviewLinkAtCurrentRevision(draftId,
             new byte[32], false, 101, lifetimeHours, Catalog, true, Audit()));
         Assert.AreEqual(0, Scalar<int>("select count(*) from dbo.RegistrationSettingPreviewLinks"));
         AssertAuditCount("PreviewLinkCreated", 0);
@@ -1765,7 +1827,7 @@ update dbo.RegistrationSettingsCacheGeneration set Generation=0,ModifiedAtUtc=SY
         SeedVersion(1);
         var draftId = SeedActiveDraft(1, First, "draft");
         var hash = Enumerable.Repeat((byte)7, 32).ToArray();
-        repository.CreatePreviewLink(draftId, hash, false, 101, 1, Catalog, true, Audit());
+        CreatePreviewLinkAtCurrentRevision(draftId, hash, false, 101, 1, Catalog, true, Audit());
 
         clock.Advance(TimeSpan.FromHours(1) - TimeSpan.FromSeconds(1));
         Assert.IsNotNull(repository.ResolvePreviewContext(hash));
@@ -1803,7 +1865,7 @@ values(@draftId,@hash,0,101,'legacy','legacy',null)", parameters: command =>
         SeedVersion(1);
         var draftId = SeedActiveDraft(1, First, "draft");
         clock.SetUtcNow(DateTimeOffset.UtcNow);
-        var originalId = repository.CreatePreviewLink(draftId, Enumerable.Repeat((byte)3, 32).ToArray(),
+        var originalId = CreatePreviewLinkAtCurrentRevision(draftId, Enumerable.Repeat((byte)3, 32).ToArray(),
             originalLive, 101, 24, Catalog, true, Audit());
         var expectedExpiration = repository.GetPreviewLink(originalId)!.ExpiresAtUtc;
 
@@ -1820,7 +1882,7 @@ values(@draftId,@hash,0,101,'legacy','legacy',null)", parameters: command =>
     {
         SeedVersion(1);
         var draftId = SeedActiveDraft(1, First, "draft");
-        var originalId = repository.CreatePreviewLink(draftId, Enumerable.Repeat((byte)5, 32).ToArray(),
+        var originalId = CreatePreviewLinkAtCurrentRevision(draftId, Enumerable.Repeat((byte)5, 32).ToArray(),
             false, 101, 1, Catalog, true, Audit());
         var original = repository.GetPreviewLink(originalId)!;
         var auditCount = Scalar<int>("select count(*) from dbo.RegistrationSettingAuditEvents where EventType='PreviewLinkModeReplaced' and Succeeded=1");
@@ -1842,7 +1904,7 @@ values(@draftId,@hash,0,101,'legacy','legacy',null)", parameters: command =>
         SeedVersion(1);
         var draftId = SeedActiveDraft(1, First, "draft");
         var hash = Enumerable.Repeat((byte)11, 32).ToArray();
-        var linkId = repository.CreatePreviewLink(draftId, hash, true, 101, 1, Catalog, true, Audit());
+        var linkId = CreatePreviewLinkAtCurrentRevision(draftId, hash, true, 101, 1, Catalog, true, Audit());
         var previousExpiration = repository.GetPreviewLink(linkId)!.ExpiresAtUtc!.Value;
         clock.Advance(TimeSpan.FromHours(2));
 
@@ -1882,7 +1944,7 @@ values(@draftId,@hash,0,101,'legacy','legacy',null)", parameters: command =>
     {
         SeedVersion(1);
         var draftId = SeedActiveDraft(1, First, "draft");
-        var activeId = repository.CreatePreviewLink(draftId, Enumerable.Repeat((byte)13, 32).ToArray(), false, 101, 2, Catalog, true, Audit());
+        var activeId = CreatePreviewLinkAtCurrentRevision(draftId, Enumerable.Repeat((byte)13, 32).ToArray(), false, 101, 2, Catalog, true, Audit());
         Assert.ThrowsException<DBConcurrencyException>(() => repository.RestorePreviewLink(activeId, 24, Catalog, true, Audit()));
         Assert.AreEqual(clock.GetUtcNow().UtcDateTime.AddHours(2), repository.GetPreviewLink(activeId)!.ExpiresAtUtc);
 
@@ -2158,6 +2220,17 @@ output inserted.PreviewLinkId values(@draftId,@hash,0,101,'other','other',@expir
         command.Parameters.AddWithValue("@revokedBy", revoked ? "other" : DBNull.Value);
         return (long)command.ExecuteScalar()!;
     }
+
+    private long CreatePreviewLinkAtCurrentRevision(long draftId, byte[] tokenHash, bool allowLiveSubmission,
+        int operationalBranchId, int lifetimeHours, IReadOnlyDictionary<string, SettingDefinition> catalog,
+        bool canManageSensitive, AuditContext audit)
+    {
+        var expectedDraftRevision = repository.GetDraft(draftId)?.Revision;
+        Assert.IsNotNull(expectedDraftRevision);
+        return repository.CreatePreviewLink(draftId, tokenHash, allowLiveSubmission, operationalBranchId,
+            lifetimeHours, catalog, canManageSensitive, audit, expectedDraftRevision);
+    }
+
     private void SeedFormCodeMetadata(string formCode, string displayName, DateTime modifiedAtUtc)
     {
         using var connection = Open();

@@ -242,7 +242,8 @@ public interface ISettingsAdministrationRepository
         long? expectedDraftRevision);
     void DirectSave(int organizationId, string formCode, long expectedVersion, IReadOnlyList<SettingMutation> changes, IReadOnlyDictionary<string, SettingDefinition> catalog, AuditContext audit);
     long CreatePreviewLink(long draftId, byte[] tokenHash, bool allowLiveSubmission, int operationalBranchId,
-        int lifetimeHours, IReadOnlyDictionary<string, SettingDefinition> catalog, bool canManageSensitive, AuditContext audit);
+        int lifetimeHours, IReadOnlyDictionary<string, SettingDefinition> catalog, bool canManageSensitive, AuditContext audit,
+        long? expectedDraftRevision);
     PreviewContextSnapshot? ResolvePreviewContext(byte[] tokenHash);
     ILivePreviewSubmissionAdmission? TryAdmitLivePreviewSubmission(long previewLinkId, long expectedGeneration);
     bool IsLivePreviewCurrent(long previewLinkId, long expectedGeneration);
@@ -599,7 +600,8 @@ update dbo.RegistrationSettingPreviewLinks set RevokedAtUtc=coalesce(RevokedAtUt
     }
 
     public long CreatePreviewLink(long draftId, byte[] tokenHash, bool allowLiveSubmission, int operationalBranchId,
-        int lifetimeHours, IReadOnlyDictionary<string, SettingDefinition> catalog, bool canManageSensitive, AuditContext audit)
+        int lifetimeHours, IReadOnlyDictionary<string, SettingDefinition> catalog, bool canManageSensitive, AuditContext audit,
+        long? expectedDraftRevision)
     {
         if (lifetimeHours is < 1 or > SettingsAdministrationOptions.MaximumPreviewLinkLifetimeHours)
             throw new ArgumentOutOfRangeException(nameof(lifetimeHours));
@@ -607,8 +609,16 @@ update dbo.RegistrationSettingPreviewLinks set RevokedAtUtc=coalesce(RevokedAtUt
         var expiresAtUtc = nowUtc.AddHours(lifetimeHours);
         using var connection = Open();
         using var transaction = connection.BeginTransaction(IsolationLevel.Serializable);
-        EnsureActiveDraft(connection, transaction, draftId);
+        var currentRevision = EnsureActiveDraft(connection, transaction, draftId);
         EnsureCanManageRestrictedDraft(connection, transaction, draftId, catalog, canManageSensitive);
+        if (!expectedDraftRevision.HasValue)
+        {
+            throw new DBConcurrencyException("The shared draft revision is required. Reload the settings page and retry.");
+        }
+        if (currentRevision != expectedDraftRevision.Value)
+        {
+            throw new DBConcurrencyException("The shared draft changed after this page was loaded. Reload and review before creating a preview link.");
+        }
         var liveSettingsGeneration = allowLiveSubmission
             ? connection.QuerySingle<long>(
                 "select Generation from dbo.RegistrationSettingsCacheGeneration with(holdlock)",

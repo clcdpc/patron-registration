@@ -633,7 +633,8 @@ public sealed class SettingsController(
         {
             repository.CreatePreviewLink(draftId, token.Hash, request.AllowLiveSubmission, operationalBranchId.Value,
                 settingsOptions.PreviewLinkLifetimeHours, CatalogByKey,
-                authorization.Describe(User).IsGlobal, CreateAudit(request.OrganizationId, request.FormCode));
+                authorization.Describe(User).IsGlobal, CreateAudit(request.OrganizationId, request.FormCode),
+                request.ExpectedDraftRevision);
         }
         catch (UnauthorizedAccessException)
         {

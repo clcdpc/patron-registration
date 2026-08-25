@@ -271,6 +271,7 @@ public sealed class PreviewLinkRequest
     public string FormCode { get => formCode; set => formCode = FormCodeNormalizer.Normalize(value); }
     public bool AllowLiveSubmission { get; set; }
     public int? OperationalBranchId { get; set; }
+    public long? ExpectedDraftRevision { get; set; }
 }
 
 public sealed class FormsViewModel

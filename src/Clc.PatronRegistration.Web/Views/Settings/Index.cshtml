@@ -119,7 +119,7 @@
     <section class="preview-tools" aria-labelledby="preview-tools-title">
       <h3 id="preview-tools-title">Preview tools</h3>
       <form asp-action="CreatePreviewLink" asp-route-draftId="@Model.ActiveDraft.DraftId" method="post" data-preview-form data-guard-action>
-        @Html.AntiForgeryToken()<input type="hidden" name="OrganizationId" value="@Model.OrganizationId" /><input type="hidden" name="FormCode" value="@Model.FormCode" />
+        @Html.AntiForgeryToken()<input type="hidden" name="OrganizationId" value="@Model.OrganizationId" /><input type="hidden" name="FormCode" value="@Model.FormCode" /><input type="hidden" name="ExpectedDraftRevision" value="@Model.ActiveDraft.Revision" />
         <div class="preview-create-row">
           <div class="preview-branch-field">
             <label for="preview-operational-branch">Preview as branch</label>
