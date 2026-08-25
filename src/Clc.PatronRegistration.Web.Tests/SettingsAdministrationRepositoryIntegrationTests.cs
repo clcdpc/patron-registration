@@ -513,10 +513,118 @@ update dbo.RegistrationSettingsCacheGeneration set Generation=0,ModifiedAtUtc=SY
             Assert.AreEqual(repository.GetCacheGeneration(), issued.LiveSettingsGeneration);
             Assert.IsNotNull(repository.ResolvePreviewContext(hash));
 
-            repository.DirectSave(scope, "form", 0, [Upsert(First, value)], Catalog, Audit());
+            repository.DirectSave(scope, "form", 0, [Upsert(Html, value)], Catalog, Audit());
 
             Assert.IsNull(repository.ResolvePreviewContext(hash), $"scope {scope} did not invalidate the live link");
             Assert.IsFalse(repository.IsLivePreviewCurrent(linkId, issued.LiveSettingsGeneration!.Value));
+        }
+    }
+
+    [TestMethod]
+    public async Task LivePreviewAdmission_SerializesDirectSaveAndRejectsStaleAdmission()
+    {
+        SeedVersion(0);
+        var draftId = SeedActiveDraft(0, First, "draft");
+        var hash = Enumerable.Repeat((byte)77, 32).ToArray();
+        var linkId = repository.CreatePreviewLink(draftId, hash, true, 101, 1, Catalog, true, Audit());
+        var issued = repository.GetPreviewLink(linkId)!;
+        var admission = repository.TryAdmitLivePreviewSubmission(linkId, issued.LiveSettingsGeneration!.Value);
+        Assert.IsNotNull(admission);
+
+        var generationUpdateAttempted = CompletionSource();
+        SettingsAdministrationRepository.BeforeLiveSettingsGenerationIncrementForTesting = () =>
+            generationUpdateAttempted.TrySetResult(true);
+        try
+        {
+            var save = Task.Run(() =>
+            {
+                try
+                {
+                    repository.DirectSave(101, "form", 0, [Upsert(Html, "published")], Catalog, Audit());
+                    return (Exception?)null;
+                }
+                catch (Exception exception)
+                {
+                    return exception;
+                }
+            });
+
+            await generationUpdateAttempted.Task.WaitAsync(ConcurrencyTestTimeout);
+            Assert.IsFalse(save.IsCompleted, "The live-settings publication passed the generation lock while admission was held.");
+
+            admission.Dispose();
+            await save.WaitAsync(ConcurrencyTestTimeout);
+            Assert.IsNull(save.Result, save.Result?.ToString());
+            Assert.AreEqual(issued.LiveSettingsGeneration.Value + 1, repository.GetCacheGeneration());
+            Assert.IsFalse(repository.IsLivePreviewCurrent(linkId, issued.LiveSettingsGeneration.Value));
+
+            using var staleAdmission = repository.TryAdmitLivePreviewSubmission(
+                linkId, issued.LiveSettingsGeneration.Value);
+            Assert.IsNull(staleAdmission, "A preview whose generation was invalidated must not enter patron creation.");
+        }
+        finally
+        {
+            admission.Dispose();
+            SettingsAdministrationRepository.BeforeLiveSettingsGenerationIncrementForTesting = null;
+        }
+    }
+
+    [TestMethod]
+    public async Task LivePreviewAdmission_SerializesCommitDraftAndRejectsRevokedAdmission()
+    {
+        SeedVersion(0);
+        var draftId = SeedActiveDraft(0, Html, "draft");
+        var hash = Enumerable.Repeat((byte)78, 32).ToArray();
+        var linkId = repository.CreatePreviewLink(draftId, hash, true, 101, 1, Catalog, true, Audit());
+        var issued = repository.GetPreviewLink(linkId)!;
+        var admission = repository.TryAdmitLivePreviewSubmission(linkId, issued.LiveSettingsGeneration!.Value);
+        Assert.IsNotNull(admission);
+
+        var commitAttempted = CompletionSource();
+        RegistrationFormAssetReferenceCoordinator.AfterAcquireForTesting = operation =>
+        {
+            if (operation == nameof(SettingsAdministrationRepository.CommitDraft))
+            {
+                commitAttempted.TrySetResult(true);
+            }
+        };
+        Task<Exception?>? commit = null;
+        try
+        {
+            commit = Task.Run(() =>
+            {
+                try
+                {
+                    repository.CommitDraft(draftId, Catalog, true, Audit());
+                    return (Exception?)null;
+                }
+                catch (Exception exception)
+                {
+                    return exception;
+                }
+            });
+
+            await commitAttempted.Task.WaitAsync(ConcurrencyTestTimeout);
+            Assert.IsFalse(commit.IsCompleted, "The draft commit passed the admitted-preview draft lock.");
+
+            admission.Dispose();
+            await commit.WaitAsync(ConcurrencyTestTimeout);
+            Assert.IsNull(commit.Result, commit.Result?.ToString());
+
+            using var staleAdmission = repository.TryAdmitLivePreviewSubmission(
+                linkId, issued.LiveSettingsGeneration.Value);
+            Assert.IsNull(staleAdmission, "A committed draft must not admit its old live-preview link.");
+        }
+        finally
+        {
+            admission.Dispose();
+            RegistrationFormAssetReferenceCoordinator.BeforeAcquireForTesting = null;
+            RegistrationFormAssetReferenceCoordinator.AfterAcquireForTesting = null;
+            if (commit is not null)
+            {
+                try { await commit.WaitAsync(ConcurrencyTestTimeout); }
+                catch { /* Preserve the original test failure. */ }
+            }
         }
     }
 

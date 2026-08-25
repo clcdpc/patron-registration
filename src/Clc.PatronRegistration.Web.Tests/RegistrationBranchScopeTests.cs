@@ -171,6 +171,96 @@ public sealed class RegistrationBranchScopeTests
         Assert.IsFalse(outOfScope.IsValid);
     }
 
+    [TestMethod]
+    public void BranchScopedRoute_WithBranchSelectionEnabled_OffersSiblingsAndRejectsAnotherLibrary()
+    {
+        var organizations = new List<OrganizationsGetRow>
+        {
+            Organization(1, null, 1),
+            Organization(2, 1, 2),
+            Organization(3, 2),
+            Organization(4, 2),
+            Organization(8, 1, 2),
+            Organization(9, 8)
+        };
+        var cache = new Mock<ICache>();
+        cache.SetupGet(value => value.OrganizationCache).Returns(organizations);
+        cache.SetupGet(value => value.SettingsCache).Returns([]);
+        cache.Setup(value => value.GetOrg(It.IsAny<int>()))
+            .Returns((int id) => organizations.Single(value => value.OrganizationID == id));
+        var db = new Mock<IDbHelper>();
+        db.Setup(value => value.GetSelfRegistrationBranches(2)).Returns([organizations[2], organizations[3]]);
+        var requestSettings = new DbSettingProvider(3, cache.Object, "form", 1);
+        var httpContext = new DefaultHttpContext();
+        httpContext.Request.RouteValues["formCode"] = "form";
+        var settingResolver = new RequestSettingProviderResolver(
+            new PreviewRequestContextAccessor(), new SettingsPageBrandingContextAccessor(),
+            Mock.Of<ISettingsAuthorizationService>(), Mock.Of<IFormCodeAvailabilityService>(), cache.Object,
+            Options.Create(new SettingsAdministrationOptions()), new RegistrationConfiguration());
+        var resolver = new RegistrationScopeResolver(db.Object, cache.Object, settingResolver);
+
+        var available = resolver.GetAvailableBranches(httpContext, requestSettings);
+        var sibling = resolver.ResolveForSubmission(httpContext, requestSettings, 4);
+        var outOfLibrary = resolver.ResolveForSubmission(httpContext, requestSettings, 9);
+
+        CollectionAssert.AreEquivalent(new[] { 3, 4 }, available.Select(value => value.OrganizationID).ToArray());
+        Assert.IsTrue(sibling.IsValid);
+        Assert.AreEqual(4, sibling.Settings.OrganizationId);
+        Assert.AreEqual(2, sibling.Settings.LibraryId);
+        Assert.IsFalse(outOfLibrary.IsValid);
+    }
+
+    [TestMethod]
+    public void BranchScopedRoute_RendersSelectedSiblingSettingsAndRejectsOutOfLibrarySelection()
+    {
+        var organizations = new List<OrganizationsGetRow>
+        {
+            Organization(1, null, 1),
+            Organization(2, 1, 2),
+            Organization(3, 2),
+            Organization(4, 2),
+            Organization(8, 1, 2),
+            Organization(9, 8)
+        };
+        var routeSettings = Settings(requiredUser5: false, organizationId: 3, libraryId: 2);
+        var siblingSettings = Settings(requiredUser5: true, organizationId: 4, libraryId: 2,
+            melissaKey: "sibling-melissa", postmarkKey: "sibling-postmark");
+        CacheHelper.Configure(new TestCache { OrganizationCache = organizations });
+        var db = new Mock<IDbHelper>();
+        db.Setup(value => value.GetSelfRegistrationOrganizations(null)).Returns(organizations);
+        db.Setup(value => value.GetGendersToOrganizations(4)).Returns([]);
+        db.Setup(value => value.GetPickupBranches(2)).Returns([]);
+        var scopeResolver = new Mock<IRegistrationScopeResolver>();
+        scopeResolver.Setup(value => value.ResolveForSubmission(
+                It.IsAny<HttpContext>(), routeSettings.Object, 4))
+            .Returns(new RegistrationScopeResolution(true, siblingSettings.Object));
+        scopeResolver.Setup(value => value.ResolveForSubmission(
+                It.IsAny<HttpContext>(), routeSettings.Object, 9))
+            .Returns(new RegistrationScopeResolution(false, routeSettings.Object));
+        scopeResolver.Setup(value => value.GetAvailableBranches(
+                It.IsAny<HttpContext>(), routeSettings.Object))
+            .Returns([organizations[2], organizations[3]]);
+        var controller = CreateGetController(routeSettings.Object, db.Object, scopeResolver.Object);
+
+        var selectedResult = controller.Create(3, selectedBranchId: 4);
+        var selectedView = selectedResult as ViewResult;
+        var selectedModel = selectedView?.Model as Registration;
+
+        Assert.IsNotNull(selectedModel);
+        Assert.AreSame(siblingSettings.Object, selectedModel.Settings);
+        Assert.AreEqual(4, selectedModel.PatronBranchID);
+        CollectionAssert.AreEquivalent(new[] { "3", "4" },
+            selectedModel.Branches.Select(value => value.Value).ToArray());
+
+        var rejectedResult = controller.Create(3, selectedBranchId: 9);
+
+        Assert.AreEqual("Unavailable", ((ViewResult)rejectedResult).ViewName);
+        scopeResolver.Verify(value => value.ResolveForSubmission(
+            It.IsAny<HttpContext>(), routeSettings.Object, 4), Times.Once);
+        scopeResolver.Verify(value => value.ResolveForSubmission(
+            It.IsAny<HttpContext>(), routeSettings.Object, 9), Times.Once);
+    }
+
     [DataTestMethod]
     [DataRow(3)]
     [DataRow(4)]

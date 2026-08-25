@@ -54,10 +54,8 @@ public sealed record PreviewLinkRecord(
     int OrganizationId,
     string FormCode,
     string DraftStatus,
-    int OperationalBranchId)
-{
-    public long? LiveSettingsGeneration { get; init; }
-}
+    int OperationalBranchId,
+    long? LiveSettingsGeneration = null);
 
 public sealed record PreviewContextSnapshot(PreviewLinkRecord Link, SettingDraft Draft);
 
@@ -78,7 +76,8 @@ public enum PreviewLockStep
     CandidateLookupOutsideTransaction,
     Draft,
     PreviewLink,
-    DraftChanges
+    DraftChanges,
+    LiveSettingsGeneration
 }
 
 public static class PreviewLockOrder
@@ -88,7 +87,8 @@ public static class PreviewLockOrder
         PreviewLockStep.CandidateLookupOutsideTransaction,
         PreviewLockStep.Draft,
         PreviewLockStep.PreviewLink,
-        PreviewLockStep.DraftChanges
+        PreviewLockStep.DraftChanges,
+        PreviewLockStep.LiveSettingsGeneration
     ];
 }
 
@@ -131,7 +131,7 @@ public static class FormCodeDeletionOwnership
         return new FormCodeDeletionTarget(ownerOrganizationId, formCode, kind, !ownerMetadata);
     }
 }
-public enum FormCodeDeletionLockStep { Drafts, PreviewLinks, Metadata, ScopeVersions, Settings }
+public enum FormCodeDeletionLockStep { Drafts, PreviewLinks, Metadata, ScopeVersions, Settings, LiveSettingsGeneration }
 public static class FormCodeDeletionLockOrder
 {
     public static IReadOnlyList<FormCodeDeletionLockStep> Required { get; } =
@@ -140,7 +140,8 @@ public static class FormCodeDeletionLockOrder
         FormCodeDeletionLockStep.PreviewLinks,
         FormCodeDeletionLockStep.Metadata,
         FormCodeDeletionLockStep.ScopeVersions,
-        FormCodeDeletionLockStep.Settings
+        FormCodeDeletionLockStep.Settings,
+        FormCodeDeletionLockStep.LiveSettingsGeneration
     ];
 }
 
@@ -174,6 +175,49 @@ public sealed record SaveToDraftResult(long DraftId, bool DraftCreated)
     public long DraftRevision { get; init; }
 }
 
+public interface ILivePreviewSubmissionAdmission : IDisposable
+{
+}
+
+internal sealed class SqlLivePreviewSubmissionAdmission : ILivePreviewSubmissionAdmission
+{
+    private SqlConnection? connection;
+    private SqlTransaction? transaction;
+    private int disposed;
+
+    internal SqlLivePreviewSubmissionAdmission(SqlConnection connection, SqlTransaction transaction)
+    {
+        this.connection = connection;
+        this.transaction = transaction;
+    }
+
+    public void Dispose()
+    {
+        if (Interlocked.Exchange(ref disposed, 1) != 0)
+        {
+            return;
+        }
+
+        var transaction = this.transaction;
+        this.transaction = null;
+        try
+        {
+            // The admission transaction is read-only. Rolling it back releases
+            // the generation lock without making lock-release failures part of
+            // the already-completed registration result.
+            try { transaction?.Rollback(); }
+            catch { /* Closing the connection below still releases the lock. */ }
+        }
+        finally
+        {
+            transaction?.Dispose();
+            var connection = this.connection;
+            this.connection = null;
+            connection?.Dispose();
+        }
+    }
+}
+
 public interface ISettingsAdministrationRepository
 {
     long GetVersion(int organizationId, string formCode);
@@ -194,6 +238,7 @@ public interface ISettingsAdministrationRepository
     long CreatePreviewLink(long draftId, byte[] tokenHash, bool allowLiveSubmission, int operationalBranchId,
         int lifetimeHours, IReadOnlyDictionary<string, SettingDefinition> catalog, bool canManageSensitive, AuditContext audit);
     PreviewContextSnapshot? ResolvePreviewContext(byte[] tokenHash);
+    ILivePreviewSubmissionAdmission? TryAdmitLivePreviewSubmission(long previewLinkId, long expectedGeneration);
     bool IsLivePreviewCurrent(long previewLinkId, long expectedGeneration);
     PreviewLinkRecord? GetPreviewLink(long previewLinkId);
     IReadOnlyList<PreviewLinkRecord> GetPreviewLinks(long draftId);
@@ -216,6 +261,10 @@ public sealed class SettingsAdministrationRepository : ISettingsAdministrationRe
 {
     private readonly string connectionString;
     private readonly TimeProvider timeProvider;
+
+    // Test-only seam for deterministic SQL-backed interleaving tests. It is null
+    // in production and does not change the locking protocol.
+    internal static Action? BeforeLiveSettingsGenerationIncrementForTesting { get; set; }
 
     public SettingsAdministrationRepository(IDbHelperSettings settings)
         : this($"Server={settings.db_hostname};Database={settings.db_name};Trusted_Connection=True;Encrypt=False;", TimeProvider.System)
@@ -474,6 +523,10 @@ where DraftId=@draftId and Status='Active' and Revision=@expectedDraftRevision",
         using var transaction = connection.BeginTransaction(IsolationLevel.Serializable);
         RegistrationFormAssetReferenceCoordinator.Acquire(connection, transaction, nameof(CommitDraft));
         EnsureActiveDraft(connection, transaction, draftId);
+        // Keep preview-link locks before draft changes, scope settings, and the
+        // final generation lock so commit and live-preview admission share the
+        // same draft -> link -> generation order.
+        LockDraftPreviewLinks(connection, transaction, draftId);
         var draft = ReadDraft(connection, draftId, transaction) ??
             throw new DBConcurrencyException("The shared draft no longer exists. Reload the settings page.");
         DraftOperationValidation.RequireSupported(draft.Changes);
@@ -577,6 +630,14 @@ where p.TokenHash=@tokenHash and p.DraftId=@draftId and p.RevokedAtUtc is null
             return null;
         }
 
+        var draft = ReadDraft(connection, candidateDraftId.Value, transaction);
+        if (draft is null || draft.OrganizationId != link.OrganizationId ||
+            !draft.FormCode.Equals(link.FormCode, StringComparison.OrdinalIgnoreCase))
+        {
+            transaction.Commit();
+            return null;
+        }
+
         if (link.AllowLiveSubmission)
         {
             var currentGeneration = connection.QuerySingle<long>(
@@ -589,16 +650,99 @@ where p.TokenHash=@tokenHash and p.DraftId=@draftId and p.RevokedAtUtc is null
             }
         }
 
-        var draft = ReadDraft(connection, candidateDraftId.Value, transaction);
-        if (draft is null || draft.OrganizationId != link.OrganizationId ||
-            !draft.FormCode.Equals(link.FormCode, StringComparison.OrdinalIgnoreCase))
-        {
-            transaction.Commit();
-            return null;
-        }
-
         transaction.Commit();
         return new PreviewContextSnapshot(link, draft);
+    }
+
+    /// <summary>
+    /// Atomically admits a live-preview submission with the current live-settings
+    /// generation. The returned lease deliberately keeps the serializable
+    /// transaction open until the caller has entered and completed the real
+    /// registration workflow. Live settings publication updates the same
+    /// generation row as its final coordination lock, so publication and
+    /// admission are serialized rather than separated by a check/use race.
+    ///
+    /// Lock order is candidate lookup, draft, preview link, then live-settings
+    /// generation. The generation row is intentionally the final lock acquired by
+    /// both this path and live publication paths.
+    /// </summary>
+    public ILivePreviewSubmissionAdmission? TryAdmitLivePreviewSubmission(long previewLinkId, long expectedGeneration)
+    {
+        var nowUtc = timeProvider.GetUtcNow().UtcDateTime;
+        var connection = Open();
+        try
+        {
+            // This lookup is deliberately outside the serializable transaction. It
+            // is only a candidate; the locked re-read below is authoritative.
+            var candidateDraftId = connection.QuerySingleOrDefault<long?>(
+                "select DraftId from dbo.RegistrationSettingPreviewLinks where PreviewLinkId=@previewLinkId",
+                new { previewLinkId });
+            if (!candidateDraftId.HasValue)
+            {
+                connection.Dispose();
+                return null;
+            }
+
+            var transaction = connection.BeginTransaction(IsolationLevel.Serializable);
+            try
+            {
+                var status = connection.QuerySingleOrDefault<string>(
+                    "select Status from dbo.RegistrationSettingDrafts with(updlock,holdlock) where DraftId=@draftId",
+                    new { draftId = candidateDraftId.Value }, transaction);
+                if (status != DraftStatus.Active.ToString())
+                {
+                    transaction.Rollback();
+                    transaction.Dispose();
+                    connection.Dispose();
+                    return null;
+                }
+
+                var link = connection.QuerySingleOrDefault<PreviewLinkRecord>(@"
+select p.PreviewLinkId,p.DraftId,p.TokenHash,p.AllowLiveSubmission,p.RevokedAtUtc,p.ExpiresAtUtc,
+ d.OrganizationId,d.FormCode,d.Status DraftStatus,p.OperationalBranchId,p.LiveSettingsGeneration
+from dbo.RegistrationSettingPreviewLinks p with(updlock,holdlock)
+join dbo.RegistrationSettingDrafts d on d.DraftId=p.DraftId
+where p.PreviewLinkId=@previewLinkId and p.DraftId=@draftId
+  and p.AllowLiveSubmission=1
+  and p.RevokedAtUtc is null
+  and p.ExpiresAtUtc>@nowUtc
+  and d.Status='Active'",
+                    new { previewLinkId, draftId = candidateDraftId.Value, nowUtc }, transaction);
+                if (link is null)
+                {
+                    transaction.Rollback();
+                    transaction.Dispose();
+                    connection.Dispose();
+                    return null;
+                }
+
+                var currentGeneration = connection.QuerySingle<long>(
+                    "select Generation from dbo.RegistrationSettingsCacheGeneration with(updlock,holdlock)",
+                    transaction: transaction);
+                if (link.LiveSettingsGeneration != expectedGeneration || currentGeneration != expectedGeneration)
+                {
+                    transaction.Rollback();
+                    transaction.Dispose();
+                    connection.Dispose();
+                    return null;
+                }
+
+                return new SqlLivePreviewSubmissionAdmission(connection, transaction);
+            }
+            catch
+            {
+                try { transaction.Rollback(); }
+                catch { /* The connection disposal below still releases the lock. */ }
+                transaction.Dispose();
+                connection.Dispose();
+                throw;
+            }
+        }
+        catch
+        {
+            connection.Dispose();
+            throw;
+        }
     }
 
     public bool IsLivePreviewCurrent(long previewLinkId, long expectedGeneration)
@@ -919,9 +1063,7 @@ delete from dbo.RegistrationFormCodeMetadata where OrganizationId in @affectedOr
                 "update dbo.RegistrationSettingScopeVersions set Version=Version+1,ModifiedAtUtc=SYSUTCDATETIME() where OrganizationId=@organizationId and FormCode=@formCode",
                 new { organizationId, formCode = expectedTarget.FormCode }, transaction);
         }
-        connection.Execute(
-            "update dbo.RegistrationSettingsCacheGeneration set Generation=Generation+1,ModifiedAtUtc=SYSUTCDATETIME() where Id=1",
-            transaction: transaction);
+        IncrementCacheGeneration(connection, transaction);
         InsertAudit(connection, transaction, "FormCodeDeleted", true, audit);
         transaction.Commit();
     }
@@ -1244,6 +1386,13 @@ where DraftId=@draftId and RevokedAtUtc is null",
             new { draftId, actor = actorName ?? "unknown" }, transaction);
     }
 
+    private static void LockDraftPreviewLinks(SqlConnection connection, IDbTransaction transaction, long draftId)
+    {
+        connection.Query<long>(
+            "select PreviewLinkId from dbo.RegistrationSettingPreviewLinks with(updlock,holdlock) where DraftId=@draftId",
+            new { draftId }, transaction).ToList();
+    }
+
     private static void EnsureVersionRow(SqlConnection connection, IDbTransaction transaction, int organizationId, string formCode)
     {
         connection.Execute(@"
@@ -1259,10 +1408,18 @@ if not exists(select 1 from dbo.RegistrationSettingScopeVersions with(updlock,ho
 
     private static void IncrementVersions(SqlConnection connection, IDbTransaction transaction, int organizationId, string formCode)
     {
-        connection.Execute(@"
-update dbo.RegistrationSettingScopeVersions set Version=Version+1,ModifiedAtUtc=SYSUTCDATETIME() where OrganizationId=@organizationId and FormCode=@formCode;
-update dbo.RegistrationSettingsCacheGeneration set Generation=Generation+1,ModifiedAtUtc=SYSUTCDATETIME() where Id=1;",
+        connection.Execute(
+            "update dbo.RegistrationSettingScopeVersions set Version=Version+1,ModifiedAtUtc=SYSUTCDATETIME() where OrganizationId=@organizationId and FormCode=@formCode",
             new { organizationId, formCode }, transaction);
+        IncrementCacheGeneration(connection, transaction);
+    }
+
+    private static void IncrementCacheGeneration(SqlConnection connection, IDbTransaction transaction)
+    {
+        BeforeLiveSettingsGenerationIncrementForTesting?.Invoke();
+        connection.Execute(
+            "update dbo.RegistrationSettingsCacheGeneration set Generation=Generation+1,ModifiedAtUtc=SYSUTCDATETIME() where Id=1",
+            transaction: transaction);
     }
 
     private static void InsertAudit(SqlConnection connection, IDbTransaction? transaction, string eventType, bool succeeded, AuditContext audit,

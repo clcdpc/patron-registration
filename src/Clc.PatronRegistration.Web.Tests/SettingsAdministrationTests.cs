@@ -1064,7 +1064,7 @@ public class SettingsAdministrationTests
     }
 
     [TestMethod]
-    public void FormCodeDeletionLockOrder_IsDraftThenPreviewThenSettingsMetadata()
+    public void FormCodeDeletionLockOrder_IsDraftThenPreviewThenSettingsMetadataThenGeneration()
     {
         CollectionAssert.AreEqual(
             new[]
@@ -1073,13 +1073,14 @@ public class SettingsAdministrationTests
                 FormCodeDeletionLockStep.PreviewLinks,
                 FormCodeDeletionLockStep.Metadata,
                 FormCodeDeletionLockStep.ScopeVersions,
-                FormCodeDeletionLockStep.Settings
+                FormCodeDeletionLockStep.Settings,
+                FormCodeDeletionLockStep.LiveSettingsGeneration
             },
             FormCodeDeletionLockOrder.Required.ToArray());
     }
 
     [TestMethod]
-    public void PreviewRepositoryLockOrder_IsCandidateThenDraftThenLinkThenChanges()
+    public void PreviewRepositoryLockOrder_IsCandidateThenDraftThenLinkThenChangesThenGeneration()
     {
         CollectionAssert.AreEqual(
             new[]
@@ -1087,7 +1088,8 @@ public class SettingsAdministrationTests
                 PreviewLockStep.CandidateLookupOutsideTransaction,
                 PreviewLockStep.Draft,
                 PreviewLockStep.PreviewLink,
-                PreviewLockStep.DraftChanges
+                PreviewLockStep.DraftChanges,
+                PreviewLockStep.LiveSettingsGeneration
             },
             PreviewLockOrder.Required.ToArray());
     }

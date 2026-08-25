@@ -55,9 +55,11 @@ public sealed class RegistrationScopeResolver(
         var scope = cache.GetOrg(requestSettings.OrganizationId);
         return scope.OrganizationCodeID switch
         {
-            3 => db.GetSelfRegistrationBranches(scope.ParentOrganizationID)
-                .Where(branch => branch.OrganizationID == scope.OrganizationID)
-                .ToList(),
+            // A branch route remains scoped to its parent library for the
+            // optional home-branch selector. The submitted branch is still
+            // resolved and validated independently below, so settings and
+            // credentials come from the selected sibling branch.
+            3 => db.GetSelfRegistrationBranches(scope.ParentOrganizationID).ToList(),
             2 => db.GetSelfRegistrationBranches(scope.OrganizationID).ToList(),
             _ => db.GetSelfRegistrationBranches().ToList()
         };

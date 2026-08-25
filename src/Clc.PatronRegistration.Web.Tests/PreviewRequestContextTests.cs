@@ -250,7 +250,8 @@ public class PreviewRequestContextTests
     {
         var context = CreateResolver(link: Link("Active", allowLiveSubmission: false)).Resolve("token")!;
         var repository = new Mock<ISettingsAdministrationRepository>();
-        repository.Setup(service => service.IsLivePreviewCurrent(It.IsAny<long>(), It.IsAny<long>())).Returns(true);
+        repository.Setup(service => service.TryAdmitLivePreviewSubmission(It.IsAny<long>(), It.IsAny<long>()))
+            .Returns(Mock.Of<ILivePreviewSubmissionAdmission>());
         var papi = new Mock<IPapiClient>();
         var melissa = new Mock<IMelissaRestClient>();
         var email = new Mock<IEmailSender>();
@@ -301,7 +302,7 @@ public class PreviewRequestContextTests
     {
         var context = CreateResolver(link: Link("Active", allowLiveSubmission: true)).Resolve("token")!;
         var repository = new Mock<ISettingsAdministrationRepository>();
-        repository.Setup(service => service.IsLivePreviewCurrent(context.Link.PreviewLinkId, 1)).Returns(false);
+        repository.Setup(service => service.TryAdmitLivePreviewSubmission(context.Link.PreviewLinkId, 1)).Returns((ILivePreviewSubmissionAdmission?)null);
         var papi = new Mock<IPapiClient>();
         var melissa = new Mock<IMelissaRestClient>();
         var email = new Mock<IEmailSender>();
@@ -327,7 +328,9 @@ public class PreviewRequestContextTests
         var settings = new PreviewSettingProvider(draft, 3, new TestCache(), 1);
         var context = new PreviewRequestContext(Link("Active", allowLiveSubmission: true), draft, settings);
         var repository = new Mock<ISettingsAdministrationRepository>();
-        repository.Setup(service => service.IsLivePreviewCurrent(context.Link.PreviewLinkId, 1)).Returns(true);
+        var admission = new Mock<ILivePreviewSubmissionAdmission>();
+        repository.Setup(service => service.TryAdmitLivePreviewSubmission(context.Link.PreviewLinkId, 1))
+            .Returns(admission.Object);
         repository.Setup(service => service.WriteAudit(
                 It.IsAny<string>(), It.IsAny<bool>(), It.IsAny<AuditContext>(),
                 It.IsAny<string>(), It.IsAny<long?>(), It.IsAny<long?>(), It.IsAny<string>()))
@@ -409,6 +412,8 @@ public class PreviewRequestContextTests
             repository.Verify(service => service.WriteAudit(
                 "LivePreviewSubmission", true, It.IsAny<AuditContext>(), null, null, context.Link.PreviewLinkId,
                 It.Is<string>(json => json.Contains("Success", StringComparison.Ordinal))), Times.Once);
+            admission.Verify(value => value.Dispose(), Times.Once);
+            repository.Verify(service => service.IsLivePreviewCurrent(It.IsAny<long>(), It.IsAny<long>()), Times.Never);
         }
         finally
         {
@@ -422,7 +427,8 @@ public class PreviewRequestContextTests
         var draft = ActiveDraft(new SettingMutation("require.PhoneVoice1", DraftOperation.Upsert, "true"));
         var context = CreateResolver(draft: draft, link: Link("Active", allowLiveSubmission: true)).Resolve("token")!;
         var repository = new Mock<ISettingsAdministrationRepository>();
-        repository.Setup(service => service.IsLivePreviewCurrent(It.IsAny<long>(), It.IsAny<long>())).Returns(true);
+        repository.Setup(service => service.TryAdmitLivePreviewSubmission(It.IsAny<long>(), It.IsAny<long>()))
+            .Returns(Mock.Of<ILivePreviewSubmissionAdmission>());
         var papi = new Mock<IPapiClient>();
         var melissa = new Mock<IMelissaRestClient>();
         var email = new Mock<IEmailSender>();

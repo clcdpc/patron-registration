@@ -135,8 +135,15 @@ public sealed class PreviewController(
             });
         }
 
-        if (!context.Link.LiveSettingsGeneration.HasValue ||
-            !repository.IsLivePreviewCurrent(context.Link.PreviewLinkId, context.Link.LiveSettingsGeneration.Value))
+        if (!context.Link.LiveSettingsGeneration.HasValue)
+        {
+            return NotFound("This live preview link is no longer current. Create a new preview link from the latest draft.");
+        }
+
+        using var admission = repository.TryAdmitLivePreviewSubmission(
+            context.Link.PreviewLinkId,
+            context.Link.LiveSettingsGeneration.Value);
+        if (admission is null)
         {
             return NotFound("This live preview link is no longer current. Create a new preview link from the latest draft.");
         }
