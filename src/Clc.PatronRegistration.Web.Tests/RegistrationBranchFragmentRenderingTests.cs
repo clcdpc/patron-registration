@@ -87,6 +87,32 @@ public sealed class RegistrationBranchFragmentRenderingTests
         StringAssert.Contains(markup, "aria-required=\"true\"");
     }
 
+    [TestMethod]
+    public async Task ChangeBranch_RendersPersistedTeacherAndSchoolState()
+    {
+        using var fixture = BranchFixture.Create(
+            headerImageAssetId: null,
+            cssFile: string.Empty,
+            schoolInfoFormat: "uapl");
+        var registration = fixture.SubmittedRegistration();
+        registration.IsTeacher = true;
+        registration.User1 = "Barrington Elementary School";
+
+        var result = fixture.Controller.ChangeBranch(registration, 2, agreementAccepted: true);
+
+        var view = (PartialViewResult)result;
+        var model = (Registration)view.Model!;
+        Assert.IsTrue(model.IsTeacher);
+        Assert.AreEqual("Barrington Elementary School", model.User1);
+
+        var markup = await fixture.RenderAsync(view);
+
+        StringAssert.Contains(markup, "name=\"IsTeacher\"");
+        StringAssert.Contains(markup, "id=\"User1\" name=\"User1\" type=\"hidden\" value=\"Barrington Elementary School\"");
+        StringAssert.Contains(markup, "id=\"IsTeacher\" name=\"IsTeacher\"");
+        StringAssert.Contains(markup, "checked=\"checked\"");
+    }
+
     private static void AssertLayoutFree(string markup)
     {
         Assert.IsFalse(markup.Contains("<!DOCTYPE", StringComparison.OrdinalIgnoreCase));
@@ -123,12 +149,14 @@ public sealed class RegistrationBranchFragmentRenderingTests
         public static BranchFixture Create(
             int? headerImageAssetId,
             string cssFile,
-            bool selectedUser5Required = false)
+            bool selectedUser5Required = false,
+            string schoolInfoFormat = "")
         {
             var routeSettings = Settings(2, branchSelectionEnabled: true);
             var selectedSettings = Settings(4, branchSelectionEnabled: false);
             selectedSettings.SetupGet(value => value.HeaderImageAssetId).Returns(headerImageAssetId);
             selectedSettings.SetupGet(value => value.CssFile).Returns(cssFile);
+            selectedSettings.SetupGet(value => value.SchoolInfoFormat).Returns(schoolInfoFormat);
             selectedSettings.SetupGet(value => value.DisplayResponsiblePersonField).Returns(selectedUser5Required);
             selectedSettings.Setup(value => value.GetFieldRequired(nameof(Registration.User5)))
                 .Returns(selectedUser5Required);

@@ -163,10 +163,57 @@ function getRegistrationHandlerInitializationSource() {
 }
 
 class RegistrationControl {
-    constructor(id) {
+    constructor(id, options = []) {
         this.id = id;
-        this.value = "";
+        this.options = options;
+        this._value = "";
+        this._selectedIndex = 0;
+        this.checked = false;
+        this.disabled = false;
         this.listeners = new Map();
+        this.attributes = new Map();
+        this.classList = {
+            classes: new Set(),
+            add: (...classes) => classes.forEach(value => this.classList.classes.add(value)),
+            remove: (...classes) => classes.forEach(value => this.classList.classes.delete(value)),
+            contains: value => this.classList.classes.has(value)
+        };
+    }
+
+    get value() {
+        return this.options.length > 0
+            ? this.options[this._selectedIndex]?.value ?? ""
+            : this._value;
+    }
+
+    set value(value) {
+        const normalized = value ?? "";
+        if (this.options.length > 0) {
+            const index = this.options.findIndex(option => option.value === normalized);
+            this._selectedIndex = index;
+            return;
+        }
+        this._value = normalized;
+    }
+
+    get selectedIndex() {
+        return this._selectedIndex;
+    }
+
+    set selectedIndex(index) {
+        this._selectedIndex = Number.isInteger(index) ? index : -1;
+    }
+
+    get length() {
+        return this.options.length;
+    }
+
+    removeAttribute(name) {
+        this.attributes.delete(name);
+    }
+
+    setAttribute(name, value) {
+        this.attributes.set(name, value);
     }
 
     addEventListener(event, handler) {
@@ -176,7 +223,7 @@ class RegistrationControl {
     }
 
     dispatchEvent(event) {
-        const eventObject = typeof event === "string" ? { target: this } : event;
+        const eventObject = typeof event === "string" ? { type: event, target: this } : event;
         return (this.listeners.get(eventObject.type) ?? [])
             .map(handler => handler(eventObject));
     }
@@ -251,6 +298,319 @@ function createRegistrationHandlerHarness() {
         }
     };
 }
+
+function getActualReplacementInitializationSource() {
+    const referencesStart = markup.indexOf("    const nameFirst");
+    const referencesEnd = markup.indexOf("\n\n    let ageBlockRequestId", referencesStart);
+    const flagsStart = markup.indexOf("    let ageBlockRequestId", referencesEnd);
+    const flagsEnd = markup.indexOf("\n\n    registerButton.addEventListener", flagsStart);
+    const addEventHandlerStart = markup.indexOf("    function AddEventHandler");
+    const addEventHandlerEnd = markup.indexOf("\n\n    async function ageBlockCheck", addEventHandlerStart);
+    const stateFunctionsStart = markup.indexOf("    function updateUser1");
+    const stateFunctionsEnd = markup.indexOf("\n\n    function showStudentSchoolInfo", stateFunctionsStart);
+    const schoolFunctionsStart = markup.indexOf("    function show(e)");
+    const schoolFunctionsEnd = markup.indexOf("\n\n    var v;", schoolFunctionsStart);
+    const ecardStart = markup.indexOf("    function isECardCheckboxClick");
+    const ecardEnd = markup.indexOf("\n\n    function showErrorMessage", ecardStart);
+    const dupecheckStart = markup.indexOf("    function dupecheck");
+    const dupecheckEnd = markup.indexOf("\n\n\n    var ageCheckShown", dupecheckStart);
+    const dupeBindingStart = markup.indexOf('    AddEventHandler(birthdate, "blur"');
+    const dupeBindingEnd = markup.indexOf("\n\n    document.querySelectorAll", dupeBindingStart);
+    const initializationStart = markup.indexOf("    initializeRegistrationState();");
+    const initializationEnd = markup.indexOf("\n    AddEventHandler(agreementAcceptButton", initializationStart);
+
+    for (const position of [
+        referencesStart,
+        referencesEnd,
+        flagsStart,
+        flagsEnd,
+        addEventHandlerStart,
+        addEventHandlerEnd,
+        stateFunctionsStart,
+        stateFunctionsEnd,
+        schoolFunctionsStart,
+        schoolFunctionsEnd,
+        ecardStart,
+        ecardEnd,
+        dupecheckStart,
+        dupecheckEnd,
+        dupeBindingStart,
+        dupeBindingEnd,
+        initializationStart,
+        initializationEnd
+    ]) {
+        assert.ok(position >= 0);
+    }
+
+    const dupecheckSource = markup
+        .slice(dupecheckStart, dupecheckEnd)
+        .replace("@(Model.LibraryId)", "2")
+        .replace('"@duplicateCheckUrl"', '"/Registration/DupeCheck"');
+
+    return `
+        (function initializeRegistrationFragment() {
+            const q = document.querySelector.bind(document);
+            const patronBranchId = q('#PatronBranchID');
+            ${markup.slice(referencesStart, referencesEnd)}
+            ${markup.slice(flagsStart, flagsEnd)}
+            ${markup.slice(addEventHandlerStart, addEventHandlerEnd)}
+            ${markup.slice(stateFunctionsStart, stateFunctionsEnd)}
+            ${markup.slice(schoolFunctionsStart, schoolFunctionsEnd)}
+            ${markup.slice(ecardStart, ecardEnd)}
+            async function handleBirthdateChanged() { }
+            ${dupecheckSource}
+            ${markup.slice(dupeBindingStart, dupeBindingEnd)}
+            ${markup.slice(initializationStart, initializationEnd)}
+        })();`;
+}
+
+function getReloadRegistrationFormSource() {
+    const reloadStart = markup.indexOf("    async function reloadRegistrationForm");
+    const reloadEnd = markup.indexOf("\n\n    updateRegistrationBranding", reloadStart);
+    assert.ok(reloadStart >= 0);
+    assert.ok(reloadEnd > reloadStart);
+
+    return markup
+        .slice(reloadStart, reloadEnd)
+        .replace(/const errorMessage = [\s\S]*?\n\n        try \{/,
+            'const errorMessage = "replacement failed";\n\n        try {');
+}
+
+const schoolOptions = [
+    { value: "null" },
+    { value: "Barrington Elementary School" },
+    { value: "Greensview Elementary School" },
+    { value: "Hastings Middle School" },
+    { value: "Jones Middle School" },
+    { value: "Tremont Elementary School" },
+    { value: "UA High School" },
+    { value: "Wickliffe Elementary School" },
+    { value: "Windermere Elementary School" },
+    { value: "Homeschool" },
+    { value: "Other School" }
+];
+
+class ReplacementRegistrationFragment extends RegistrationFragment {
+    constructor({ user1, isTeacher = true, isStudent = false, isECard = false,
+        deliverCardToSchool = false, addToMailingList = false, script }) {
+        super();
+        this.id = "registration-form-fragment";
+        this.controls.set("#IsTeacher", new RegistrationControl("IsTeacher"));
+        this.controls.set("#IsStudent", new RegistrationControl("IsStudent"));
+        this.controls.set("#IsECard", new RegistrationControl("IsECard"));
+        this.controls.set("#DeliverCardToSchool", new RegistrationControl("DeliverCardToSchool"));
+        this.controls.set("#AddToMailingList", new RegistrationControl("AddToMailingList"));
+        this.controls.set("#schoolinfo-fieldset", new RegistrationControl("schoolinfo-fieldset"));
+        this.controls.set("#schoolinfo-student", new RegistrationControl("schoolinfo-student"));
+        this.controls.set("#schoolinfo-teacher", new RegistrationControl("schoolinfo-teacher"));
+        this.controls.set("#other-school-name", new RegistrationControl("other-school-name"));
+        this.controls.set("#deliver-to-school", new RegistrationControl("deliver-to-school"));
+        this.controls.set("#EcardFieldGroup", new RegistrationControl("EcardFieldGroup"));
+        this.controls.set("#student-school-dropdown", new RegistrationControl("student-school-dropdown", schoolOptions.slice(0, -1)));
+        this.controls.set("#teacher-school-dropdown", new RegistrationControl("teacher-school-dropdown", schoolOptions));
+        this.controls.set("#Password", new RegistrationControl("Password"));
+        this.controls.set("#Password2", new RegistrationControl("Password2"));
+
+        this.control("IsTeacher").checked = isTeacher;
+        this.control("IsStudent").checked = isStudent;
+        this.control("IsECard").checked = isECard;
+        this.control("DeliverCardToSchool").checked = deliverCardToSchool;
+        this.control("AddToMailingList").checked = addToMailingList;
+        this.control("User1").value = user1;
+        this.control("NameFirst").value = "Earlier";
+        this.control("NameLast").value = "Patron";
+        this.control("Birthdate").value = "1990-01-01";
+        this.control("PatronBranchID").value = "4";
+
+        this.scripts = [{
+            textContent: script,
+            remove() { this.removed = true; }
+        }];
+        this.ownerDocument = null;
+    }
+
+    replaceWith(nextFragment) {
+        this.ownerDocument.currentFragment = nextFragment;
+    }
+
+    querySelectorAll(selector) {
+        return selector === "script" ? this.scripts : [];
+    }
+}
+
+class ReplacementDocument {
+    constructor() {
+        this.registrationContainer = {};
+        this.currentFragment = null;
+        this.nextFragment = null;
+    }
+
+    set currentFragment(fragment) {
+        this._currentFragment = fragment;
+        if (fragment) fragment.ownerDocument = this;
+    }
+
+    get currentFragment() {
+        return this._currentFragment;
+    }
+
+    querySelector(selector) {
+        if (selector === "#registration-form-fragment") return this.currentFragment;
+        if (selector === "#regFormContainer") return this.registrationContainer;
+        return this.currentFragment?.querySelector(selector) ?? null;
+    }
+
+    getElementById(id) {
+        return this.currentFragment?.querySelector(`#${id}`) ?? null;
+    }
+
+    createElement(tagName) {
+        assert.equal(tagName, "template");
+        return {
+            content: {
+                childElementCount: 1,
+                firstElementChild: null
+            },
+            set innerHTML(value) {
+                this.content.firstElementChild = this.ownerDocument.nextFragment;
+            },
+            ownerDocument: this
+        };
+    }
+
+    contains() {
+        return true;
+    }
+}
+
+function createActualReplacementHarness() {
+    const document = new ReplacementDocument();
+    const duplicateRequests = [];
+    const initializationSource = getActualReplacementInitializationSource();
+    const reloadSource = getReloadRegistrationFormSource();
+    const sandbox = {
+        document,
+        FormData: class { append() { } },
+        fetch: async () => ({
+            ok: true,
+            text: async () => "<div id=\"registration-form-fragment\"></div>"
+        }),
+        postData: async url => {
+            if (url === "/Registration/DupeCheck") duplicateRequests.push(url);
+            return { isDupe: false };
+        },
+        updateRegistrationBranding: () => { },
+        showErrorMessage: () => { }
+    };
+
+    vm.runInNewContext(`
+        const q = document.querySelector.bind(document);
+        function applyPinValues(fragment, pinValues) {
+            fragment.querySelector('#Password').value = pinValues.password;
+            fragment.querySelector('#Password2').value = pinValues.password2;
+        }
+        ${reloadSource}
+        globalThis.reloadRegistrationForm = reloadRegistrationForm;
+    `, sandbox);
+
+    return {
+        duplicateRequests,
+        fragment(options) {
+            return new ReplacementRegistrationFragment({
+                ...options,
+                script: initializationSource
+            });
+        },
+        setCurrent(fragment) {
+            document.currentFragment = fragment;
+        },
+        async replace(fragment) {
+            document.nextFragment = fragment;
+            return sandbox.reloadRegistrationForm(
+                "/Registration/ChangeBranch",
+                {},
+                { password: "1234", password2: "1234" });
+        }
+    };
+}
+
+test("actual branch replacement rehydrates a predefined teacher school and keeps dupecheck bypass active", async () => {
+    const harness = createActualReplacementHarness();
+    const original = harness.fragment({
+        user1: "Barrington Elementary School",
+        isTeacher: true,
+        deliverCardToSchool: true,
+        addToMailingList: true
+    });
+    const replacement = harness.fragment({
+        user1: "Barrington Elementary School",
+        isTeacher: true,
+        deliverCardToSchool: true,
+        addToMailingList: true
+    });
+    harness.setCurrent(original);
+
+    assert.equal(await harness.replace(replacement), true);
+    assert.equal(replacement.control("IsTeacher").checked, true);
+    assert.equal(replacement.control("teacher-school-dropdown").value, "Barrington Elementary School");
+    assert.equal(replacement.control("User1").value, "Barrington Elementary School");
+    assert.equal(replacement.control("otherSchoolName").value, "");
+    assert.equal(replacement.control("other-school-name").classList.contains("hidden"), true);
+    assert.equal(replacement.control("DeliverCardToSchool").checked, true);
+    assert.equal(replacement.control("AddToMailingList").checked, true);
+
+    replacement.control("NameFirst").dispatchEvent("blur");
+    replacement.control("NameLast").dispatchEvent("blur");
+    assert.equal(harness.duplicateRequests.length, 0);
+});
+
+test("repeated branch replacements rehydrate a custom teacher school without losing teacher state", async () => {
+    const harness = createActualReplacementHarness();
+    const original = harness.fragment({
+        user1: "Greensview Elementary School",
+        isTeacher: true,
+        deliverCardToSchool: true,
+        addToMailingList: true
+    });
+    harness.setCurrent(original);
+
+    const replacements = [
+        harness.fragment({
+            user1: "School of the Arts",
+            isTeacher: true,
+            deliverCardToSchool: true,
+            addToMailingList: true
+        }),
+        harness.fragment({
+            user1: "Hastings Middle School",
+            isTeacher: true,
+            deliverCardToSchool: true,
+            addToMailingList: true
+        }),
+        harness.fragment({
+            user1: "School of the Arts - New Name",
+            isTeacher: true,
+            deliverCardToSchool: true,
+            addToMailingList: true
+        })
+    ];
+
+    for (const replacement of replacements) {
+        assert.equal(await harness.replace(replacement), true);
+        assert.equal(replacement.control("IsTeacher").checked, true);
+        assert.equal(replacement.control("User1").value, replacement.control("otherSchoolName").value || replacement.control("teacher-school-dropdown").value);
+        replacement.control("NameFirst").dispatchEvent("blur");
+        replacement.control("NameLast").dispatchEvent("blur");
+    }
+
+    const newest = replacements.at(-1);
+    assert.equal(newest.control("teacher-school-dropdown").value, "Other School");
+    assert.equal(newest.control("otherSchoolName").value, "School of the Arts - New Name");
+    assert.equal(newest.control("other-school-name").classList.contains("hidden"), false);
+    assert.equal(newest.control("DeliverCardToSchool").checked, true);
+    assert.equal(newest.control("AddToMailingList").checked, true);
+    assert.equal(harness.duplicateRequests.length, 0);
+});
 
 test("replacement fragment handlers update replacement controls for driver-license and other-school input", async () => {
     assert.doesNotMatch(markup, /onclick="dl\(\)"/);

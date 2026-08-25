@@ -143,6 +143,54 @@ public class SettingsAuthorizationAndCacheTests
     }
 
     [TestMethod]
+    public async Task MemoryCache_ConcurrentGenerationBoundCallersShareOnePublishedRebuild()
+    {
+        const long requestedGeneration = 17;
+        const int callerCount = 8;
+        var (papi, db) = MemoryCacheDependencies();
+        var generation = new Mock<ISettingsCacheGenerationProvider>(MockBehavior.Strict);
+        generation.Setup(service => service.GetCacheGeneration()).Returns(requestedGeneration);
+
+        var response = new Mock<IRestResponse<OrganizationsGetResult>>();
+        response.SetupGet(value => value.Data).Returns(new OrganizationsGetResult
+        {
+            OrganizationsGetRows =
+            [
+                new() { OrganizationID = 1, OrganizationCodeID = 1, Name = "System" }
+            ]
+        });
+        var loadStarted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseLoad = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        papi.Setup(service => service.OrganizationsGet(OrganizationType.All))
+            .Callback(() =>
+            {
+                loadStarted.TrySetResult(true);
+                releaseLoad.Task.GetAwaiter().GetResult();
+            })
+            .Returns(response.Object);
+
+        var cache = new MemoryCache(papi.Object, db.Object, generation.Object);
+        using var callersReady = new Barrier(callerCount);
+        var callers = Enumerable.Range(0, callerCount)
+            .Select(_ => Task.Run(() =>
+            {
+                Assert.IsTrue(callersReady.SignalAndWait(TimeSpan.FromSeconds(5)));
+                return cache.GetSnapshotAtGeneration(requestedGeneration);
+            }))
+            .ToArray();
+
+        await loadStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        releaseLoad.TrySetResult(true);
+        var snapshots = await Task.WhenAll(callers).WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.IsTrue(snapshots.All(snapshot => snapshot.Generation == requestedGeneration));
+        Assert.IsTrue(snapshots.All(snapshot => ReferenceEquals(snapshot, snapshots[0])));
+        papi.Verify(service => service.OrganizationsGet(OrganizationType.All), Times.Once);
+        db.Verify(service => service.GetAllSettings(), Times.Once);
+        generation.Verify(service => service.GetCacheGeneration(), Times.Exactly(2));
+    }
+
+    [TestMethod]
     public void LocalLiveChange_RebuildsImmediatelyAndObservesGeneration()
     {
         var cache = new Mock<ICache>();

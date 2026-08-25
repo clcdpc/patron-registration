@@ -96,6 +96,16 @@ namespace Clc.PatronRegistration.Helpers
         {
             lock (rebuildLock)
             {
+                // GetSnapshotAtGeneration performs an optimistic read before taking
+                // the lock. A caller that observed a stale generation may have been
+                // waiting here while another caller completed the rebuild, so check
+                // the atomically published snapshot again before doing any I/O.
+                var current = Volatile.Read(ref snapshot);
+                if (current?.Snapshot.Generation == generation)
+                {
+                    return;
+                }
+
                 if (generationProvider is null)
                 {
                     throw new CacheSnapshotConsistencyException(

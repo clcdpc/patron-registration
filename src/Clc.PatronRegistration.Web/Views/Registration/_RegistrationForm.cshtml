@@ -561,7 +561,9 @@ else
     const antiforgeryToken = q('input[name="__RequestVerificationToken"]');
 
     let ageBlockRequestId = 0;
-    let isTeacher = false;
+    // This state is used by dupecheck(), so it must be reconstructed from the
+    // replacement fragment instead of waiting for a future checkbox click.
+    let isTeacher = q('#IsTeacher')?.checked === true;
 
     registerButton.addEventListener("click", (e) => { submitReg(e); });
     registerButton.addEventListener("keyup", event => {
@@ -577,8 +579,7 @@ else
 
     handleNotificationPreferenceChange(deliveryOptionId.value);
     if (useLegalName?.checked) handleLegalNameCheckboxClick({ target: useLegalName });
-    if (q('#IsStudent')?.checked) showStudentSchoolInfo();
-    if (q('#IsTeacher')?.checked) showTeacherSchoolInfo();
+    initializeRegistrationState();
     if (q('#IsECard')?.checked) isECardCheckboxClick({ target: q('#IsECard') });
     AddEventHandler(agreementAcceptButton, "click", (e) => {
         agreementAccepted = true;
@@ -684,6 +685,75 @@ else
 
     function updateUser1(newValue) {
         user1.value = newValue;
+    }
+
+    function selectSchoolOption(dropdown, schoolName) {
+        if (!dropdown) return null;
+
+        const option = Array.from(dropdown.options || [])
+            .find(candidate => candidate.value === schoolName);
+        if (option) {
+            dropdown.value = option.value;
+        } else {
+            dropdown.selectedIndex = 0;
+        }
+        return option || null;
+    }
+
+    function applyStudentSchoolSelection(schoolName) {
+        const option = selectSchoolOption(studentSchoolDropdown, schoolName);
+        if (!option && schoolName) {
+            // There is no custom student-school control. Do not submit a hidden
+            // school value that the replacement UI cannot represent.
+            updateUser1('');
+        }
+    }
+
+    function applyTeacherSchoolSelection(schoolName) {
+        const option = selectSchoolOption(teacherSchoolDropdown, schoolName);
+        if (option) {
+            hide(otherSchoolNameGroup);
+            if (otherSchoolName) otherSchoolName.value = '';
+        } else if (schoolName && teacherSchoolDropdown) {
+            // The final teacher option is the existing School Not Listed path.
+            // Keep the custom name in the visible input and the hidden User1 field
+            // in agreement with it.
+            teacherSchoolDropdown.value = 'Other School';
+            show(otherSchoolNameGroup);
+            if (otherSchoolName) otherSchoolName.value = schoolName;
+        } else {
+            hide(otherSchoolNameGroup);
+            if (otherSchoolName) otherSchoolName.value = '';
+        }
+
+        if (teacherSchoolDropdown?.value === 'Other School' ||
+            teacherSchoolDropdown?.value === 'Homeschool') {
+            hide(deliverCardToSchoolGroup);
+        } else {
+            show(deliverCardToSchoolGroup);
+        }
+    }
+
+    function initializeRegistrationState() {
+        const studentCheckbox = q('#IsStudent');
+        const teacherCheckbox = q('#IsTeacher');
+        isTeacher = teacherCheckbox?.checked === true;
+
+        let schoolName = user1?.value ?? '';
+        if (schoolName === 'null') {
+            schoolName = '';
+            updateUser1('');
+        }
+        if (isTeacher) {
+            showTeacherSchoolInfo();
+            applyTeacherSchoolSelection(schoolName);
+        } else if (studentCheckbox?.checked) {
+            showStudentSchoolInfo();
+            applyStudentSchoolSelection(schoolName);
+        } else if (schoolName) {
+            // User1 is only a school field when one of the school roles is active.
+            updateUser1('');
+        }
     }
 
     function showStudentSchoolInfo() {
