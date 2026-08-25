@@ -114,7 +114,7 @@ else
 
     @if (Model.ShowDlButton)
     {
-        <button onclick="dl()" id="dlbutton">@Settings.DriversLicenseButtonText</button>
+        <button id="dlbutton">@Settings.DriversLicenseButtonText</button>
     }
 
     <form id="regform" autocomplete="off">
@@ -203,7 +203,7 @@ else
 
                     <div id="other-school-name" class="hidden">
                         <label for="otherSchoolName">Your School's Name</label>
-                        <input id="otherSchoolName" name="otherSchoolName" onChange="updateUser1(this.value)" />
+                        <input id="otherSchoolName" name="otherSchoolName" />
                     </div>
 
                     <div id="deliver-to-school" class=@(Model.IsStudent || Model.IsTeacher ? "" : "hidden")>
@@ -549,6 +549,7 @@ else
     const teacherSchoolDropdown = q('#teacher-school-dropdown');
     const otherSchoolNameGroup = q('#other-school-name');
     const otherSchoolName = q('#otherSchoolName');
+    const dlButton = q('#dlbutton');
     const deliverCardToSchoolGroup = q('#deliver-to-school');
     const deliverCardToSchool = q('#DeliverCardToSchool');
     const ecardFieldGroup = q('#EcardFieldGroup');
@@ -571,6 +572,8 @@ else
 
     AddEventHandler(deliveryOptionId, "change", (e) => { handleNotificationPreferenceChange(e.target.value) });
     AddEventHandler(useLegalName, "click", (e) => handleLegalNameCheckboxClick(e));
+    AddEventHandler(dlButton, "click", () => { dl(); });
+    AddEventHandler(otherSchoolName, "change", (e) => { updateUser1(e.target.value); });
 
     handleNotificationPreferenceChange(deliveryOptionId.value);
     if (useLegalName?.checked) handleLegalNameCheckboxClick({ target: useLegalName });

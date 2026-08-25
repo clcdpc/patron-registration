@@ -3,7 +3,8 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import * as vm from "node:vm";
 
-const markup = readFileSync(new URL("../../Clc.PatronRegistration.Web/Views/Registration/_RegistrationForm.cshtml", import.meta.url), "utf8");
+const markup = readFileSync(new URL("../../Clc.PatronRegistration.Web/Views/Registration/_RegistrationForm.cshtml", import.meta.url), "utf8")
+    .replace(/\r\n/g, "\n");
 
 test("registration branch switching never uses browser storage for patron data", () => {
     assert.doesNotMatch(markup, /sessionStorage|localStorage|indexedDB|document\.cookie/i);
@@ -114,6 +115,189 @@ test("branch replacement puts both transient PIN values onto the inserted passwo
     const nextPassword2 = fragment.querySelector("#Password2");
     assert.equal(nextPassword.value, "1234");
     assert.equal(nextPassword2.value, "5678");
+});
+
+function getRegistrationHandlerInitializationSource() {
+    const referencesStart = markup.indexOf("    const nameFirst");
+    const referencesEnd = markup.indexOf("\n\n    let ageBlockRequestId", referencesStart);
+    const addEventHandlerStart = markup.indexOf("    function AddEventHandler");
+    const addEventHandlerEnd = markup.indexOf("\n\n    async function ageBlockCheck", addEventHandlerStart);
+    const bindingStart = markup.indexOf('    AddEventHandler(deliveryOptionId, "change"');
+    const bindingEnd = markup.indexOf("\n\n    handleNotificationPreferenceChange", bindingStart);
+    const updateUser1Start = markup.indexOf("    function updateUser1");
+    const updateUser1End = markup.indexOf("\n\n    function showStudentSchoolInfo", updateUser1Start);
+    const driverLicenseStart = markup.indexOf("    async function dl");
+    const driverLicenseEnd = markup.indexOf("\n\n    function dupecheck", driverLicenseStart);
+
+    for (const position of [
+        referencesStart,
+        referencesEnd,
+        addEventHandlerStart,
+        addEventHandlerEnd,
+        bindingStart,
+        bindingEnd,
+        updateUser1Start,
+        updateUser1End,
+        driverLicenseStart,
+        driverLicenseEnd
+    ]) {
+        assert.ok(position >= 0);
+    }
+
+    const driverLicenseSource = markup
+        .slice(driverLicenseStart, driverLicenseEnd)
+        .replace("@Html.Raw(Settings.DriversLicensePromptText.ToJavascriptString())", '"Scan your license"')
+        .replace('"@driverLicenseUrl"', '"/Registration/dl"');
+
+    return `
+        (function initializeRegistrationFragment() {
+            const q = document.querySelector.bind(document);
+            const patronBranchId = q('#PatronBranchID');
+            ${markup.slice(referencesStart, referencesEnd)}
+            ${markup.slice(addEventHandlerStart, addEventHandlerEnd)}
+            ${markup.slice(updateUser1Start, updateUser1End)}
+            async function handleBirthdateChanged() { }
+            ${driverLicenseSource}
+            ${markup.slice(bindingStart, bindingEnd)}
+        })();`;
+}
+
+class RegistrationControl {
+    constructor(id) {
+        this.id = id;
+        this.value = "";
+        this.listeners = new Map();
+    }
+
+    addEventListener(event, handler) {
+        const handlers = this.listeners.get(event) ?? [];
+        handlers.push(handler);
+        this.listeners.set(event, handlers);
+    }
+
+    dispatchEvent(event) {
+        const eventObject = typeof event === "string" ? { target: this } : event;
+        return (this.listeners.get(eventObject.type) ?? [])
+            .map(handler => handler(eventObject));
+    }
+
+    listenerCount(event) {
+        return (this.listeners.get(event) ?? []).length;
+    }
+}
+
+class RegistrationFragment {
+    constructor() {
+        const ids = [
+            "dlbutton",
+            "otherSchoolName",
+            "User1",
+            "PatronBranchID",
+            "NameFirst",
+            "NameMiddle",
+            "NameLast",
+            "Birthdate",
+            "StreetOne",
+            "City",
+            "PostalCode"
+        ];
+        this.controls = new Map(ids.map(id => [`#${id}`, new RegistrationControl(id)]));
+        this.controls.set('input[name="__RequestVerificationToken"]', new RegistrationControl("__RequestVerificationToken"));
+        this.controls.get('input[name="__RequestVerificationToken"]').value = "token";
+    }
+
+    querySelector(selector) {
+        return this.controls.get(selector) ?? null;
+    }
+
+    control(id) {
+        return this.controls.get(`#${id}`);
+    }
+}
+
+function createRegistrationHandlerHarness() {
+    const document = {
+        currentFragment: null,
+        querySelector(selector) {
+            return this.currentFragment?.querySelector(selector) ?? null;
+        }
+    };
+    const driverLicenseData = {
+        firstName: "Replacement",
+        middleName: "Driver",
+        lastName: "License",
+        birthdate: "2000-01-02T00:00:00",
+        address: "Replacement Street",
+        city: "Replacement City",
+        zip: "43210"
+    };
+    const sandbox = {
+        document,
+        FormData: class {
+            append() { }
+        },
+        postData: () => driverLicenseData,
+        window: { prompt: () => "12345678901234567890" }
+    };
+    const initializationSource = getRegistrationHandlerInitializationSource();
+
+    return {
+        initialize(fragment) {
+            document.currentFragment = fragment;
+            vm.runInNewContext(initializationSource, sandbox);
+        },
+        fragment() {
+            return new RegistrationFragment();
+        }
+    };
+}
+
+test("replacement fragment handlers update replacement controls for driver-license and other-school input", async () => {
+    assert.doesNotMatch(markup, /onclick="dl\(\)"/);
+    assert.doesNotMatch(markup, /onChange="updateUser1\(this\.value\)"/);
+
+    const harness = createRegistrationHandlerHarness();
+    const original = harness.fragment();
+    harness.initialize(original);
+    original.control("NameFirst").value = "Original";
+    original.control("User1").value = "Original School";
+
+    const replacement = harness.fragment();
+    harness.initialize(replacement);
+    replacement.control("otherSchoolName").value = "Replacement School";
+    replacement.control("otherSchoolName").dispatchEvent({ type: "change", target: replacement.control("otherSchoolName") });
+    await replacement.control("dlbutton").dispatchEvent({ type: "click", target: replacement.control("dlbutton") });
+    await new Promise(resolve => setImmediate(resolve));
+
+    assert.equal(replacement.control("User1").value, "Replacement School");
+    assert.equal(replacement.control("NameFirst").value, "Replacement");
+    assert.equal(original.control("User1").value, "Original School");
+    assert.equal(original.control("NameFirst").value, "Original");
+});
+
+test("repeated branch replacements bind handlers to only the newest fragment", async () => {
+    const harness = createRegistrationHandlerHarness();
+    const original = harness.fragment();
+    const firstReplacement = harness.fragment();
+    const newestReplacement = harness.fragment();
+
+    harness.initialize(original);
+    harness.initialize(firstReplacement);
+    harness.initialize(newestReplacement);
+
+    original.control("User1").value = "Original School";
+    firstReplacement.control("User1").value = "First School";
+    newestReplacement.control("otherSchoolName").value = "Newest School";
+    newestReplacement.control("otherSchoolName").dispatchEvent({ type: "change", target: newestReplacement.control("otherSchoolName") });
+    await newestReplacement.control("dlbutton").dispatchEvent({ type: "click", target: newestReplacement.control("dlbutton") });
+    await new Promise(resolve => setImmediate(resolve));
+
+    assert.equal(newestReplacement.control("User1").value, "Newest School");
+    assert.equal(newestReplacement.control("NameFirst").value, "Replacement");
+    assert.equal(original.control("User1").value, "Original School");
+    assert.equal(firstReplacement.control("User1").value, "First School");
+    assert.equal(newestReplacement.control("dlbutton").listenerCount("click"), 1);
+    assert.equal(newestReplacement.control("otherSchoolName").listenerCount("change"), 1);
 });
 
 test("abandoning a registration cannot restore a previous patron from Web Storage", () => {
