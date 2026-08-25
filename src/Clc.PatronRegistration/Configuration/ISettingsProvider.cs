@@ -53,7 +53,7 @@ namespace Clc.PatronRegistration.Configuration
         [AdminSetting(SettingCategory.KioskAndSessionBehavior, "On-site success message", "Replaces the default success message after a successful on-site registration that will automatically reset.", ValueType = SettingValueType.LongString, IsHtmlExecutionContext = true)]
         [JsonIgnore]
         string KioskRegistrationText { get; }
-        [AdminSetting(SettingCategory.KioskAndSessionBehavior, "On-site registration introduction", "Retained for compatibility; no current registration-page consumer has been established.")]
+        /// <summary>Compatibility-only. No current registration-page consumer has been established.</summary>
         [JsonIgnore]
         string KioskRegistrationHeader { get; }
         [AdminSetting(SettingCategory.FormBehaviorAndFields, "School-information heading", "Displays as the heading above the school, student, teacher, and card-delivery fields.")]

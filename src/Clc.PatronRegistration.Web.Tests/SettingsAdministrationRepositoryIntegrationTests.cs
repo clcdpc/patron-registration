@@ -30,6 +30,7 @@ public sealed class SettingsAdministrationRepositoryIntegrationTests
     private static string? databaseName;
     private static string? databaseConnectionString;
     private static string? unavailableReason;
+    private static bool sqlIntegrationConfigured;
     private static bool databaseCreated;
     private static bool schemaReady;
     private static TestContext? classContext;
@@ -74,6 +75,11 @@ public sealed class SettingsAdministrationRepositoryIntegrationTests
         "kiosk_registration_header", "reset_seconds"
     ];
 
+    private static readonly string[] IntegrationTestSettingTypeKeys =
+    [
+        "test.first", "test.second", "test.secret"
+    ];
+
     [ClassInitialize]
     public static void CreateDatabase(TestContext context)
     {
@@ -81,9 +87,12 @@ public sealed class SettingsAdministrationRepositoryIntegrationTests
         var configured = Environment.GetEnvironmentVariable(ConnectionVariable);
         if (string.IsNullOrWhiteSpace(configured))
         {
+            sqlIntegrationConfigured = false;
             unavailableReason = $"SQL-backed repository tests require {ConnectionVariable}. The connection must permit CREATE DATABASE.";
             return;
         }
+
+        sqlIntegrationConfigured = true;
 
         databaseName = $"PatronRegistrationTests_{Guid.NewGuid():N}";
         try
@@ -153,7 +162,11 @@ public sealed class SettingsAdministrationRepositoryIntegrationTests
     [TestInitialize]
     public void ResetDatabase()
     {
-        if (unavailableReason is not null) Assert.Inconclusive(unavailableReason);
+        if (unavailableReason is not null)
+        {
+            if (!sqlIntegrationConfigured) Assert.Inconclusive(unavailableReason);
+            Assert.Fail(unavailableReason);
+        }
         Assert.IsTrue(databaseCreated && schemaReady && databaseConnectionString is not null,
             "The SQL integration fixture attempted setup but did not finish deploying the schema.");
         clock = new MutableTimeProvider(new DateTimeOffset(2030, 4, 5, 6, 7, 8, TimeSpan.Zero));
@@ -221,6 +234,14 @@ update dbo.RegistrationSettingsCacheGeneration set Generation=0,ModifiedAtUtc=SY
         {
             Assert.AreEqual(1, actual.Count(actualKey => actualKey.Equals(key, StringComparison.OrdinalIgnoreCase)), key);
         }
+        foreach (var compatibilityOnlyKey in new[]
+        {
+            "school_info_format", "hide_gender", "na_gender_text", "kiosk_registration_header"
+        })
+        {
+            Assert.AreEqual(1, actual.Count(actualKey => actualKey.Equals(compatibilityOnlyKey, StringComparison.OrdinalIgnoreCase)),
+                compatibilityOnlyKey);
+        }
         Assert.AreEqual(1, Scalar<int>("select count(*) from sys.foreign_keys where parent_object_id=object_id('dbo.RegistrationFormSettings') and name='FK_Registration_Form_Settings_Registration_Form_Setting_Types' and is_disabled=0"));
     }
 
@@ -242,6 +263,35 @@ update dbo.RegistrationSettingsCacheGeneration set Generation=0,ModifiedAtUtc=SY
         }
 
         Assert.AreEqual(originalValue, ReadSettingValue(101, "form", "school_info_format"));
+    }
+
+    [TestMethod]
+    public void BackendOnlyKioskRegistrationHeaderValueAndTypeSurviveCatalogMigrationsUnchanged()
+    {
+        const string originalValue = "legacy kiosk header";
+        using (var connection = Open())
+        {
+            Execute(connection, "delete dbo.RegistrationFormSettings where OrganizationID=101 and Setting='kiosk_registration_header' and FormCode='form';");
+            Execute(connection,
+                "insert dbo.RegistrationFormSettings(OrganizationID, Setting, FormCode, Value) values(101, 'kiosk_registration_header', 'form', @value);",
+                parameters: command => command.Parameters.AddWithValue("@value", originalValue));
+
+            foreach (var file in new[]
+            {
+                "007-remove-legacy-header-image-url.sql",
+                "008-migrate-legacy-registration-field-settings.sql",
+                "009-register-setting-catalog-keys.sql",
+                "settings-administration.sql"
+            })
+            {
+                var script = File.ReadAllText(Path.Combine(RepositoryRoot(), "database", file));
+                Execute(connection, script, 30);
+                Execute(connection, script, 30);
+            }
+        }
+
+        Assert.AreEqual(1, Scalar<int>("select count(*) from dbo.RegistrationFormSettingTypes where Setting='kiosk_registration_header'"));
+        Assert.AreEqual(originalValue, ReadSettingValue(101, "form", "kiosk_registration_header"));
     }
 
     [TestMethod]
@@ -2104,6 +2154,13 @@ begin
 end;");
 
         foreach (var key in ExistingSettingTypeKeys)
+        {
+            Execute(connection,
+                "if not exists (select 1 from dbo.RegistrationFormSettingTypes where Setting=@key) insert dbo.RegistrationFormSettingTypes(Setting) values(@key);",
+                parameters: command => command.Parameters.AddWithValue("@key", key));
+        }
+
+        foreach (var key in IntegrationTestSettingTypeKeys)
         {
             Execute(connection,
                 "if not exists (select 1 from dbo.RegistrationFormSettingTypes where Setting=@key) insert dbo.RegistrationFormSettingTypes(Setting) values(@key);",

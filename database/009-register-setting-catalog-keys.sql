@@ -1,4 +1,4 @@
-/* Register the complete persistable SettingCatalog contract. */
+/* Register the complete administrable SettingCatalog contract. */
 SET XACT_ABORT ON;
 BEGIN TRANSACTION;
 
@@ -17,6 +17,7 @@ DECLARE @CatalogSettingTypes TABLE
     Setting nvarchar(200) NOT NULL PRIMARY KEY
 );
 
+/* Compatibility-only setting types are intentionally omitted; this migration is insert-only and retains existing rows. */
 /* BEGIN SETTING_CATALOG_ALLOWLIST */
 INSERT @CatalogSettingTypes (Setting)
 VALUES
@@ -93,7 +94,6 @@ VALUES
         ('show_dl_ips'),
         ('reset_form'),
         ('kiosk_registration_text'),
-        ('kiosk_registration_header'),
         ('reset_seconds'),
         ('alert.PatronBranchID'),
         ('alert.NameFirst'),

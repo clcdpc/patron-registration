@@ -37,8 +37,7 @@ public class SettingsAdministrationTests
         "valid_address_registration_text", "valid_address_plus_name_registration_text", "out_of_state_block_message",
         "valid_address_patron_code_id", "valid_address_plus_name_patron_code_id", "valid_address_record_set_id",
         "valid_address_plus_name_record_set_id", "invalid_address_record_set_id", "registration_logon_user_id",
-        "add_to_record_set_id", "post_registration_note_text", "show_dl_ips", "reset_form", "kiosk_registration_text",
-        "kiosk_registration_header", "reset_seconds"
+        "add_to_record_set_id", "post_registration_note_text", "show_dl_ips", "reset_form", "kiosk_registration_text", "reset_seconds"
     ];
 
     // Compatibility contract for editor semantics that cannot be safely inferred from a string CLR type.
@@ -192,6 +191,20 @@ public class SettingsAdministrationTests
             CacheWith(Setting(3, "school_info_format", "uapl")), string.Empty, 1);
 
         Assert.AreEqual("uapl", provider.SchoolInfoFormat);
+    }
+
+    [TestMethod]
+    public void KioskRegistrationHeader_RemainsCompatibilityOnlyAndExistingRowsStillResolve()
+    {
+        var property = typeof(ISettingProvider).GetProperty(nameof(ISettingProvider.KioskRegistrationHeader));
+        Assert.IsNotNull(property);
+        Assert.IsNull(property!.GetCustomAttribute<AdminSettingAttribute>(inherit: false));
+        Assert.IsFalse(new SettingCatalog().TryGet("kiosk_registration_header", out _));
+
+        var provider = new DbSettingProvider(3,
+            CacheWith(Setting(3, "kiosk_registration_header", "legacy kiosk header")), string.Empty, 1);
+
+        Assert.AreEqual("legacy kiosk header", provider.KioskRegistrationHeader);
     }
 
     [TestMethod]
@@ -1453,7 +1466,13 @@ public class SettingsAdministrationTests
     public void SqlSettingAllowlistsMatchEveryPersistableCatalogKey()
     {
         var expected = new SettingCatalog().All.Select(setting => setting.Key).ToArray();
-        Assert.IsFalse(expected.Contains("school_info_format", StringComparer.OrdinalIgnoreCase));
+        foreach (var compatibilityOnlyKey in new[]
+        {
+            "school_info_format", "hide_gender", "na_gender_text", "kiosk_registration_header"
+        })
+        {
+            Assert.IsFalse(expected.Contains(compatibilityOnlyKey, StringComparer.OrdinalIgnoreCase), compatibilityOnlyKey);
+        }
         var root = FindRepositoryRoot();
         foreach (var relativePath in new[]
         {
@@ -1977,7 +1996,7 @@ public class SettingsAdministrationTests
         var interfaceProperties = typeof(ISettingProvider).GetProperties(BindingFlags.Instance | BindingFlags.Public);
         var providerProperties = typeof(DbSettingProvider).GetProperties(BindingFlags.Instance | BindingFlags.Public);
 
-        Assert.AreEqual(75, AdministrationProperties().Length);
+        Assert.AreEqual(74, AdministrationProperties().Length);
         Assert.IsFalse(providerProperties.Any(property => property.GetCustomAttribute<AdminSettingAttribute>() is not null));
         Assert.IsTrue(SettingPropertyMetadataCache.GetAll().Where(metadata => metadata.Administration is not null)
             .All(metadata => metadata.Property.DeclaringType == typeof(ISettingProvider)));

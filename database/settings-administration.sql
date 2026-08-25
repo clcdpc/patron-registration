@@ -445,6 +445,7 @@ begin try
 		('mailing_list_checkbox_label', 'label.AddToMailingList'),
 		('require_preferred_pickup_location', 'require.RequestPickupBranchID')
 
+	/* Compatibility-only setting types are intentionally omitted; catalog registration is insert-only and retains existing rows. */
 	/* BEGIN SETTING_CATALOG_ALLOWLIST */
 	insert into @required_setting_types
 	(
@@ -524,7 +525,6 @@ begin try
 		('show_dl_ips'),
 		('reset_form'),
 		('kiosk_registration_text'),
-		('kiosk_registration_header'),
 		('reset_seconds'),
 		('alert.PatronBranchID'),
 		('alert.NameFirst'),
