@@ -118,18 +118,18 @@ public sealed class SettingsAdministrationRepositoryIntegrationTests
             using var database = new SqlConnection(candidateConnectionString);
             database.Open();
             DeployExistingRegistrationSettingsSchema(database);
-            foreach (var file in new[] { "001-settings-administration.sql", "002-preview-operational-branch.sql", "003-expand-audit-setting-values.sql", "004-registration-form-assets.sql", "005-registration-form-asset-scope.sql", "006-register-header-image-asset-setting.sql", "007-remove-legacy-header-image-url.sql", "008-migrate-legacy-registration-field-settings.sql", "009-register-setting-catalog-keys.sql", "010-registration-form-asset-cleanup.sql", "011-registration-form-asset-reference-lock.sql", "012-draft-revision-and-preview-generation.sql" })
+            foreach (var file in NumberedMigrationPaths())
             {
-                Execute(database, File.ReadAllText(Path.Combine(RepositoryRoot(), "database", file)), 30);
+                Execute(database, File.ReadAllText(file), 30);
             }
             // Exercise the incremental migrations' repeatability during fixture deployment.
-            Execute(database, File.ReadAllText(Path.Combine(RepositoryRoot(), "database", "006-register-header-image-asset-setting.sql")), 30);
-            Execute(database, File.ReadAllText(Path.Combine(RepositoryRoot(), "database", "007-remove-legacy-header-image-url.sql")), 30);
-            Execute(database, File.ReadAllText(Path.Combine(RepositoryRoot(), "database", "008-migrate-legacy-registration-field-settings.sql")), 30);
-            Execute(database, File.ReadAllText(Path.Combine(RepositoryRoot(), "database", "009-register-setting-catalog-keys.sql")), 30);
-            Execute(database, File.ReadAllText(Path.Combine(RepositoryRoot(), "database", "010-registration-form-asset-cleanup.sql")), 30);
-            Execute(database, File.ReadAllText(Path.Combine(RepositoryRoot(), "database", "011-registration-form-asset-reference-lock.sql")), 30);
-            Execute(database, File.ReadAllText(Path.Combine(RepositoryRoot(), "database", "012-draft-revision-and-preview-generation.sql")), 30);
+            Execute(database, File.ReadAllText(MigrationPath("006-register-header-image-asset-setting.sql")), 30);
+            Execute(database, File.ReadAllText(MigrationPath("007-remove-legacy-header-image-url.sql")), 30);
+            Execute(database, File.ReadAllText(MigrationPath("008-migrate-legacy-registration-field-settings.sql")), 30);
+            Execute(database, File.ReadAllText(MigrationPath("009-register-setting-catalog-keys.sql")), 30);
+            Execute(database, File.ReadAllText(MigrationPath("010-registration-form-asset-cleanup.sql")), 30);
+            Execute(database, File.ReadAllText(MigrationPath("011-registration-form-asset-reference-lock.sql")), 30);
+            Execute(database, File.ReadAllText(MigrationPath("012-draft-revision-and-preview-generation.sql")), 30);
             databaseConnectionString = candidateConnectionString;
             schemaReady = true;
         }
@@ -256,8 +256,8 @@ update dbo.RegistrationSettingsCacheGeneration set Generation=0,ModifiedAtUtc=SY
                 "insert dbo.RegistrationFormSettings(OrganizationID, Setting, FormCode, Value) values(101, 'school_info_format', 'form', @value);",
                 parameters: command => command.Parameters.AddWithValue("@value", originalValue));
 
-            Execute(connection, File.ReadAllText(Path.Combine(RepositoryRoot(), "database", "009-register-setting-catalog-keys.sql")), 30);
-            Execute(connection, File.ReadAllText(Path.Combine(RepositoryRoot(), "database", "009-register-setting-catalog-keys.sql")), 30);
+            Execute(connection, File.ReadAllText(MigrationPath("009-register-setting-catalog-keys.sql")), 30);
+            Execute(connection, File.ReadAllText(MigrationPath("009-register-setting-catalog-keys.sql")), 30);
             Execute(connection, File.ReadAllText(Path.Combine(RepositoryRoot(), "database", "settings-administration.sql")), 30);
             Execute(connection, File.ReadAllText(Path.Combine(RepositoryRoot(), "database", "settings-administration.sql")), 30);
         }
@@ -284,7 +284,10 @@ update dbo.RegistrationSettingsCacheGeneration set Generation=0,ModifiedAtUtc=SY
                 "settings-administration.sql"
             })
             {
-                var script = File.ReadAllText(Path.Combine(RepositoryRoot(), "database", file));
+                var scriptPath = file.Equals("settings-administration.sql", StringComparison.OrdinalIgnoreCase)
+                    ? Path.Combine(RepositoryRoot(), "database", file)
+                    : MigrationPath(file);
+                var script = File.ReadAllText(scriptPath);
                 Execute(connection, script, 30);
                 Execute(connection, script, 30);
             }
@@ -297,7 +300,7 @@ update dbo.RegistrationSettingsCacheGeneration set Generation=0,ModifiedAtUtc=SY
     [TestMethod]
     public void Migration006_IsIdempotentAndRegistersExactlyOneHeaderImageSettingType()
     {
-        var migration = File.ReadAllText(Path.Combine(RepositoryRoot(), "database", "006-register-header-image-asset-setting.sql"));
+        var migration = File.ReadAllText(MigrationPath("006-register-header-image-asset-setting.sql"));
         using (var connection = Open())
         {
             Execute(connection, migration, 30);
@@ -309,7 +312,7 @@ update dbo.RegistrationSettingsCacheGeneration set Generation=0,ModifiedAtUtc=SY
     [TestMethod]
     public void Migration007_RemovesLegacyHeaderImageUrlRowsAndIsIdempotent()
     {
-        var migration = File.ReadAllText(Path.Combine(RepositoryRoot(), "database", "007-remove-legacy-header-image-url.sql"));
+        var migration = File.ReadAllText(MigrationPath("007-remove-legacy-header-image-url.sql"));
         using (var connection = Open())
         {
             SeedLegacyHeaderImageSetting(connection);
@@ -326,7 +329,7 @@ update dbo.RegistrationSettingsCacheGeneration set Generation=0,ModifiedAtUtc=SY
     [TestMethod]
     public void Migration007_RemovesRetiredKeyFromActiveDraftButPreservesValidAndHistoricalChanges()
     {
-        var migration = File.ReadAllText(Path.Combine(RepositoryRoot(), "database", "007-remove-legacy-header-image-url.sql"));
+        var migration = File.ReadAllText(MigrationPath("007-remove-legacy-header-image-url.sql"));
         var catalog = new SettingCatalog().All.ToDictionary(setting => setting.Key, StringComparer.OrdinalIgnoreCase);
         var ordinary = catalog["registration_text"];
 
@@ -368,7 +371,7 @@ update dbo.RegistrationSettingsCacheGeneration set Generation=0,ModifiedAtUtc=SY
     [TestMethod]
     public void Migration007_RemovesOnlyRetiredKeyFromHeaderOnlyActiveDraftAndEmptyDraftCanCommit()
     {
-        var migration = File.ReadAllText(Path.Combine(RepositoryRoot(), "database", "007-remove-legacy-header-image-url.sql"));
+        var migration = File.ReadAllText(MigrationPath("007-remove-legacy-header-image-url.sql"));
         var catalog = new SettingCatalog().All.ToDictionary(setting => setting.Key, StringComparer.OrdinalIgnoreCase);
 
         using (var connection = Open())
@@ -398,7 +401,7 @@ update dbo.RegistrationSettingsCacheGeneration set Generation=0,ModifiedAtUtc=SY
     [TestMethod]
     public void Migration008_MigratesOwnedRowsDraftsAndSettingTypesIdempotently()
     {
-        var migration = File.ReadAllText(Path.Combine(RepositoryRoot(), "database", "008-migrate-legacy-registration-field-settings.sql"));
+        var migration = File.ReadAllText(MigrationPath("008-migrate-legacy-registration-field-settings.sql"));
         using (var connection = Open())
         {
             SeedLegacyRegistrationFieldSetting(connection, 3, "legal_name_checkbox_label", "branch-form", "Branch legal name");
@@ -2350,6 +2353,12 @@ end;");
         command.ExecuteNonQuery();
     }
     private static string RepositoryRoot() => Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../../"));
+    private static string MigrationDirectory() => Path.Combine(RepositoryRoot(), "database", "migrations");
+    private static string MigrationPath(string fileName) => Path.Combine(MigrationDirectory(), fileName);
+    private static IReadOnlyList<string> NumberedMigrationPaths() => Directory
+        .EnumerateFiles(MigrationDirectory(), "*.sql")
+        .OrderBy(path => int.Parse(Path.GetFileName(path).Split('-', 2)[0]))
+        .ToArray();
     private static void DropDatabaseCore(string configured)
     {
         if (databaseName is null) return;

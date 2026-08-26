@@ -80,13 +80,13 @@ Every live mutation increments `RegistrationSettingsCacheGeneration` and immedia
 
 All settings-administration responses use `Cache-Control: no-store, no-cache, max-age=0`, `Pragma: no-cache`, and `Referrer-Policy: no-referrer`.
 
-## Manual database deployment
+## Database deployment
 
-1. Back up `clcdb` and verify the existing `dbo.RegistrationFormSettings` table.
-2. Run the twelve migrations listed in [`database/README.md`](database/README.md), including [`011-registration-form-asset-reference-lock.sql`](database/011-registration-form-asset-reference-lock.sql) and [`012-draft-revision-and-preview-generation.sql`](database/012-draft-revision-and-preview-generation.sql), in that exact order. Migration 002 revokes legacy unbound preview links before requiring an operational branch. Migration 006 must register `header_image_asset_id` before the application persists that key. Migration 007 removes URL-only settings and retired-key mutations from active drafts while preserving historical draft and audit data. Migration 008 registers the four replacement setting types, migrates same-scope live and unambiguous active-draft values, preserves replacement conflicts, and removes the four retired keys. Migration 009 and the convergence script add missing administrable setting types only; they do not delete compatibility-only `kiosk_registration_header` (or other backend-only) setting-type or setting rows. Migration 011 installs the durable database lock that coordinates image-reference changes with orphan cleanup. Migration 012 adds the atomic shared-draft revision and preview-generation checks.
-3. Apply the least-privilege grants described in [`database/README.md`](database/README.md).
-4. Configure Azure AD, role assignments, organization IDs, SQL access, and existing external services.
-5. Deploy the application only after all twelve migrations succeed. Existing URL-based header images disappear in this version and remain absent until database-backed replacement images are uploaded through the Header image administration editor.
+1. Back up `clcdb`.
+2. Run [`database/Invoke-Migrations.ps1`](database/Invoke-Migrations.ps1), which discovers the numbered files in [`database/migrations/`](database/migrations/) and applies them in numeric order. It records checksums in `dbo.PatronRegistrationMigrations`, rejects tampering, runs each new migration and history insert atomically, and serializes deployments with a SQL Server application lock.
+3. For an existing database where 001–012 were applied before migration history existed, use the intentional [`-Baseline`](database/README.md#existing-databases-explicit-baselineadoption) operation only after its invariant checks pass. Never blindly rerun those files.
+4. Verify the runner's final status and configure Azure AD, role assignments, organization IDs, SQL access, and existing external services.
+5. Deploy the application only after migrations succeed. The application never runs production migrations or creates/updates this schema at startup.
 6. Verify the affected public registration pages and confirm that each replacement image is displayed.
 
-Production requires HTTPS; the application redirects to HTTPS and enables HSTS outside Development. All SQL scripts are manual and idempotent when applied in order. The application never applies production schema changes automatically.
+Applied migration files are immutable. Add a new numbered migration for corrections. Production requires HTTPS; the application redirects to HTTPS and enables HSTS outside Development.

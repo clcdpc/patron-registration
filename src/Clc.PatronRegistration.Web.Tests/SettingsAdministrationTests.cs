@@ -1476,7 +1476,7 @@ public class SettingsAdministrationTests
         var root = FindRepositoryRoot();
         foreach (var relativePath in new[]
         {
-            "database/009-register-setting-catalog-keys.sql",
+            "database/migrations/009-register-setting-catalog-keys.sql",
             "database/settings-administration.sql"
         })
         {

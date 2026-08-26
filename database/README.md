@@ -1,14 +1,74 @@
 # Settings administration database deployment
 
-1. Back up `clcdb` and verify the existing `dbo.RegistrationFormSettings` table and its unique scope/key constraint.
-2. Run these migrations against **clcdb**, in this exact order, using a deployment identity allowed to create tables, constraints, indexes, and perform the migration deletes: `001-settings-administration.sql`, `002-preview-operational-branch.sql`, `003-expand-audit-setting-values.sql`, `004-registration-form-assets.sql`, `005-registration-form-asset-scope.sql`, `006-register-header-image-asset-setting.sql`, `007-remove-legacy-header-image-url.sql`, `008-migrate-legacy-registration-field-settings.sql`, `009-register-setting-catalog-keys.sql`, `010-registration-form-asset-cleanup.sql`, `011-registration-form-asset-reference-lock.sql`, then `012-draft-revision-and-preview-generation.sql`. Migration 006 must register `header_image_asset_id` before the application persists that key. Migration 007 removes URL-only settings and retired-key mutations from active drafts while preserving historical draft and audit data. Migration 008 registers the replacement setting types, migrates the remaining legacy labels and preferred-pickup requiredness at each row's exact organization/form scope, resolves same-scope conflicts in favor of replacement rows, and removes retired live rows, active-draft mutations, and setting-type rows. Migration 009 registers the complete administrable application catalog, including generated alert, label, and requiredness keys. Migration 009 and the convergence script do not synchronize catalog types by deletion: their catalog-registration paths add missing rows and retain pre-existing backend/compatibility-only rows such as `school_info_format`, `hide_gender`, `na_gender_text`, and `kiosk_registration_header`. The convergence script's separate retired-key cleanup remains limited to the documented legacy keys. Migration 010 adds the created-date access path used by bounded orphan-asset cleanup. Migration 011 adds the durable singleton row used to serialize reference establishment/removal with cleanup. Migration 012 adds the atomic shared-draft revision and binds existing live preview links to the current cache-generation value.
-3. Grant the application's database identity `SELECT`, `INSERT`, `UPDATE`, and `DELETE` on the new tables and existing `RegistrationFormSettings` (least privilege may instead be supplied through approved stored procedures).
-4. Deploy the new application after all twelve migrations succeed. URL-only headers are unsupported by this version, so those headers will be absent from deployment until their replacement image is uploaded.
-5. Immediately use the Header image administration editor to upload database-backed replacements for registrations that previously used `header_image_url`.
-6. Verify the affected public registration pages and confirm that each replacement image is displayed.
+The numbered SQL files in [`migrations/`](migrations/) are the authoritative database change history for patron-registration. The application does not apply production migrations at startup.
 
-The script is repeatable and uses UTC `datetime2`. The application never runs this script or any production migration automatically. The filtered unique index enforces one Active draft per organization/form-code scope. Token hashes, not bearer tokens, are persisted. `RegistrationSettingsCacheGeneration` is the cross-process invalidation counter; live preview links store the generation at issuance and are rejected after any effective settings save.
+## Deployment
 
-Registration image assets are stored separately from `RegistrationFormSettings`; settings contain only the referenced asset ID. `RegistrationFormAssets` plus `header_image_asset_id` are the only supported registration header-image mechanism after migration 007. External header-image URLs are unsupported. New assets record the organization/form settings scope that uploaded them. An asset can be used only at that scope or through its normal inherited settings chain. Assets uploaded for a draft may remain as unreferenced rows when that draft is discarded. They are not enumerated by the application: the anonymous asset route serves only IDs referenced by persisted settings, while authenticated settings and token-scoped preview routes serve authorized draft assets. Assets created before scope metadata was added remain usable only when the requested effective settings or active draft references them. A hosted cleanup worker deletes only globally unreferenced assets older than the configured grace period, in bounded batches; live settings and every active draft scope protect an asset. Settings writes, draft reference changes, form-code deletion, and cleanup acquire `RegistrationFormAssetReferenceLocks.LockId=1` before their other database locks. Image saves verify the asset row while that transaction-owned lock is held, so cleanup and reference establishment have only save-wins or cleanup-wins outcomes. Historical database rows and audit events may still refer to the retired `header_image_url` key, but migration 007 removes the live settings and active-draft mutations that could otherwise be committed.
+1. Back up `clcdb` and confirm that the deployment identity can create tables, constraints, and indexes and can perform the data changes required by the migrations.
+2. Supply a connection string without putting credentials in the repository. The runner reads `PATRON_REGISTRATION_SQL_CONNECTION_STRING`, or accepts `-ConnectionStringFile` for a protected secret file. It always targets `clcdb` by default.
+3. Run the migration runner from the repository:
 
-Migration 008 retires `legal_name_checkbox_label`, `ecard_checkbox_label`, `mailing_list_checkbox_label`, and `require_preferred_pickup_location`. Their authoritative replacements are `label.UseLegalName`, `label.IsECard`, `label.AddToMailingList`, and `require.RequestPickupBranchID`, respectively. The migration copies only explicitly owned rows at the same organization/form scope, never materializes inherited effective values, preserves replacement rows when both keys exist, and migrates or removes active-draft mutations so publishing a draft cannot recreate a retired key. Historical committed, discarded, and invalidated draft and audit records remain unchanged.
+   ```powershell
+   $env:PATRON_REGISTRATION_SQL_CONNECTION_STRING = 'Server=...;User ID=...;Password=...;Encrypt=True;TrustServerCertificate=False'
+   & .\database\Invoke-Migrations.ps1
+   ```
+
+   The runner creates `dbo.PatronRegistrationMigrations` when needed, takes the SQL Server application lock `Clc.PatronRegistration.DatabaseMigrations`, discovers and orders the files numerically, and reports each migration. Do not print the connection string or credentials.
+4. Verify the final status and history rows, then deploy the application.
+5. Upload database-backed header-image replacements where required and verify the affected registration pages.
+
+Normal output is intentionally short:
+
+```text
+001 already applied
+002 already applied
+...
+012 already applied
+013 applying...
+013 applied
+Database current at migration 013
+```
+
+The runner is the only normal deployment entry point. It skips an applied migration only when both its filename and SHA-256 checksum match the history row. A changed applied file fails before any new migration runs and reports the migration ID, filename, stored checksum, and current checksum. Applied migration files are immutable; corrections require a new migration.
+
+## Existing databases: explicit baseline/adoption
+
+Do not run 001–012 directly against a database that may already contain their changes. For an environment where those migrations were previously applied manually, take a backup and intentionally adopt the existing state:
+
+```powershell
+& .\database\Invoke-Migrations.ps1 -Baseline
+```
+
+`-Baseline` is a separate operation. It does not execute the SQL files. It requires migration files 001 through 012, an empty migration-history table, and explicit schema/data invariants covering the tables and columns introduced by 001–012, the required indexes, the cache-generation and asset-reference singleton rows, the header-image/catalog state, and removal of retired live and active-draft keys. Missing or incompatible invariants cause the baseline to fail without recording migrations. A successful baseline records the current repository checksums for 001–012 and clearly reports each baselined ID; a later normal run applies any migration after 012.
+
+If a history table already contains rows, use normal execution to finish a partially recorded deployment. Do not use baseline to bypass checksum validation.
+
+## Migration history and execution safety
+
+`dbo.PatronRegistrationMigrations` is owned by patron-registration and contains:
+
+| Column | Purpose |
+| --- | --- |
+| `MigrationId` | Numeric filename prefix; primary key. |
+| `Name` | Exact migration filename; unique and immutable. |
+| `Checksum` | Exact-file SHA-256 stored as `varbinary(32)`. |
+| `AppliedAtUtc` | UTC application timestamp. |
+| `AppliedBy` | Deployment actor recorded by the runner. |
+
+The runner owns an outer transaction for every new migration. It enables `XACT_ABORT`, executes the migration, inserts its history row, and commits both together. Failures roll back the migration and history insert together. Existing 001–012 files contain `BEGIN TRANSACTION`/`COMMIT` pairs; they are intentionally unchanged and work as nested transactions inside the runner-owned transaction. A new migration must not commit or roll back the runner's outer transaction. The runner rejects a migration that changes the outer transaction shape.
+
+The application lock prevents two deployment processes from running this workflow concurrently. The lock is session-owned, waits for the configured timeout, and is released in a `finally` block; closing the connection also releases a session lock if release itself encounters an error.
+
+Only files matching `NNN-name.sql` in `database/migrations/` are migration files. The runner rejects malformed names, non-canonical numeric prefixes, duplicate numeric IDs, and ambiguous ordering before connecting to SQL Server. `database/settings-administration.sql` is a separate convergence script and is not discovered by the runner.
+
+## Adding migration 013+
+
+1. Add one new file under `database/migrations/`, using the next numeric prefix, for example `013-add-registration-option.sql`.
+2. Derive ordering from the filename; do not add an order list to code or documentation.
+3. Put the business change in that file. New migrations do not need `IF EXISTS` or `IF NOT EXISTS` guards merely for repeatable deployment because history prevents a second execution. Keep guards when they express a genuinely convergent business operation, such as ensuring a catalog row exists.
+4. Run the runner against an isolated integration database, then run it a second time and confirm the new migration is skipped.
+5. Never edit or rename a migration after it has been applied. Add a subsequent migration for every correction.
+
+The application continues to use the shared existing `clcdb`; the runner is responsible only for the numbered patron-registration migration directory and its own history table. It does not create unrelated `clcdb` schema.
+
+The filtered draft index, catalog/data transformations, asset reference lock, cache-generation counter, and preview-generation behavior are described in the administration documentation. The convergence script remains available for its existing compatibility/test scenarios, but it is not a replacement for migration history and is not run at application startup.

@@ -1,7 +1,9 @@
 /*
 	Patron-registration settings administration convergence script.
 
-	Supersedes migrations 001-012 for deployment purposes.
+	This is a separate compatibility/convergence script, not a numbered
+	migration and not part of Invoke-Migrations.ps1 discovery. New deployments
+	should use the numbered migration runner and its migration history.
 
 	Compatible with:
 	- the existing pre-settings-administration database
