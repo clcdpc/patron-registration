@@ -82,8 +82,7 @@ public sealed class DatabaseConvergenceIntegrationTests
     [DataRow("pre-revision-generation-release")]
     public void KnownHistoricalReleaseStates_ConvergeToCurrent(string state)
     {
-        AssertSucceeded(RunDatabaseUpdate());
-        DowngradeToHistoricalReleaseState(state);
+        DeployHistoricalReleaseFixture(state);
 
         var result = RunDatabaseUpdate();
 
@@ -327,6 +326,155 @@ public sealed class DatabaseConvergenceIntegrationTests
     }
 
     [TestMethod]
+    public void FilteredSharedSettingsKey_FailsBeforeOwnedSchemaCreation()
+    {
+        using (var connection = Open())
+        {
+            Execute(connection, """
+                alter table dbo.RegistrationFormSettings drop constraint PK_Convergence_Settings;
+                create unique index UX_Convergence_Settings_Filtered
+                    on dbo.RegistrationFormSettings (OrganizationID, Setting, FormCode)
+                    where OrganizationID > 0;
+                """);
+        }
+
+        var result = RunDatabaseUpdate();
+
+        Assert.AreNotEqual(0, result.ExitCode, result.Output);
+        StringAssert.Contains(result.Output, "must have a unique key on OrganizationID, Setting, and FormCode");
+        StringAssert.Contains(result.Output, "unconditional");
+        AssertNoOwnedSchema();
+        Assert.AreEqual(1, Scalar<int>("select count(*) from sys.indexes where object_id=object_id('dbo.RegistrationFormSettings') and name='UX_Convergence_Settings_Filtered' and has_filter=1 and filter_definition is not null"));
+    }
+
+    [TestMethod]
+    public void UnexpectedTrustedCheckConstraint_FailsAtomically()
+    {
+        AssertSucceeded(RunDatabaseUpdate());
+        using (var connection = Open())
+        {
+            Execute(connection, "alter table dbo.RegistrationSettingDrafts add constraint CK_RSD_UnexpectedState check (Status <> 'Forbidden');");
+            Assert.AreEqual(0, Scalar<int>("select is_not_trusted from sys.check_constraints where parent_object_id=object_id('dbo.RegistrationSettingDrafts') and name='CK_RSD_UnexpectedState'"));
+            SeedLegacyTransformationCandidate(connection, "unexpected-check");
+        }
+
+        var before = LogicalSnapshot();
+        var result = RunDatabaseUpdate();
+
+        AssertValidationFailurePreservedSchemaAndData(
+            result,
+            "dbo.RegistrationSettingDrafts.CK_RSD_UnexpectedState",
+            before);
+        Assert.AreEqual(1, Scalar<int>("select count(*) from sys.check_constraints where parent_object_id=object_id('dbo.RegistrationSettingDrafts') and name='CK_RSD_UnexpectedState' and is_not_trusted=0"));
+    }
+
+    [TestMethod]
+    public void UnexpectedUniqueConstraint_FailsAtomically()
+    {
+        AssertSucceeded(RunDatabaseUpdate());
+        using (var connection = Open())
+        {
+            Execute(connection, "alter table dbo.RegistrationSettingDrafts add constraint UQ_RSD_UnexpectedScope unique (OrganizationId, FormCode, Status);");
+            SeedLegacyTransformationCandidate(connection, "unexpected-unique");
+        }
+
+        var before = LogicalSnapshot();
+        var result = RunDatabaseUpdate();
+
+        AssertValidationFailurePreservedSchemaAndData(
+            result,
+            "dbo.RegistrationSettingDrafts.UQ_RSD_UnexpectedScope",
+            before);
+        Assert.AreEqual(1, Scalar<int>("select count(*) from sys.key_constraints where parent_object_id=object_id('dbo.RegistrationSettingDrafts') and name='UQ_RSD_UnexpectedScope' and type='UQ'"));
+    }
+
+    [DataTestMethod]
+    [DataRow("unexpected-default", "dbo.RegistrationSettingDrafts.DF_RSD_Unexpected", "default")]
+    [DataRow("unexpected-foreign-key", "dbo.RegistrationSettingDrafts.FK_RSD_Unexpected", "foreign-key")]
+    public void UnexpectedTrustedDefaultOrForeignKey_FailsAtomically(
+        string formCode,
+        string expectedObject,
+        string constraintKind)
+    {
+        AssertSucceeded(RunDatabaseUpdate());
+        using (var connection = Open())
+        {
+            Execute(connection, constraintKind switch
+            {
+                "default" => "alter table dbo.RegistrationSettingDrafts add constraint DF_RSD_Unexpected default 'unexpected' for CommittedBy;",
+                "foreign-key" => "alter table dbo.RegistrationSettingDrafts add constraint FK_RSD_Unexpected foreign key (DraftId) references dbo.RegistrationSettingDrafts(DraftId);",
+                _ => throw new ArgumentOutOfRangeException(nameof(constraintKind), constraintKind, null)
+            });
+            SeedLegacyTransformationCandidate(connection, formCode);
+        }
+
+        var before = LogicalSnapshot();
+        var result = RunDatabaseUpdate();
+
+        AssertValidationFailurePreservedSchemaAndData(result, expectedObject, before);
+        if (constraintKind == "default")
+        {
+            Assert.AreEqual(1, Scalar<int>("select count(*) from sys.default_constraints where parent_object_id=object_id('dbo.RegistrationSettingDrafts') and name='DF_RSD_Unexpected'"));
+        }
+        else
+        {
+            Assert.AreEqual(1, Scalar<int>("select count(*) from sys.foreign_keys where parent_object_id=object_id('dbo.RegistrationSettingDrafts') and name='FK_RSD_Unexpected' and is_not_trusted=0"));
+        }
+    }
+
+    [TestMethod]
+    public void UnexpectedOwnedIndex_FailsAtomically()
+    {
+        AssertSucceeded(RunDatabaseUpdate());
+        using (var connection = Open())
+        {
+            Execute(connection, "create index IX_RSD_UnexpectedStatus on dbo.RegistrationSettingDrafts (Status);");
+            SeedLegacyTransformationCandidate(connection, "unexpected-index");
+        }
+
+        var before = LogicalSnapshot();
+        var result = RunDatabaseUpdate();
+
+        AssertValidationFailurePreservedSchemaAndData(
+            result,
+            "dbo.RegistrationSettingDrafts.IX_RSD_UnexpectedStatus",
+            before);
+        Assert.AreEqual(1, Scalar<int>("select count(*) from sys.indexes where object_id=object_id('dbo.RegistrationSettingDrafts') and name='IX_RSD_UnexpectedStatus'"));
+    }
+
+    [DataTestMethod]
+    [DataRow("missing-include", "")]
+    [DataRow("incorrect-include-set", "EventType,TargetOrganizationId,Succeeded")]
+    [DataRow("incorrect-include-order", "FormCode,TargetOrganizationId,EventType")]
+    public void AuditLibraryTimeIndexWithUnexpectedIncludes_FailsAtomically(
+        string mutation,
+        string expectedIncludedColumns)
+    {
+        AssertSucceeded(RunDatabaseUpdate());
+        using (var connection = Open())
+        {
+            Execute(connection, "drop index IX_RSAE_LibraryTime on dbo.RegistrationSettingAuditEvents;");
+            Execute(connection, mutation switch
+            {
+                "missing-include" => "create index IX_RSAE_LibraryTime on dbo.RegistrationSettingAuditEvents (TargetLibraryId, TimestampUtc desc);",
+                "incorrect-include-set" => "create index IX_RSAE_LibraryTime on dbo.RegistrationSettingAuditEvents (TargetLibraryId, TimestampUtc desc) include (EventType, TargetOrganizationId, Succeeded);",
+                "incorrect-include-order" => "create index IX_RSAE_LibraryTime on dbo.RegistrationSettingAuditEvents (TargetLibraryId, TimestampUtc desc) include (FormCode, TargetOrganizationId, EventType);",
+                _ => throw new ArgumentOutOfRangeException(nameof(mutation), mutation, null)
+            });
+            SeedLegacyTransformationCandidate(connection, mutation);
+        }
+
+        var before = LogicalSnapshot();
+        var result = RunDatabaseUpdate();
+
+        AssertValidationFailurePreservedSchemaAndData(
+            result,
+            "dbo.RegistrationSettingAuditEvents.IX_RSAE_LibraryTime",
+            before);
+        Assert.AreEqual(expectedIncludedColumns, ReadAuditLibraryTimeIncludedColumns());
+    }
+
+    [TestMethod]
     public void ExistingSettingsDraftsAndAssets_ArePreservedAndTransformedAsRequired()
     {
         AssertSucceeded(RunDatabaseUpdate());
@@ -382,45 +530,21 @@ public sealed class DatabaseConvergenceIntegrationTests
         Assert.AreEqual(1, Scalar<int>("select count(*) from dbo.RegistrationSettingPreviewLinks where PreviewLinkId=@linkId and RevokedAtUtc is not null", command => command.Parameters.AddWithValue("@linkId", previewLinkId)));
     }
 
-    private void DowngradeToHistoricalReleaseState(string state)
+    private void DeployHistoricalReleaseFixture(string state)
     {
         using var connection = Open();
-        switch (state)
+        var fixturePath = Path.Combine(
+            RepositoryRoot(),
+            "database",
+            "test-fixtures",
+            "historical",
+            $"{state}.sql");
+        if (!File.Exists(fixturePath))
         {
-            case "initial-core-release":
-                Execute(connection, """
-                    drop table dbo.RegistrationFormAssetReferenceLocks;
-                    drop table dbo.RegistrationFormAssets;
-                    alter table dbo.RegistrationSettingDrafts drop constraint DF_RSD_Revision;
-                    alter table dbo.RegistrationSettingDrafts drop column Revision;
-                    alter table dbo.RegistrationSettingPreviewLinks drop column LiveSettingsGeneration;
-                    alter table dbo.RegistrationSettingPreviewLinks drop column OperationalBranchId;
-                    alter table dbo.RegistrationSettingAuditEvents alter column PreviousValue nvarchar(1000) null;
-                    alter table dbo.RegistrationSettingAuditEvents alter column NewValue nvarchar(1000) null;
-                    """);
-                break;
-            case "asset-table-release":
-                Execute(connection, """
-                    drop table dbo.RegistrationFormAssetReferenceLocks;
-                    alter table dbo.RegistrationSettingDrafts drop constraint DF_RSD_Revision;
-                    alter table dbo.RegistrationSettingDrafts drop column Revision;
-                    alter table dbo.RegistrationSettingPreviewLinks drop column LiveSettingsGeneration;
-                    drop index IX_RegistrationFormAssets_UploadScope on dbo.RegistrationFormAssets;
-                    drop index IX_RegistrationFormAssets_CreatedDate on dbo.RegistrationFormAssets;
-                    alter table dbo.RegistrationFormAssets drop column UploadOrganizationId;
-                    alter table dbo.RegistrationFormAssets drop column UploadFormCode;
-                    """);
-                break;
-            case "pre-revision-generation-release":
-                Execute(connection, """
-                    alter table dbo.RegistrationSettingDrafts drop constraint DF_RSD_Revision;
-                    alter table dbo.RegistrationSettingDrafts drop column Revision;
-                    alter table dbo.RegistrationSettingPreviewLinks drop column LiveSettingsGeneration;
-                    """);
-                break;
-            default:
-                throw new ArgumentOutOfRangeException(nameof(state), state, null);
+            throw new FileNotFoundException($"Historical schema fixture was not found for {state}.", fixturePath);
         }
+
+        Execute(connection, File.ReadAllText(fixturePath));
     }
 
     private Process StartDatabaseUpdate()
@@ -485,6 +609,7 @@ public sealed class DatabaseConvergenceIntegrationTests
         Assert.AreEqual(1, Scalar<int>("select count(*) from sys.columns where object_id=object_id('dbo.RegistrationSettingPreviewLinks') and name='LiveSettingsGeneration' and is_nullable=1"));
         Assert.AreEqual(1, Scalar<int>("select count(*) from sys.columns where object_id=object_id('dbo.RegistrationSettingAuditEvents') and name='PreviousValue' and system_type_id=231 and max_length=-1 and is_nullable=1"));
         Assert.AreEqual(1, Scalar<int>("select count(*) from sys.columns where object_id=object_id('dbo.RegistrationSettingAuditEvents') and name='NewValue' and system_type_id=231 and max_length=-1 and is_nullable=1"));
+        Assert.AreEqual("EventType,TargetOrganizationId,FormCode", ReadAuditLibraryTimeIncludedColumns());
         Assert.AreEqual(1, Scalar<int>("select count(*) from sys.indexes where object_id=object_id('dbo.RegistrationSettingDrafts') and name='UX_RSD_ActiveScope' and is_unique=1 and has_filter=1"));
         Assert.AreEqual(1, Scalar<int>("select count(*) from sys.indexes where object_id=object_id('dbo.RegistrationFormAssets') and name='IX_RegistrationFormAssets_UploadScope'"));
         Assert.AreEqual(1, Scalar<int>("select count(*) from sys.indexes where object_id=object_id('dbo.RegistrationFormAssets') and name='IX_RegistrationFormAssets_CreatedDate'"));
@@ -498,6 +623,32 @@ public sealed class DatabaseConvergenceIntegrationTests
             Assert.AreEqual(1, Scalar<int>("select count(*) from dbo.RegistrationFormSettingTypes where Setting=@setting",
                 command => command.Parameters.AddWithValue("@setting", setting.Key)), setting.Key);
         }
+    }
+
+    private void AssertNoOwnedSchema()
+    {
+        var ownedTables = new[]
+        {
+            "RegistrationFormCodeMetadata", "RegistrationSettingScopeVersions", "RegistrationSettingDrafts",
+            "RegistrationSettingDraftChanges", "RegistrationSettingPreviewLinks", "RegistrationSettingAuditEvents",
+            "RegistrationSettingsCacheGeneration", "RegistrationFormAssets", "RegistrationFormAssetReferenceLocks"
+        };
+
+        foreach (var table in ownedTables)
+        {
+            Assert.AreEqual(0, Scalar<int>($"select case when object_id('dbo.{table}','U') is null then 0 else 1 end"), table);
+        }
+    }
+
+    private void AssertValidationFailurePreservedSchemaAndData(
+        UpdateResult result,
+        string expectedObject,
+        string beforeSnapshot)
+    {
+        Assert.AreNotEqual(0, result.ExitCode, result.Output);
+        StringAssert.Contains(result.Output, expectedObject);
+        StringAssert.Contains(result.Output, "supported");
+        Assert.AreEqual(beforeSnapshot, LogicalSnapshot());
     }
 
     private string LogicalSnapshot()
@@ -582,6 +733,24 @@ public sealed class DatabaseConvergenceIntegrationTests
         command.Parameters.AddWithValue("@setting", setting);
         return (string?)command.ExecuteScalar() ?? string.Empty;
     }
+
+    private string ReadAuditLibraryTimeIncludedColumns() => Scalar<string>("""
+        select coalesce(stuff
+        (
+            (
+                select ',' + c.name
+                from sys.index_columns ic
+                inner join sys.indexes i on i.object_id = ic.object_id and i.index_id = ic.index_id
+                inner join sys.columns c on c.object_id = ic.object_id and c.column_id = ic.column_id
+                where i.object_id = object_id('dbo.RegistrationSettingAuditEvents')
+                    and i.name = 'IX_RSAE_LibraryTime'
+                    and ic.is_included_column = 1
+                order by ic.index_column_id
+                for xml path(''), type
+            ).value('.', 'nvarchar(max)'),
+            1, 1, ''
+        ), '')
+        """);
 
     private T Scalar<T>(string sql, Action<SqlCommand>? parameters = null)
     {
