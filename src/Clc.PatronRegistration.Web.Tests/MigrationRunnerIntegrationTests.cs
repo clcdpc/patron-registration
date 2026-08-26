@@ -435,6 +435,87 @@ public sealed class MigrationRunnerIntegrationTests
     }
 
     [TestMethod]
+    public void RevokedHistoricalNullGenerationLivePreviewCanBeBaselinedWithoutRewritingIt()
+    {
+        var migrationPaths = NumberedMigrationPaths().ToArray();
+        foreach (var migrationPath in migrationPaths.Where(path => int.Parse(Path.GetFileName(path).Split('-', 2)[0]) <= 6))
+        {
+            using var connection = Open();
+            Execute(connection, File.ReadAllText(migrationPath), 60);
+        }
+
+        var draftId = QuerySingle(
+            """
+            insert dbo.RegistrationSettingDrafts
+                (OrganizationId, FormCode, BaselineVersion, Status, CreatedBy, ModifiedBy)
+            output inserted.DraftId
+            values (101, 'legacy-preview', 0, 'Active', 'baseline-test', 'baseline-test');
+            """,
+            null,
+            reader => reader.GetInt64(0));
+        using (var connection = Open())
+        {
+            Execute(connection,
+                """
+                insert dbo.RegistrationSettingDraftChanges
+                    (DraftId, SettingKey, Operation, Value, ModifiedBy)
+                values (@draftId, 'header_image_url', 'Upsert', 'legacy draft header', 'baseline-test');
+                """,
+                parameters: command => command.Parameters.AddWithValue("@draftId", draftId));
+        }
+        var previewLinkId = QuerySingle(
+            """
+            insert dbo.RegistrationSettingPreviewLinks
+                (DraftId, TokenHash, OperationalBranchId, AllowLiveSubmission, CreatedBy, ModifiedBy, ExpiresAtUtc)
+            output inserted.PreviewLinkId
+            values (@draftId, hashbytes('SHA2_256', 'revoked-legacy-preview'), 1, 1,
+                'baseline-test', 'baseline-test', DATEADD(HOUR, 1, SYSUTCDATETIME()));
+            """,
+            command => command.Parameters.AddWithValue("@draftId", draftId),
+            reader => reader.GetInt64(0));
+
+        var migration007 = migrationPaths.Single(path => int.Parse(Path.GetFileName(path).Split('-', 2)[0]) == 7);
+        using (var connection = Open())
+        {
+            Execute(connection, File.ReadAllText(migration007), 60);
+        }
+
+        var afterMigration007 = ReadPreviewLinkState(previewLinkId);
+        Assert.IsNotNull(afterMigration007.RevokedAtUtc);
+        Assert.AreEqual("007-remove-legacy-header-image-url.sql", afterMigration007.RevokedBy);
+        Assert.IsNull(afterMigration007.LiveSettingsGeneration);
+        Assert.IsTrue(afterMigration007.AllowLiveSubmission);
+        Assert.AreEqual(0, Scalar<int>(
+            "select count(*) from dbo.RegistrationSettingDraftChanges where DraftId=@draftId",
+            command => command.Parameters.AddWithValue("@draftId", draftId)));
+
+        foreach (var migrationPath in migrationPaths.Where(path =>
+            int.Parse(Path.GetFileName(path).Split('-', 2)[0]) is >= 8 and <= 12))
+        {
+            using var connection = Open();
+            Execute(connection, File.ReadAllText(migrationPath), 60);
+        }
+
+        var beforeBaseline = ReadPreviewLinkState(previewLinkId);
+        Assert.AreEqual(afterMigration007, beforeBaseline);
+        Assert.AreEqual(0, Scalar<int>(
+            "select count(*) from sys.tables where name='PatronRegistrationMigrations' and schema_id=schema_id('dbo')"));
+
+        var baseline = RunRunner(MigrationDirectory(), baseline: true);
+        Assert.AreEqual(0, baseline.ExitCode, baseline.Output);
+        StringAssert.Contains(baseline.Output, "Baselining migrations 001 through 012");
+        StringAssert.Contains(baseline.Output, "001 baselined");
+        StringAssert.Contains(baseline.Output, "012 baselined");
+        Assert.AreEqual(12, Scalar<int>("select count(*) from dbo.PatronRegistrationMigrations"));
+
+        var afterBaseline = ReadPreviewLinkState(previewLinkId);
+        Assert.AreEqual(beforeBaseline, afterBaseline);
+        Assert.IsNotNull(afterBaseline.RevokedAtUtc);
+        Assert.IsTrue(afterBaseline.AllowLiveSubmission);
+        Assert.IsNull(afterBaseline.LiveSettingsGeneration);
+    }
+
+    [TestMethod]
     public void LivePreviewWithNullGenerationCannotBeBaselined()
     {
         foreach (var migrationPath in NumberedMigrationPaths())
@@ -451,14 +532,16 @@ public sealed class MigrationRunnerIntegrationTests
                 values (101, 'form', 0, 'Active', 'baseline-test', 'baseline-test');
                 declare @draftId bigint = scope_identity();
                 insert dbo.RegistrationSettingPreviewLinks
-                    (DraftId, TokenHash, OperationalBranchId, AllowLiveSubmission, CreatedBy, ModifiedBy)
-                values (@draftId, hashbytes('SHA2_256', 'null-generation-baseline'), 1, 1, 'baseline-test', 'baseline-test');
+                    (DraftId, TokenHash, OperationalBranchId, AllowLiveSubmission, CreatedBy, ModifiedBy, ExpiresAtUtc)
+                values (@draftId, hashbytes('SHA2_256', 'null-generation-baseline'), 1, 1,
+                    'baseline-test', 'baseline-test', DATEADD(HOUR, 1, SYSUTCDATETIME()));
                 """);
         }
 
         var baseline = RunRunner(MigrationDirectory(), baseline: true);
         Assert.AreNotEqual(0, baseline.ExitCode, baseline.Output);
-        StringAssert.Contains(baseline.Output, "Baseline refused");
+        StringAssert.Contains(baseline.Output,
+            "every unrevoked live preview link for an active draft to have a non-null settings-cache generation");
         Assert.AreEqual(0, Scalar<int>("select count(*) from dbo.PatronRegistrationMigrations"));
         Assert.AreEqual(1, Scalar<int>("select count(*) from dbo.RegistrationSettingPreviewLinks where AllowLiveSubmission=1 and LiveSettingsGeneration is null"));
     }
@@ -632,6 +715,23 @@ public sealed class MigrationRunnerIntegrationTests
         parameters(command);
         return (T)Convert.ChangeType(command.ExecuteScalar()!, typeof(T));
     }
+
+    private (DateTime? RevokedAtUtc, string? RevokedBy, DateTime ModifiedAtUtc, string ModifiedBy,
+        long? LiveSettingsGeneration, bool AllowLiveSubmission) ReadPreviewLinkState(long previewLinkId)
+        => QuerySingle(
+            """
+            select RevokedAtUtc, RevokedBy, ModifiedAtUtc, ModifiedBy, LiveSettingsGeneration, AllowLiveSubmission
+            from dbo.RegistrationSettingPreviewLinks
+            where PreviewLinkId=@previewLinkId
+            """,
+            command => command.Parameters.AddWithValue("@previewLinkId", previewLinkId),
+            reader => (
+                RevokedAtUtc: reader.IsDBNull(0) ? (DateTime?)null : reader.GetDateTime(0),
+                RevokedBy: reader.IsDBNull(1) ? null : reader.GetString(1),
+                ModifiedAtUtc: reader.GetDateTime(2),
+                ModifiedBy: reader.GetString(3),
+                LiveSettingsGeneration: reader.IsDBNull(4) ? (long?)null : reader.GetInt64(4),
+                AllowLiveSubmission: reader.GetBoolean(5)));
 
     private T QuerySingle<T>(string sql, Action<SqlCommand>? parameters, Func<SqlDataReader, T> map)
         => Query(sql, parameters, map).Single();

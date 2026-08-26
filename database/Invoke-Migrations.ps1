@@ -1277,12 +1277,19 @@ FROM dbo.RegistrationFormAssetReferenceLocks;
         }
     }
 
-    if ($tableExists['RegistrationSettingPreviewLinks'] -and $null -ne $cacheGeneration) {
+    if ($tableExists['RegistrationSettingPreviewLinks'] -and $tableExists['RegistrationSettingDrafts'] -and $null -ne $cacheGeneration) {
+        # Keep this predicate aligned with migration 012. Revoked links and
+        # links on historical drafts are intentionally preserved by that
+        # migration and cannot reach the runtime preview path.
         $unboundLivePreviewCount = [int](Invoke-SqlScalar -Connection $Connection -Transaction $Transaction -CommandText @"
 SELECT COUNT(*)
-FROM dbo.RegistrationSettingPreviewLinks
-WHERE AllowLiveSubmission = 1
-  AND LiveSettingsGeneration IS NULL;
+FROM dbo.RegistrationSettingPreviewLinks AS p
+INNER JOIN dbo.RegistrationSettingDrafts AS d
+    ON d.DraftId = p.DraftId
+WHERE p.AllowLiveSubmission = 1
+  AND p.LiveSettingsGeneration IS NULL
+  AND p.RevokedAtUtc IS NULL
+  AND d.Status = 'Active';
 "@)
         $futureLivePreviewCount = [int](Invoke-SqlScalar -Connection $Connection -Transaction $Transaction -CommandText @"
 SELECT COUNT(*)
@@ -1293,7 +1300,7 @@ WHERE AllowLiveSubmission = 1
             @{ Name = '@Generation'; Type = [System.Data.SqlDbType]::BigInt; Value = $cacheGeneration; Size = 0 }
         ))
         if ($unboundLivePreviewCount -ne 0) {
-            $null = $failures.Add('012 requires every existing live preview link to have a non-null settings-cache generation.')
+            $null = $failures.Add('012 requires every unrevoked live preview link for an active draft to have a non-null settings-cache generation.')
         }
         if ($futureLivePreviewCount -ne 0) {
             $null = $failures.Add('012 requires every existing live preview link to have a settings-cache generation no greater than the current generation.')
