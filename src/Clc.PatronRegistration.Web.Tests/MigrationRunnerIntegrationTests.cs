@@ -165,6 +165,14 @@ public sealed class MigrationRunnerIntegrationTests
         var orderedMigrations = CreateTemporaryDirectory();
         try
         {
+            // Create the files in a deliberately non-numeric order. The runner
+            // must discover the directory in any order but execute by ID.
+            WriteMigration(orderedMigrations, "005-five.sql", """
+                SET XACT_ABORT ON;
+                BEGIN TRANSACTION;
+                INSERT dbo.MigrationRunnerOrderProbe (MigrationId) VALUES (5);
+                COMMIT;
+                """);
             WriteMigration(orderedMigrations, "001-create-order-probe.sql", """
                 SET XACT_ABORT ON;
                 BEGIN TRANSACTION;
@@ -178,16 +186,52 @@ public sealed class MigrationRunnerIntegrationTests
                 INSERT dbo.MigrationRunnerOrderProbe (MigrationId) VALUES (10);
                 COMMIT;
                 """);
+            WriteMigration(orderedMigrations, "003-three.sql", """
+                SET XACT_ABORT ON;
+                BEGIN TRANSACTION;
+                INSERT dbo.MigrationRunnerOrderProbe (MigrationId) VALUES (3);
+                COMMIT;
+                """);
+            WriteMigration(orderedMigrations, "007-seven.sql", """
+                SET XACT_ABORT ON;
+                BEGIN TRANSACTION;
+                INSERT dbo.MigrationRunnerOrderProbe (MigrationId) VALUES (7);
+                COMMIT;
+                """);
             WriteMigration(orderedMigrations, "002-two.sql", """
                 SET XACT_ABORT ON;
                 BEGIN TRANSACTION;
                 INSERT dbo.MigrationRunnerOrderProbe (MigrationId) VALUES (2);
                 COMMIT;
                 """);
+            WriteMigration(orderedMigrations, "009-nine.sql", """
+                SET XACT_ABORT ON;
+                BEGIN TRANSACTION;
+                INSERT dbo.MigrationRunnerOrderProbe (MigrationId) VALUES (9);
+                COMMIT;
+                """);
+            WriteMigration(orderedMigrations, "004-four.sql", """
+                SET XACT_ABORT ON;
+                BEGIN TRANSACTION;
+                INSERT dbo.MigrationRunnerOrderProbe (MigrationId) VALUES (4);
+                COMMIT;
+                """);
+            WriteMigration(orderedMigrations, "008-eight.sql", """
+                SET XACT_ABORT ON;
+                BEGIN TRANSACTION;
+                INSERT dbo.MigrationRunnerOrderProbe (MigrationId) VALUES (8);
+                COMMIT;
+                """);
+            WriteMigration(orderedMigrations, "006-six.sql", """
+                SET XACT_ABORT ON;
+                BEGIN TRANSACTION;
+                INSERT dbo.MigrationRunnerOrderProbe (MigrationId) VALUES (6);
+                COMMIT;
+                """);
 
             var ordered = RunRunner(orderedMigrations);
             Assert.AreEqual(0, ordered.ExitCode, ordered.Output);
-            CollectionAssert.AreEqual(new[] { 1, 2, 10 }, Query(
+            CollectionAssert.AreEqual(Enumerable.Range(1, 10).ToArray(), Query(
                 "select MigrationId from dbo.MigrationRunnerOrderProbe order by AppliedOrder",
                 null,
                 reader => reader.GetInt32(0)).ToArray());
@@ -228,6 +272,72 @@ public sealed class MigrationRunnerIntegrationTests
     }
 
     [TestMethod]
+    public void GapInMigrationIdsIsRejectedWithMissingIdDiagnostic()
+    {
+        var gapMigrations = CreateTemporaryDirectory();
+        try
+        {
+            WriteMigration(gapMigrations, "001-one.sql", "select 1;");
+            WriteMigration(gapMigrations, "002-two.sql", "select 1;");
+            WriteMigration(gapMigrations, "010-ten.sql", "select 1;");
+
+            var gap = RunRunner(gapMigrations);
+            Assert.AreNotEqual(0, gap.ExitCode, gap.Output);
+            StringAssert.Contains(gap.Output, "Missing migration ID 003");
+            StringAssert.Contains(gap.Output, "010-ten.sql");
+        }
+        finally
+        {
+            Directory.Delete(gapMigrations, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    public void PendingMigrationBelowAppliedHigherIdIsRejectedBeforeExecution()
+    {
+        var chronologicalMigrations = CreateTemporaryDirectory();
+        try
+        {
+            WriteMigration(chronologicalMigrations, "001-create-chronology-probe.sql", """
+                SET XACT_ABORT ON;
+                BEGIN TRANSACTION;
+                CREATE TABLE dbo.MigrationRunnerChronologyProbe (MigrationId int NOT NULL);
+                INSERT dbo.MigrationRunnerChronologyProbe (MigrationId) VALUES (1);
+                COMMIT;
+                """);
+            WriteMigration(chronologicalMigrations, "002-two.sql", """
+                SET XACT_ABORT ON;
+                BEGIN TRANSACTION;
+                INSERT dbo.MigrationRunnerChronologyProbe (MigrationId) VALUES (2);
+                COMMIT;
+                """);
+            WriteMigration(chronologicalMigrations, "003-three.sql", """
+                SET XACT_ABORT ON;
+                BEGIN TRANSACTION;
+                INSERT dbo.MigrationRunnerChronologyProbe (MigrationId) VALUES (3);
+                COMMIT;
+                """);
+
+            var initial = RunRunner(chronologicalMigrations);
+            Assert.AreEqual(0, initial.ExitCode, initial.Output);
+            using (var connection = Open())
+            {
+                Execute(connection, "delete dbo.PatronRegistrationMigrations where MigrationId=2;");
+            }
+
+            var retry = RunRunner(chronologicalMigrations);
+            Assert.AreNotEqual(0, retry.ExitCode, retry.Output);
+            StringAssert.Contains(retry.Output, "pending below already-applied migration 003");
+            Assert.AreEqual(3, Scalar<int>("select count(*) from dbo.MigrationRunnerChronologyProbe"));
+            Assert.AreEqual(2, Scalar<int>("select count(*) from dbo.PatronRegistrationMigrations"));
+        }
+        finally
+        {
+            Directory.Delete(chronologicalMigrations, recursive: true);
+        }
+    }
+
+    [TestMethod]
     public void ApplicationLockAllowsOnlyOneConcurrentRunnerToApply()
     {
         var temporaryMigrations = CreateTemporaryDirectory();
@@ -261,12 +371,47 @@ public sealed class MigrationRunnerIntegrationTests
     }
 
     [TestMethod]
-    public void CompletePreMigratedDatabaseCanBeBaselined()
+    public void PreMigratedDatabaseWithStaleLivePreviewCanBeBaselinedWithoutRebindingIt()
     {
         foreach (var migrationPath in NumberedMigrationPaths())
         {
             using var connection = Open();
             Execute(connection, File.ReadAllText(migrationPath), 60);
+        }
+
+        const long originalGeneration = 0;
+        long previewLinkId;
+        var draftId = QuerySingle(
+            """
+            insert dbo.RegistrationSettingDrafts
+                (OrganizationId, FormCode, BaselineVersion, Status, CreatedBy, ModifiedBy)
+            output inserted.DraftId
+            values (101, 'form', 0, 'Active', 'baseline-test', 'baseline-test');
+            """,
+            null,
+            reader => reader.GetInt64(0));
+        previewLinkId = QuerySingle(
+            """
+            insert dbo.RegistrationSettingPreviewLinks
+                (DraftId, TokenHash, OperationalBranchId, AllowLiveSubmission, LiveSettingsGeneration, CreatedBy, ModifiedBy)
+            output inserted.PreviewLinkId
+            values (@draftId, hashbytes('SHA2_256', 'stale-baseline'), 101, 1, @generation, 'baseline-test', 'baseline-test');
+            """,
+            command =>
+            {
+                command.Parameters.AddWithValue("@draftId", draftId);
+                command.Parameters.AddWithValue("@generation", originalGeneration);
+            },
+            reader => reader.GetInt64(0));
+        using (var connection = Open())
+        {
+            // Normal settings publication advances this singleton counter in
+            // the same way; this simulates that committed state transition.
+            Execute(connection, """
+                update dbo.RegistrationSettingsCacheGeneration
+                set Generation = Generation + 1, ModifiedAtUtc = SYSUTCDATETIME()
+                where Id = 1;
+                """);
         }
 
         var baseline = RunRunner(MigrationDirectory(), baseline: true);
@@ -275,6 +420,14 @@ public sealed class MigrationRunnerIntegrationTests
         StringAssert.Contains(baseline.Output, "001 baselined");
         StringAssert.Contains(baseline.Output, "012 baselined");
         Assert.AreEqual(12, Scalar<int>("select count(*) from dbo.PatronRegistrationMigrations"));
+        var persistedGeneration = QuerySingle(
+            "select LiveSettingsGeneration, AllowLiveSubmission from dbo.RegistrationSettingPreviewLinks where PreviewLinkId=@id",
+            command => command.Parameters.AddWithValue("@id", previewLinkId),
+            reader => (Generation: reader.IsDBNull(0) ? (long?)null : reader.GetInt64(0), AllowLive: reader.GetBoolean(1)));
+        Assert.AreEqual((long?)originalGeneration, persistedGeneration.Generation);
+        Assert.IsTrue(persistedGeneration.AllowLive);
+        Assert.AreEqual(1L, Scalar<long>("select Generation from dbo.RegistrationSettingsCacheGeneration where Id=1"));
+        Assert.IsTrue(persistedGeneration.Generation < Scalar<long>("select Generation from dbo.RegistrationSettingsCacheGeneration where Id=1"));
 
         var normal = RunRunner(MigrationDirectory());
         Assert.AreEqual(0, normal.ExitCode, normal.Output);
@@ -282,9 +435,9 @@ public sealed class MigrationRunnerIntegrationTests
     }
 
     [TestMethod]
-    public void IncompletePreMigratedDatabaseCannotBeBaselined()
+    public void LivePreviewWithNullGenerationCannotBeBaselined()
     {
-        foreach (var migrationPath in NumberedMigrationPaths().Where(path => int.Parse(Path.GetFileName(path).Split('-', 2)[0]) < 12))
+        foreach (var migrationPath in NumberedMigrationPaths())
         {
             using var connection = Open();
             Execute(connection, File.ReadAllText(migrationPath), 60);
@@ -299,7 +452,7 @@ public sealed class MigrationRunnerIntegrationTests
                 declare @draftId bigint = scope_identity();
                 insert dbo.RegistrationSettingPreviewLinks
                     (DraftId, TokenHash, OperationalBranchId, AllowLiveSubmission, CreatedBy, ModifiedBy)
-                values (@draftId, hashbytes('SHA2_256', 'incomplete-baseline'), 1, 1, 'baseline-test', 'baseline-test');
+                values (@draftId, hashbytes('SHA2_256', 'null-generation-baseline'), 1, 1, 'baseline-test', 'baseline-test');
                 """);
         }
 
@@ -308,6 +461,44 @@ public sealed class MigrationRunnerIntegrationTests
         StringAssert.Contains(baseline.Output, "Baseline refused");
         Assert.AreEqual(0, Scalar<int>("select count(*) from dbo.PatronRegistrationMigrations"));
         Assert.AreEqual(1, Scalar<int>("select count(*) from dbo.RegistrationSettingPreviewLinks where AllowLiveSubmission=1 and LiveSettingsGeneration is null"));
+    }
+
+    [TestMethod]
+    public void LivePreviewWithFutureGenerationCannotBeBaselined()
+    {
+        foreach (var migrationPath in NumberedMigrationPaths())
+        {
+            using var connection = Open();
+            Execute(connection, File.ReadAllText(migrationPath), 60);
+        }
+
+        var draftId = QuerySingle(
+            """
+            insert dbo.RegistrationSettingDrafts
+                (OrganizationId, FormCode, BaselineVersion, Status, CreatedBy, ModifiedBy)
+            output inserted.DraftId
+            values (101, 'future-generation', 0, 'Active', 'baseline-test', 'baseline-test');
+            """,
+            null,
+            reader => reader.GetInt64(0));
+        var previewLinkId = QuerySingle(
+            """
+            insert dbo.RegistrationSettingPreviewLinks
+                (DraftId, TokenHash, OperationalBranchId, AllowLiveSubmission, LiveSettingsGeneration, CreatedBy, ModifiedBy)
+            output inserted.PreviewLinkId
+            values (@draftId, hashbytes('SHA2_256', 'future-generation-baseline'), 1, 1, 1, 'baseline-test', 'baseline-test');
+            """,
+            command => command.Parameters.AddWithValue("@draftId", draftId),
+            reader => reader.GetInt64(0));
+
+        var baseline = RunRunner(MigrationDirectory(), baseline: true);
+        Assert.AreNotEqual(0, baseline.ExitCode, baseline.Output);
+        StringAssert.Contains(baseline.Output, "settings-cache generation no greater than the current generation");
+        Assert.AreEqual(0, Scalar<int>("select count(*) from dbo.PatronRegistrationMigrations"));
+        Assert.AreEqual(0L, Scalar<long>("select Generation from dbo.RegistrationSettingsCacheGeneration where Id=1"));
+        Assert.AreEqual(1L, Scalar<long>(
+            "select LiveSettingsGeneration from dbo.RegistrationSettingPreviewLinks where PreviewLinkId=@id",
+            command => command.Parameters.AddWithValue("@id", previewLinkId)));
     }
 
     private RunnerResult RunRunner(string migrationsPath, bool baseline = false)
@@ -431,6 +622,14 @@ public sealed class MigrationRunnerIntegrationTests
     {
         using var connection = Open();
         using var command = new SqlCommand(sql, connection) { CommandTimeout = 30 };
+        return (T)Convert.ChangeType(command.ExecuteScalar()!, typeof(T));
+    }
+
+    private T Scalar<T>(string sql, Action<SqlCommand> parameters)
+    {
+        using var connection = Open();
+        using var command = new SqlCommand(sql, connection) { CommandTimeout = 30 };
+        parameters(command);
         return (T)Convert.ChangeType(command.ExecuteScalar()!, typeof(T));
     }
 

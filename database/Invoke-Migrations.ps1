@@ -651,7 +651,6 @@ WHERE c.object_id = OBJECT_ID(@TableName, N'U')
         $value = $Expression.Trim().ToLowerInvariant()
         $value = $value -replace '\[', ''
         $value = $value -replace '\]', ''
-        $value = $value -replace '\s+', ''
 
         do {
             $before = $value
@@ -659,7 +658,81 @@ WHERE c.object_id = OBJECT_ID(@TableName, N'U')
             $value = [regex]::Replace($value, '\(([+-]?\d+(?:\.\d+)?)\)', '$1')
         } while ($value -ne $before)
 
-        return $value
+        foreach ($operator in @('or', 'and')) {
+            $parts = @(Split-TopLevelSqlOperator -Expression $value -Operator $operator)
+            if ($parts.Count -gt 1) {
+                $normalizedParts = @($parts | ForEach-Object {
+                    Normalize-SqlExpression -Expression $_
+                } | Sort-Object)
+                return ('{0}({1})' -f $operator, ($normalizedParts -join ','))
+            }
+        }
+
+        return ($value -replace '\s+', '')
+    }
+
+    function Split-TopLevelSqlOperator {
+        param(
+            [Parameter(Mandatory)][string]$Expression,
+            [Parameter(Mandatory)][ValidateSet('and', 'or')][string]$Operator
+        )
+
+        $parts = [System.Collections.Generic.List[string]]::new()
+        $depth = 0
+        $insideString = $false
+        $start = 0
+        for ($index = 0; $index -lt $Expression.Length; $index++) {
+            $character = $Expression[$index]
+            if ($insideString) {
+                if ($character -eq [char]39) {
+                    if ($index + 1 -lt $Expression.Length -and $Expression[$index + 1] -eq [char]39) {
+                        $index++
+                    }
+                    else {
+                        $insideString = $false
+                    }
+                }
+                continue
+            }
+
+            if ($character -eq [char]39) {
+                $insideString = $true
+                continue
+            }
+            if ($character -eq [char]40) {
+                $depth++
+                continue
+            }
+            if ($character -eq [char]41) {
+                $depth--
+                continue
+            }
+
+            if ($depth -ne 0 -or $index + $Operator.Length -gt $Expression.Length -or
+                -not $Expression.Substring($index, $Operator.Length).Equals($Operator, [StringComparison]::OrdinalIgnoreCase)) {
+                continue
+            }
+
+            $before = if ($index -eq 0) { $null } else { $Expression[$index - 1] }
+            $afterIndex = $index + $Operator.Length
+            $after = if ($afterIndex -ge $Expression.Length) { $null } else { $Expression[$afterIndex] }
+            $beforeIsIdentifier = $null -ne $before -and ([char]::IsLetterOrDigit($before) -or $before -eq [char]95)
+            $afterIsIdentifier = $null -ne $after -and ([char]::IsLetterOrDigit($after) -or $after -eq [char]95)
+            if ($beforeIsIdentifier -or $afterIsIdentifier) {
+                continue
+            }
+
+            $null = $parts.Add($Expression.Substring($start, $index - $start))
+            $start = $afterIndex
+            $index = $afterIndex - 1
+        }
+
+        if ($parts.Count -eq 0) {
+            return @($Expression)
+        }
+
+        $null = $parts.Add($Expression.Substring($start))
+        return $parts.ToArray()
     }
 
     function Test-ColumnSequence {
@@ -890,7 +963,7 @@ WHERE dc.parent_object_id = OBJECT_ID(@TableName, N'U')
             [Parameter(Mandatory)][bool[]]$DescendingKeys,
             [string[]]$IncludedColumns = @(),
             [bool]$Unique = $false,
-            [AllowNull()][string]$FilterDefinition = $null
+            [AllowNull()][object]$FilterDefinition = $null
         )
 
         if (-not $tableExists.ContainsKey($TableName) -or -not $tableExists[$TableName]) {
@@ -1211,16 +1284,19 @@ FROM dbo.RegistrationSettingPreviewLinks
 WHERE AllowLiveSubmission = 1
   AND LiveSettingsGeneration IS NULL;
 "@)
-        $staleLivePreviewCount = [int](Invoke-SqlScalar -Connection $Connection -Transaction $Transaction -CommandText @"
+        $futureLivePreviewCount = [int](Invoke-SqlScalar -Connection $Connection -Transaction $Transaction -CommandText @"
 SELECT COUNT(*)
 FROM dbo.RegistrationSettingPreviewLinks
 WHERE AllowLiveSubmission = 1
-  AND (LiveSettingsGeneration IS NULL OR LiveSettingsGeneration <> @Generation);
+  AND LiveSettingsGeneration > @Generation;
 "@ -Parameters @(
             @{ Name = '@Generation'; Type = [System.Data.SqlDbType]::BigInt; Value = $cacheGeneration; Size = 0 }
         ))
-        if ($unboundLivePreviewCount -ne 0 -or $staleLivePreviewCount -ne 0) {
-            $null = $failures.Add('012 requires every existing live preview link to be bound to the current settings-cache generation.')
+        if ($unboundLivePreviewCount -ne 0) {
+            $null = $failures.Add('012 requires every existing live preview link to have a non-null settings-cache generation.')
+        }
+        if ($futureLivePreviewCount -ne 0) {
+            $null = $failures.Add('012 requires every existing live preview link to have a settings-cache generation no greater than the current generation.')
         }
     }
 

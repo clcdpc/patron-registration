@@ -384,7 +384,7 @@ update dbo.RegistrationSettingsCacheGeneration set Generation=0,ModifiedAtUtc=SY
     [TestMethod]
     public void Migration007_RevokesSafeAndLiveLinksOnlyForChangedActiveDraftsAndAdvancesRevisionOnce()
     {
-        var migration = File.ReadAllText(Path.Combine(RepositoryRoot(), "database", "007-remove-legacy-header-image-url.sql"));
+        var migration = File.ReadAllText(MigrationPath("007-remove-legacy-header-image-url.sql"));
         using (var connection = Open())
             SeedLegacyHeaderImageSetting(connection);
 
@@ -595,7 +595,7 @@ update dbo.RegistrationSettingsCacheGeneration set Generation=0,ModifiedAtUtc=SY
     [DataRow("008-migrate-legacy-registration-field-settings.sql", "legal_name_checkbox_label", "migration-008-no-revision")]
     public void LegacyDraftMigrations_DoNotRequireRevisionColumn(string migrationFile, string legacyKey, string formCode)
     {
-        var migration = File.ReadAllText(Path.Combine(RepositoryRoot(), "database", migrationFile));
+        var migration = File.ReadAllText(MigrationPath(migrationFile));
         using (var connection = Open())
         {
             if (legacyKey == "header_image_url")
@@ -627,7 +627,7 @@ update dbo.RegistrationSettingsCacheGeneration set Generation=0,ModifiedAtUtc=SY
     [TestMethod]
     public void Migration012_RevokesLegacyLiveLinksInsteadOfBackfillingGeneration()
     {
-        var migration = File.ReadAllText(Path.Combine(RepositoryRoot(), "database", "012-draft-revision-and-preview-generation.sql"));
+        var migration = File.ReadAllText(MigrationPath("012-draft-revision-and-preview-generation.sql"));
         var draftId = SeedActiveDraft(0, First, "draft");
         var liveHash = Enumerable.Repeat((byte)69, 32).ToArray();
         var safeHash = Enumerable.Repeat((byte)70, 32).ToArray();
