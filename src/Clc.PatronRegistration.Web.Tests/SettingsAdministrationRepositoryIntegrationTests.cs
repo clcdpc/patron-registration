@@ -268,9 +268,9 @@ update dbo.RegistrationSettingsCacheGeneration set Generation=0,ModifiedAtUtc=SY
         var unrelatedHash = Enumerable.Repeat((byte)66, 32).ToArray();
         var unrelatedLinkId = SeedPreviewLink(unrelatedDraftId, unrelatedHash, clock.GetUtcNow().UtcDateTime.AddHours(1));
 
-        // Simulate a database that has the draft/link tables from the earlier
-        // an older settings schema but has not installed the Revision column yet.
-        DropDraftRevisionColumn();
+        // Simulate the historical schema before draft revisions and
+        // generation-bound live-preview admission were added together.
+        DropRevisionGenerationColumns();
         using (var connection = Open())
         {
             Execute(connection, convergence, 30);
@@ -469,7 +469,7 @@ update dbo.RegistrationSettingsCacheGeneration set Generation=0,ModifiedAtUtc=SY
     }
 
     [TestMethod]
-	public void Convergence_RepairsOwnedRowsDraftsAndSettingTypesIdempotently()
+    public void Convergence_TransformsOwnedRowsDraftsAndSettingTypesIdempotently()
     {
         var convergence = ConvergenceScript();
         using (var connection = Open())
@@ -567,7 +567,7 @@ update dbo.RegistrationSettingsCacheGeneration set Generation=0,ModifiedAtUtc=SY
     [DataTestMethod]
     [DataRow("header_image_url", "convergence-no-revision-header")]
     [DataRow("legal_name_checkbox_label", "convergence-no-revision-legacy-key")]
-    public void LegacyDraftState_IsRepairedWhenRevisionColumnIsMissing(string legacyKey, string formCode)
+    public void LegacyDraftState_ConvergesWhenRevisionAndGenerationColumnsAreMissing(string legacyKey, string formCode)
     {
         var convergence = ConvergenceScript();
         using (var connection = Open())
@@ -586,7 +586,7 @@ update dbo.RegistrationSettingsCacheGeneration set Generation=0,ModifiedAtUtc=SY
 
         try
         {
-            DropDraftRevisionColumn();
+            DropRevisionGenerationColumns();
             using var connection = Open();
             Execute(connection, convergence, 30);
             Assert.AreEqual(1, Scalar<int>("select count(*) from dbo.RegistrationSettingPreviewLinks where PreviewLinkId=" + linkId + " and RevokedAtUtc is not null"));
@@ -594,7 +594,7 @@ update dbo.RegistrationSettingsCacheGeneration set Generation=0,ModifiedAtUtc=SY
         }
         finally
         {
-            RestoreDraftRevisionColumn();
+            RestoreRevisionGenerationColumns();
         }
     }
 
@@ -2553,7 +2553,7 @@ output inserted.PreviewLinkId values(@draftId,@hash,@allowLiveSubmission,101,@li
         return (long)command.ExecuteScalar()!;
     }
 
-    private void DropDraftRevisionColumn()
+    private void DropRevisionGenerationColumns()
     {
         using var connection = Open();
         Execute(connection, @"
@@ -2568,16 +2568,20 @@ begin
     )
         alter table dbo.RegistrationSettingDrafts drop constraint DF_RSD_Revision;
     alter table dbo.RegistrationSettingDrafts drop column Revision;
-end");
+end;
+if col_length('dbo.RegistrationSettingPreviewLinks', 'LiveSettingsGeneration') is not null
+    alter table dbo.RegistrationSettingPreviewLinks drop column LiveSettingsGeneration;");
     }
 
-    private void RestoreDraftRevisionColumn()
+    private void RestoreRevisionGenerationColumns()
     {
         using var connection = Open();
         Execute(connection, @"
 if col_length('dbo.RegistrationSettingDrafts', 'Revision') is null
     alter table dbo.RegistrationSettingDrafts
-        add Revision bigint not null constraint DF_RSD_Revision default 0 with values;");
+        add Revision bigint not null constraint DF_RSD_Revision default 0 with values;
+if col_length('dbo.RegistrationSettingPreviewLinks', 'LiveSettingsGeneration') is null
+    alter table dbo.RegistrationSettingPreviewLinks add LiveSettingsGeneration bigint null;");
     }
 
     private long CreatePreviewLinkAtCurrentRevision(long draftId, byte[] tokenHash, bool allowLiveSubmission,

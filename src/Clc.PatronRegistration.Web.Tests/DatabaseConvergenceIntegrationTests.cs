@@ -73,13 +73,13 @@ public sealed class DatabaseConvergenceIntegrationTests
     }
 
     [DataTestMethod]
-    [DataRow("missing-owned-tables")]
-    [DataRow("missing-additive-columns")]
-    [DataRow("missing-keys-and-indexes")]
-    public void RepresentativePartialStates_ConvergeToCurrent(string state)
+    [DataRow("initial-core-release")]
+    [DataRow("asset-table-release")]
+    [DataRow("pre-revision-generation-release")]
+    public void KnownHistoricalReleaseStates_ConvergeToCurrent(string state)
     {
         AssertSucceeded(RunDatabaseUpdate());
-        DowngradeToRepresentativeState(state);
+        DowngradeToHistoricalReleaseState(state);
 
         var result = RunDatabaseUpdate();
 
@@ -113,42 +113,75 @@ public sealed class DatabaseConvergenceIntegrationTests
     }
 
     [TestMethod]
-    public void FailedConvergence_RollsBackSchemaAndDataChanges()
+    public void FinalInvariantFailure_RollsBackRequiredDataTransformations()
     {
+        AssertSucceeded(RunDatabaseUpdate());
+
         using (var connection = Open())
         {
             Execute(connection, """
-                create table dbo.RegistrationSettingDrafts
-                (
-                    DraftId bigint identity(1,1) not null constraint PK_ConvergenceRollback_Drafts primary key,
-                    OrganizationId int not null,
-                    FormCode nvarchar(64) not null,
-                    BaselineVersion bigint not null,
-                    Status varchar(16) not null,
-                    CreatedAtUtc datetime2(7) not null,
-                    CreatedBy nvarchar(256) not null,
-                    ModifiedAtUtc datetime2(7) not null,
-                    ModifiedBy nvarchar(256) not null,
-                    CommittedAtUtc datetime2(7) null,
-                    CommittedBy nvarchar(256) null,
-                    DiscardedAtUtc datetime2(7) null,
-                    DiscardedBy nvarchar(256) null
-                );
-                insert dbo.RegistrationSettingDrafts
-                    (OrganizationId, FormCode, BaselineVersion, Status, CreatedAtUtc, CreatedBy, ModifiedAtUtc, ModifiedBy)
-                values
-                    (101, 'form', 0, 'Active', sysutcdatetime(), 'test', sysutcdatetime(), 'test'),
-                    (101, 'form', 0, 'Active', sysutcdatetime(), 'test', sysutcdatetime(), 'test');
+                insert dbo.RegistrationSettingsCacheGeneration (Id, Generation, ModifiedAtUtc)
+                    values (2, 9, sysutcdatetime());
+                insert dbo.RegistrationFormSettingTypes (Setting) values ('legal_name_checkbox_label');
+                insert dbo.RegistrationFormSettings (OrganizationID, Setting, FormCode, Value)
+                    values (101, 'legal_name_checkbox_label', 'rollback', 'legacy value');
                 """);
         }
 
         var result = RunDatabaseUpdate();
 
         Assert.AreNotEqual(0, result.ExitCode, result.Output);
-        StringAssert.Contains(result.Output, "more than one active draft exists");
-        Assert.AreEqual(0, Scalar<int>("select case when object_id('dbo.RegistrationFormCodeMetadata','U') is null then 0 else 1 end"));
-        Assert.AreEqual(0, Scalar<int>("select case when object_id('dbo.RegistrationSettingScopeVersions','U') is null then 0 else 1 end"));
-        Assert.AreEqual(2, Scalar<int>("select count(*) from dbo.RegistrationSettingDrafts"));
+        StringAssert.Contains(result.Output, "must contain exactly one singleton row");
+        Assert.AreEqual("legacy value", ReadSetting(101, "rollback", "legal_name_checkbox_label"));
+        Assert.AreEqual(0, Scalar<int>("select count(*) from dbo.RegistrationFormSettings where OrganizationID=101 and FormCode='rollback' and Setting='label.UseLegalName'"));
+        Assert.AreEqual(2, Scalar<int>("select count(*) from dbo.RegistrationSettingsCacheGeneration"));
+    }
+
+    [DataTestMethod]
+    [DataRow("wrong-column-type", "dbo.RegistrationSettingDrafts.BaselineVersion")]
+    [DataRow("missing-check-constraint", "dbo.RegistrationSettingDrafts.CK_RSD_Status")]
+    [DataRow("missing-index", "dbo.RegistrationSettingDrafts.UX_RSD_ActiveScope")]
+    public void IncompatibleUnknownOwnedSchema_FailsAtomicallyWithoutRepairOrDataChanges(
+        string incompatibleState,
+        string expectedObject)
+    {
+        AssertSucceeded(RunDatabaseUpdate());
+        using (var connection = Open())
+        {
+            Execute(connection, incompatibleState switch
+            {
+                "wrong-column-type" => "alter table dbo.RegistrationSettingDrafts alter column BaselineVersion int not null;",
+                "missing-check-constraint" => "alter table dbo.RegistrationSettingDrafts drop constraint CK_RSD_Status;",
+                "missing-index" => "drop index UX_RSD_ActiveScope on dbo.RegistrationSettingDrafts;",
+                _ => throw new ArgumentOutOfRangeException(nameof(incompatibleState), incompatibleState, null)
+            });
+            Execute(connection, """
+                insert dbo.RegistrationFormSettingTypes (Setting) values ('legal_name_checkbox_label');
+                insert dbo.RegistrationFormSettings (OrganizationID, Setting, FormCode, Value)
+                    values (101, 'legal_name_checkbox_label', 'unknown-shape', 'preserve me');
+                """);
+        }
+
+        var result = RunDatabaseUpdate();
+
+        Assert.AreNotEqual(0, result.ExitCode, result.Output);
+        StringAssert.Contains(result.Output, expectedObject);
+        StringAssert.Contains(result.Output, "supported historical");
+        Assert.AreEqual("preserve me", ReadSetting(101, "unknown-shape", "legal_name_checkbox_label"));
+        Assert.AreEqual(0, Scalar<int>("select count(*) from dbo.RegistrationFormSettings where OrganizationID=101 and FormCode='unknown-shape' and Setting='label.UseLegalName'"));
+
+        switch (incompatibleState)
+        {
+            case "wrong-column-type":
+                Assert.AreEqual(1, Scalar<int>("select count(*) from sys.columns where object_id=object_id('dbo.RegistrationSettingDrafts') and name='BaselineVersion' and system_type_id=56"));
+                break;
+            case "missing-check-constraint":
+                Assert.AreEqual(0, Scalar<int>("select count(*) from sys.check_constraints where parent_object_id=object_id('dbo.RegistrationSettingDrafts') and name='CK_RSD_Status'"));
+                break;
+            case "missing-index":
+                Assert.AreEqual(0, Scalar<int>("select count(*) from sys.indexes where object_id=object_id('dbo.RegistrationSettingDrafts') and name='UX_RSD_ActiveScope'"));
+                break;
+        }
     }
 
     [TestMethod]
@@ -271,50 +304,40 @@ public sealed class DatabaseConvergenceIntegrationTests
         Assert.AreEqual(1, Scalar<int>("select count(*) from dbo.RegistrationSettingPreviewLinks where PreviewLinkId=@linkId and RevokedAtUtc is not null", command => command.Parameters.AddWithValue("@linkId", previewLinkId)));
     }
 
-    private void DowngradeToRepresentativeState(string state)
+    private void DowngradeToHistoricalReleaseState(string state)
     {
         using var connection = Open();
         switch (state)
         {
-            case "missing-owned-tables":
+            case "initial-core-release":
                 Execute(connection, """
-                    drop table dbo.RegistrationSettingPreviewLinks;
-                    drop table dbo.RegistrationSettingDraftChanges;
-                    drop table dbo.RegistrationSettingDrafts;
                     drop table dbo.RegistrationFormAssetReferenceLocks;
                     drop table dbo.RegistrationFormAssets;
-                    drop table dbo.RegistrationSettingAuditEvents;
-                    drop table dbo.RegistrationSettingsCacheGeneration;
-                    drop table dbo.RegistrationSettingScopeVersions;
-                    drop table dbo.RegistrationFormCodeMetadata;
-                    """);
-                break;
-            case "missing-additive-columns":
-                Execute(connection, """
-                    drop index UX_RSD_ActiveScope on dbo.RegistrationSettingDrafts;
                     alter table dbo.RegistrationSettingDrafts drop constraint DF_RSD_Revision;
                     alter table dbo.RegistrationSettingDrafts drop column Revision;
-                    alter table dbo.RegistrationSettingPreviewLinks drop column OperationalBranchId;
                     alter table dbo.RegistrationSettingPreviewLinks drop column LiveSettingsGeneration;
-                    drop index IX_RegistrationFormAssets_UploadScope on dbo.RegistrationFormAssets;
-                    alter table dbo.RegistrationFormAssets drop column UploadOrganizationId;
-                    alter table dbo.RegistrationFormAssets drop column UploadFormCode;
-                    drop table dbo.RegistrationFormAssetReferenceLocks;
+                    alter table dbo.RegistrationSettingPreviewLinks drop column OperationalBranchId;
                     alter table dbo.RegistrationSettingAuditEvents alter column PreviousValue nvarchar(1000) null;
                     alter table dbo.RegistrationSettingAuditEvents alter column NewValue nvarchar(1000) null;
                     """);
                 break;
-            case "missing-keys-and-indexes":
+            case "asset-table-release":
                 Execute(connection, """
-                    alter table dbo.RegistrationSettingDraftChanges drop constraint FK_RSDC_Draft;
-                    alter table dbo.RegistrationSettingDraftChanges drop constraint UQ_RSDC_Key;
-                    alter table dbo.RegistrationSettingDraftChanges drop constraint CK_RSDC_Value;
-                    alter table dbo.RegistrationSettingPreviewLinks drop constraint FK_RSPL_Draft;
-                    alter table dbo.RegistrationSettingPreviewLinks drop constraint UQ_RSPL_Token;
-                    drop index IX_RSAE_LibraryTime on dbo.RegistrationSettingAuditEvents;
-                    drop index IX_RSAE_ScopeFilter on dbo.RegistrationSettingAuditEvents;
+                    drop table dbo.RegistrationFormAssetReferenceLocks;
+                    alter table dbo.RegistrationSettingDrafts drop constraint DF_RSD_Revision;
+                    alter table dbo.RegistrationSettingDrafts drop column Revision;
+                    alter table dbo.RegistrationSettingPreviewLinks drop column LiveSettingsGeneration;
+                    drop index IX_RegistrationFormAssets_UploadScope on dbo.RegistrationFormAssets;
                     drop index IX_RegistrationFormAssets_CreatedDate on dbo.RegistrationFormAssets;
-                    drop index UX_RSD_ActiveScope on dbo.RegistrationSettingDrafts;
+                    alter table dbo.RegistrationFormAssets drop column UploadOrganizationId;
+                    alter table dbo.RegistrationFormAssets drop column UploadFormCode;
+                    """);
+                break;
+            case "pre-revision-generation-release":
+                Execute(connection, """
+                    alter table dbo.RegistrationSettingDrafts drop constraint DF_RSD_Revision;
+                    alter table dbo.RegistrationSettingDrafts drop column Revision;
+                    alter table dbo.RegistrationSettingPreviewLinks drop column LiveSettingsGeneration;
                     """);
                 break;
             default:
