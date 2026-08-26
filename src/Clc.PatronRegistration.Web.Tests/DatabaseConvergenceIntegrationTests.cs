@@ -70,6 +70,10 @@ public sealed class DatabaseConvergenceIntegrationTests
         AssertSucceeded(result);
         AssertCurrentState();
         Assert.AreEqual("preserved setting", ReadSetting(101, "form", "registration_text"));
+
+        var afterFirstConvergence = LogicalSnapshot();
+        AssertSucceeded(RunDatabaseUpdate());
+        Assert.AreEqual(afterFirstConvergence, LogicalSnapshot());
     }
 
     [DataTestMethod]
@@ -85,6 +89,10 @@ public sealed class DatabaseConvergenceIntegrationTests
 
         AssertSucceeded(result);
         AssertCurrentState();
+
+        var afterFirstConvergence = LogicalSnapshot();
+        AssertSucceeded(RunDatabaseUpdate());
+        Assert.AreEqual(afterFirstConvergence, LogicalSnapshot());
     }
 
     [TestMethod]
@@ -182,6 +190,76 @@ public sealed class DatabaseConvergenceIntegrationTests
                 Assert.AreEqual(0, Scalar<int>("select count(*) from sys.indexes where object_id=object_id('dbo.RegistrationSettingDrafts') and name='UX_RSD_ActiveScope'"));
                 break;
         }
+    }
+
+    [TestMethod]
+    public void SameNameActiveScopeIndexWithWrongPredicate_FailsAtomically()
+    {
+        AssertSucceeded(RunDatabaseUpdate());
+        using (var connection = Open())
+        {
+            Execute(connection, "drop index UX_RSD_ActiveScope on dbo.RegistrationSettingDrafts;");
+            Execute(connection, "create unique index UX_RSD_ActiveScope on dbo.RegistrationSettingDrafts (OrganizationId, FormCode) where Status <> 'Active';");
+            SeedLegacyTransformationCandidate(connection, "wrong-filter");
+        }
+
+        var result = RunDatabaseUpdate();
+
+        AssertValidationFailurePreservedLegacyData(result, "dbo.RegistrationSettingDrafts.UX_RSD_ActiveScope", "wrong-filter");
+        Assert.AreEqual(1, Scalar<int>("select count(*) from sys.indexes where object_id=object_id('dbo.RegistrationSettingDrafts') and name='UX_RSD_ActiveScope' and filter_definition like '%<>%'") );
+    }
+
+    [TestMethod]
+    public void SameNameStatusCheckWithWeakerTrustedDefinition_FailsAtomically()
+    {
+        AssertSucceeded(RunDatabaseUpdate());
+        using (var connection = Open())
+        {
+            Execute(connection, "alter table dbo.RegistrationSettingDrafts drop constraint CK_RSD_Status;");
+            Execute(connection, "alter table dbo.RegistrationSettingDrafts add constraint CK_RSD_Status check (Status <> 'Never');");
+            Assert.AreEqual(0, Scalar<int>("select is_not_trusted from sys.check_constraints where parent_object_id=object_id('dbo.RegistrationSettingDrafts') and name='CK_RSD_Status'"));
+            SeedLegacyTransformationCandidate(connection, "wrong-status-check");
+        }
+
+        var result = RunDatabaseUpdate();
+
+        AssertValidationFailurePreservedLegacyData(result, "dbo.RegistrationSettingDrafts.CK_RSD_Status", "wrong-status-check");
+        Assert.AreEqual(1, Scalar<int>("select count(*) from sys.check_constraints where parent_object_id=object_id('dbo.RegistrationSettingDrafts') and name='CK_RSD_Status' and definition like '%<>%'") );
+    }
+
+    [TestMethod]
+    public void SameNameOwnedForeignKeyWithWrongColumnsAndParent_FailsAtomically()
+    {
+        AssertSucceeded(RunDatabaseUpdate());
+        using (var connection = Open())
+        {
+            Execute(connection, "alter table dbo.RegistrationSettingDraftChanges drop constraint FK_RSDC_Draft;");
+            Execute(connection, "alter table dbo.RegistrationSettingDraftChanges add constraint FK_RSDC_Draft foreign key (SettingKey) references dbo.RegistrationFormSettingTypes (Setting) on delete cascade;");
+            Assert.AreEqual(0, Scalar<int>("select is_not_trusted from sys.foreign_keys where parent_object_id=object_id('dbo.RegistrationSettingDraftChanges') and name='FK_RSDC_Draft'"));
+            SeedLegacyTransformationCandidate(connection, "wrong-fk");
+        }
+
+        var result = RunDatabaseUpdate();
+
+        AssertValidationFailurePreservedLegacyData(result, "dbo.RegistrationSettingDraftChanges.FK_RSDC_Draft", "wrong-fk");
+        Assert.AreEqual(1, Scalar<int>("select count(*) from sys.foreign_keys fk join sys.foreign_key_columns fkc on fkc.constraint_object_id=fk.object_id join sys.columns c on c.object_id=fk.parent_object_id and c.column_id=fkc.parent_column_id where fk.parent_object_id=object_id('dbo.RegistrationSettingDraftChanges') and fk.name='FK_RSDC_Draft' and fk.referenced_object_id=object_id('dbo.RegistrationFormSettingTypes') and c.name='SettingKey' and fk.delete_referential_action=1"));
+    }
+
+    [TestMethod]
+    public void SameNameOwnedDefaultWithWrongDefinition_FailsAtomically()
+    {
+        AssertSucceeded(RunDatabaseUpdate());
+        using (var connection = Open())
+        {
+            Execute(connection, "alter table dbo.RegistrationSettingDrafts drop constraint DF_RSD_Code;");
+            Execute(connection, "alter table dbo.RegistrationSettingDrafts add constraint DF_RSD_Code default 'mutated' for FormCode;");
+            SeedLegacyTransformationCandidate(connection, "wrong-default");
+        }
+
+        var result = RunDatabaseUpdate();
+
+        AssertValidationFailurePreservedLegacyData(result, "dbo.RegistrationSettingDrafts.DF_RSD_Code", "wrong-default");
+        Assert.AreEqual(1, Scalar<int>("select count(*) from sys.default_constraints where parent_object_id=object_id('dbo.RegistrationSettingDrafts') and name='DF_RSD_Code' and definition like '%mutated%'") );
     }
 
     [TestMethod]
@@ -467,6 +545,29 @@ public sealed class DatabaseConvergenceIntegrationTests
             insert dbo.RegistrationFormSettings (OrganizationID, Setting, FormCode, Value)
                 values (101, 'registration_text', 'form', 'preserved setting');
             """);
+    }
+
+    private static void SeedLegacyTransformationCandidate(SqlConnection connection, string formCode)
+    {
+        Execute(connection, """
+            if not exists (select 1 from dbo.RegistrationFormSettingTypes where Setting='legal_name_checkbox_label')
+                insert dbo.RegistrationFormSettingTypes (Setting) values ('legal_name_checkbox_label');
+            insert dbo.RegistrationFormSettings (OrganizationID, Setting, FormCode, Value)
+                values (101, 'legal_name_checkbox_label', @formCode, 'preserve me');
+            """, parameters: command => command.Parameters.AddWithValue("@formCode", formCode));
+    }
+
+    private void AssertValidationFailurePreservedLegacyData(UpdateResult result, string expectedObject, string formCode)
+    {
+        Assert.AreNotEqual(0, result.ExitCode, result.Output);
+        StringAssert.Contains(result.Output, expectedObject);
+        StringAssert.Contains(result.Output, "Restore");
+        Assert.AreEqual("preserve me", ReadSetting(101, formCode, "legal_name_checkbox_label"));
+        Assert.AreEqual(1, Scalar<int>("select count(*) from dbo.RegistrationFormSettings where OrganizationID=101 and FormCode=@formCode and Setting='legal_name_checkbox_label'",
+            command => command.Parameters.AddWithValue("@formCode", formCode)));
+        Assert.AreEqual(0, Scalar<int>("select count(*) from dbo.RegistrationFormSettings where OrganizationID=101 and FormCode=@formCode and Setting='label.UseLegalName'",
+            command => command.Parameters.AddWithValue("@formCode", formCode)));
+        Assert.AreEqual(0L, Scalar<long>("select Generation from dbo.RegistrationSettingsCacheGeneration where Id=1"));
     }
 
     private string ReadSetting(int organizationId, string formCode, string setting)

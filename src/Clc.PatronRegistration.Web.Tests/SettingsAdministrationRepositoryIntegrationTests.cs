@@ -599,15 +599,19 @@ update dbo.RegistrationSettingsCacheGeneration set Generation=0,ModifiedAtUtc=SY
     }
 
     [TestMethod]
-    public void Convergence_BindsCurrentLiveLinksAndPreservesHistoricalLinks()
+    public void Convergence_RevokesLegacyLiveLinksAndPreservesHistoricalLinks()
     {
         var convergence = ConvergenceScript();
         var draftId = SeedActiveDraft(0, First, "draft");
+        var currentGeneration = repository.GetCacheGeneration();
         var liveHash = Enumerable.Repeat((byte)69, 32).ToArray();
         var safeHash = Enumerable.Repeat((byte)70, 32).ToArray();
+        var currentHash = Enumerable.Repeat((byte)72, 32).ToArray();
         var liveLinkId = SeedPreviewLink(draftId, liveHash, clock.GetUtcNow().UtcDateTime.AddHours(1),
             allowLiveSubmission: true, liveSettingsGeneration: null);
         var safeLinkId = SeedPreviewLink(draftId, safeHash, clock.GetUtcNow().UtcDateTime.AddHours(1));
+        var currentLinkId = SeedPreviewLink(draftId, currentHash, clock.GetUtcNow().UtcDateTime.AddHours(1),
+            allowLiveSubmission: true, liveSettingsGeneration: currentGeneration);
         var historicalDraftId = SeedDraft(0, "Committed", First, "historical");
         var historicalHash = Enumerable.Repeat((byte)71, 32).ToArray();
         var historicalLinkId = SeedPreviewLink(historicalDraftId, historicalHash, clock.GetUtcNow().UtcDateTime.AddHours(1),
@@ -616,17 +620,44 @@ update dbo.RegistrationSettingsCacheGeneration set Generation=0,ModifiedAtUtc=SY
         using (var connection = Open())
         {
             Execute(connection, convergence, 30);
-            Assert.IsNull(repository.GetPreviewLink(liveLinkId)!.RevokedAtUtc);
-            Assert.AreEqual(0L, repository.GetPreviewLink(liveLinkId)!.LiveSettingsGeneration);
-            Assert.IsNotNull(repository.ResolvePreviewContext(liveHash));
-            Assert.IsNull(repository.GetPreviewLink(safeLinkId)!.RevokedAtUtc);
+            var legacyLiveLink = repository.GetPreviewLink(liveLinkId)!;
+            Assert.IsNotNull(legacyLiveLink.RevokedAtUtc);
+            Assert.IsNull(legacyLiveLink.LiveSettingsGeneration);
+            Assert.IsNull(repository.ResolvePreviewContext(liveHash));
+            Assert.IsNull(repository.TryAdmitLivePreviewSubmission(liveLinkId, currentGeneration));
+            Assert.IsFalse(repository.IsLivePreviewCurrent(liveLinkId, currentGeneration));
+
+            var safeLink = repository.GetPreviewLink(safeLinkId)!;
+            Assert.IsNull(safeLink.RevokedAtUtc);
+            Assert.IsNull(safeLink.LiveSettingsGeneration);
             Assert.IsNotNull(repository.ResolvePreviewContext(safeHash));
-            Assert.IsNull(repository.GetPreviewLink(historicalLinkId)!.RevokedAtUtc);
-            Assert.IsNull(repository.GetPreviewLink(historicalLinkId)!.LiveSettingsGeneration);
+            Assert.AreEqual(currentGeneration, repository.ResolvePreviewContext(safeHash)!.CacheGeneration);
+
+            var currentLiveLink = repository.GetPreviewLink(currentLinkId)!;
+            Assert.IsNull(currentLiveLink.RevokedAtUtc);
+            Assert.AreEqual(currentGeneration, currentLiveLink.LiveSettingsGeneration);
+            Assert.IsNotNull(repository.ResolvePreviewContext(currentHash));
+            using (var admission = repository.TryAdmitLivePreviewSubmission(currentLinkId, currentGeneration))
+                Assert.IsNotNull(admission);
+
+            var historicalLink = repository.GetPreviewLink(historicalLinkId)!;
+            Assert.IsNull(historicalLink.RevokedAtUtc);
+            Assert.IsNull(historicalLink.LiveSettingsGeneration);
+            Assert.AreEqual(1, ReadChanges(historicalDraftId).Count);
+
+            var afterFirstConvergence = LogicalSnapshot();
+            var currentLinkAfterFirstConvergence = repository.GetPreviewLink(currentLinkId)!;
 
             Execute(connection, convergence, 30);
-            Assert.IsNull(repository.GetPreviewLink(liveLinkId)!.RevokedAtUtc);
-            Assert.AreEqual(0L, repository.GetPreviewLink(liveLinkId)!.LiveSettingsGeneration);
+            Assert.AreEqual(afterFirstConvergence, LogicalSnapshot());
+
+            var currentLinkAfterRepeat = repository.GetPreviewLink(currentLinkId)!;
+            Assert.AreEqual(currentLinkAfterFirstConvergence.LiveSettingsGeneration, currentLinkAfterRepeat.LiveSettingsGeneration);
+            Assert.AreEqual(currentLinkAfterFirstConvergence.RevokedAtUtc, currentLinkAfterRepeat.RevokedAtUtc);
+            CollectionAssert.AreEqual(currentLinkAfterFirstConvergence.TokenHash, currentLinkAfterRepeat.TokenHash);
+            Assert.IsNotNull(repository.ResolvePreviewContext(currentHash));
+            using (var admission = repository.TryAdmitLivePreviewSubmission(currentLinkId, currentGeneration))
+                Assert.IsNotNull(admission);
             Assert.IsNull(repository.GetPreviewLink(historicalLinkId)!.RevokedAtUtc);
         }
     }
@@ -2670,6 +2701,29 @@ values(101,@formCode,@displayName,'seed',@modifiedAtUtc,'seed',@modifiedAtUtc,'s
     private DateTime ReadPreviewExpiration(long previewLinkId) => QuerySingle("select ExpiresAtUtc from dbo.RegistrationSettingPreviewLinks where PreviewLinkId=@id",
         command => command.Parameters.AddWithValue("@id", previewLinkId), reader => reader.GetDateTime(0));
     private void AssertAuditCount(string eventType, int expected) => Assert.AreEqual(expected, ReadAudits().Count(row => row.EventType == eventType));
+    private string LogicalSnapshot()
+    {
+        var rows = new List<string>
+        {
+            Scalar<int>("select count(*) from dbo.RegistrationFormCodeMetadata").ToString(),
+            Scalar<int>("select count(*) from dbo.RegistrationSettingScopeVersions").ToString(),
+            Scalar<int>("select count(*) from dbo.RegistrationSettingDrafts").ToString(),
+            Scalar<int>("select count(*) from dbo.RegistrationSettingDraftChanges").ToString(),
+            Scalar<int>("select count(*) from dbo.RegistrationSettingPreviewLinks").ToString(),
+            Scalar<int>("select count(*) from dbo.RegistrationSettingAuditEvents").ToString(),
+            Scalar<int>("select count(*) from dbo.RegistrationFormAssets").ToString(),
+            Scalar<long>("select Generation from dbo.RegistrationSettingsCacheGeneration where Id=1").ToString()
+        };
+        rows.AddRange(Query("select Setting from dbo.RegistrationFormSettingTypes order by Setting", null, reader => reader.GetString(0)));
+        rows.AddRange(Query("select concat(OrganizationID,'|',Setting,'|',FormCode,'|',coalesce(Value,'<null>')) from dbo.RegistrationFormSettings order by OrganizationID,Setting,FormCode", null, reader => reader.GetString(0)));
+        rows.AddRange(Query("select DraftId,SettingKey,Operation,coalesce(Value,'<null>') from dbo.RegistrationSettingDraftChanges order by DraftId,SettingKey", null, reader =>
+            $"{reader.GetInt64(0)}|{reader.GetString(1)}|{reader.GetString(2)}|{reader.GetString(3)}"));
+        rows.AddRange(Query("select DraftId,Revision,Status from dbo.RegistrationSettingDrafts order by DraftId", null, reader =>
+            $"{reader.GetInt64(0)}|{reader.GetInt64(1)}|{reader.GetString(2)}"));
+        rows.AddRange(Query("select PreviewLinkId,AllowLiveSubmission,coalesce(LiveSettingsGeneration,-1),case when RevokedAtUtc is null then 0 else 1 end from dbo.RegistrationSettingPreviewLinks order by PreviewLinkId", null, reader =>
+            $"{reader.GetInt64(0)}|{reader.GetBoolean(1)}|{reader.GetInt64(2)}|{reader.GetInt32(3)}"));
+        return string.Join("\n", rows);
+    }
     private void AssertNoDraftChangesOrSuccessAudits()
     {
         Assert.AreEqual(0, CountActiveDrafts());

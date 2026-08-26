@@ -413,6 +413,304 @@ if not exists
 	if @incompatible_owned_object is not null
 		raiserror('Owned constraint %s is missing or incompatible. This is not a supported historical state; restore it before rerunning.', 16, 1, @incompatible_owned_object)
 
+	/*
+	   sys.check_constraints.definition is SQL Server's rendered expression,
+	   rather than the source text used by CREATE TABLE. Normalize the stable
+	   rendering differences (case, brackets, whitespace, and one redundant
+	   outer parenthesis pair) but compare the complete expression.
+	   This keeps a same-name constraint with a weaker invariant outside the
+	   supported state space.
+	*/
+	declare @expected_check_constraints table
+	(
+		TableName sysname not null,
+		ConstraintName sysname not null,
+		CanonicalDefinition nvarchar(1000) not null,
+		IsHistoricalOptional bit not null,
+		primary key (TableName, ConstraintName)
+	)
+
+	insert @expected_check_constraints values
+		('RegistrationFormCodeMetadata','CK_RFCode_NotBlank','len(formcode)>(0)',0),
+		('RegistrationSettingDrafts','CK_RSD_Status','status=''Invalidated''orstatus=''Discarded''orstatus=''Committed''orstatus=''Active''',0),
+		('RegistrationSettingDraftChanges','CK_RSDC_Operation','operation=''RemoveOverride''oroperation=''Upsert''',0),
+		('RegistrationSettingDraftChanges','CK_RSDC_Value','operation=''Upsert''andvalueisnotnulloroperation=''RemoveOverride''andvalueisnull',0),
+		('RegistrationSettingAuditEvents','CK_RSAE_Json','metadatajsonisnullorisjson(metadatajson)=(1)',0),
+		('RegistrationFormAssets','CK_RegistrationFormAssets_FileName_NotBlank','len(ltrim(rtrim(filename)))>(0)',0),
+		('RegistrationFormAssets','CK_RegistrationFormAssets_ContentType_NotBlank','len(ltrim(rtrim(contenttype)))>(0)',0),
+		('RegistrationFormAssets','CK_RegistrationFormAssets_Content_NotEmpty','datalength(content)>(0)',0),
+		('RegistrationFormAssets','CK_RegistrationFormAssets_ContentHash_Sha256','len(contenthash)=(64)',0),
+		('RegistrationFormAssetReferenceLocks','CK_RegistrationFormAssetReferenceLocks_Singleton','lockid=(1)',0)
+
+	/*
+	   Canonicalize only SQL text outside single-quoted literals. Removing
+	   whitespace or brackets from a literal would allow a materially different
+	   same-name constraint, such as Status = 'Act ive', to pass validation.
+	   The character-position CTE preserves literal contents while accepting
+	   SQL Server's case, bracket, whitespace, and one outer-parenthesis
+	   rendering differences.
+	*/
+	declare @canonical_owned_definitions table
+	(
+		DefinitionKey nvarchar(100) not null primary key,
+		CanonicalDefinition nvarchar(max) null
+	)
+	declare @max_definition_length int
+	select @max_definition_length = isnull(max(DefinitionLength), 0)
+	from
+	(
+		select len(check_constraint.definition) DefinitionLength
+		from sys.check_constraints check_constraint
+		where check_constraint.parent_object_id in
+		(
+			object_id('dbo.RegistrationFormCodeMetadata'), object_id('dbo.RegistrationSettingDrafts'),
+			object_id('dbo.RegistrationSettingDraftChanges'), object_id('dbo.RegistrationSettingAuditEvents'),
+			object_id('dbo.RegistrationFormAssets'), object_id('dbo.RegistrationFormAssetReferenceLocks')
+		)
+		union all
+		select len(default_constraint.definition) DefinitionLength
+		from sys.default_constraints default_constraint
+		where default_constraint.parent_object_id in
+		(
+			object_id('dbo.RegistrationFormCodeMetadata'), object_id('dbo.RegistrationSettingScopeVersions'),
+			object_id('dbo.RegistrationSettingDrafts'), object_id('dbo.RegistrationSettingDraftChanges'),
+			object_id('dbo.RegistrationSettingPreviewLinks'), object_id('dbo.RegistrationSettingAuditEvents'),
+			object_id('dbo.RegistrationFormAssets')
+		)
+		union all
+		select len(index_object.filter_definition) DefinitionLength
+		from sys.indexes index_object
+		where index_object.object_id in
+		(
+			object_id('dbo.RegistrationFormCodeMetadata'), object_id('dbo.RegistrationSettingScopeVersions'),
+			object_id('dbo.RegistrationSettingDrafts'), object_id('dbo.RegistrationSettingDraftChanges'),
+			object_id('dbo.RegistrationSettingPreviewLinks'), object_id('dbo.RegistrationSettingAuditEvents'),
+			object_id('dbo.RegistrationSettingsCacheGeneration'), object_id('dbo.RegistrationFormAssets'),
+			object_id('dbo.RegistrationFormAssetReferenceLocks')
+		)
+			and index_object.has_filter = 1
+			and index_object.filter_definition is not null
+	) lengths
+
+	;with OwnedDefinitions as
+	(
+		select convert(nvarchar(100), N'C:' + convert(nvarchar(20), check_constraint.object_id)) DefinitionKey,
+			check_constraint.definition DefinitionText
+		from sys.check_constraints check_constraint
+		where check_constraint.parent_object_id in
+		(
+			object_id('dbo.RegistrationFormCodeMetadata'), object_id('dbo.RegistrationSettingDrafts'),
+			object_id('dbo.RegistrationSettingDraftChanges'), object_id('dbo.RegistrationSettingAuditEvents'),
+			object_id('dbo.RegistrationFormAssets'), object_id('dbo.RegistrationFormAssetReferenceLocks')
+		)
+		union all
+		select convert(nvarchar(100), N'D:' + convert(nvarchar(20), default_constraint.object_id)) DefinitionKey,
+			default_constraint.definition DefinitionText
+		from sys.default_constraints default_constraint
+		where default_constraint.parent_object_id in
+		(
+			object_id('dbo.RegistrationFormCodeMetadata'), object_id('dbo.RegistrationSettingScopeVersions'),
+			object_id('dbo.RegistrationSettingDrafts'), object_id('dbo.RegistrationSettingDraftChanges'),
+			object_id('dbo.RegistrationSettingPreviewLinks'), object_id('dbo.RegistrationSettingAuditEvents'),
+			object_id('dbo.RegistrationFormAssets')
+		)
+		union all
+		select convert(nvarchar(100), N'I:' + convert(nvarchar(20), index_object.object_id) + N':' + convert(nvarchar(20), index_object.index_id)) DefinitionKey,
+			index_object.filter_definition DefinitionText
+		from sys.indexes index_object
+		where index_object.object_id in
+		(
+			object_id('dbo.RegistrationFormCodeMetadata'), object_id('dbo.RegistrationSettingScopeVersions'),
+			object_id('dbo.RegistrationSettingDrafts'), object_id('dbo.RegistrationSettingDraftChanges'),
+			object_id('dbo.RegistrationSettingPreviewLinks'), object_id('dbo.RegistrationSettingAuditEvents'),
+			object_id('dbo.RegistrationSettingsCacheGeneration'), object_id('dbo.RegistrationFormAssets'),
+			object_id('dbo.RegistrationFormAssetReferenceLocks')
+		)
+			and index_object.has_filter = 1
+			and index_object.filter_definition is not null
+	),
+	Numbers as
+	(
+		select 1 Number
+		union all
+		select Number + 1
+		from Numbers
+		where Number < @max_definition_length
+	),
+	CanonicalDefinitions as
+	(
+		select source.DefinitionKey,
+			(
+				select case
+					when substring(source.DefinitionText, Number, 1) = NCHAR(39)
+						then substring(source.DefinitionText, Number, 1)
+					when
+						(
+							len(left(source.DefinitionText, Number - 1))
+							- len(replace(left(source.DefinitionText, Number - 1), NCHAR(39), N''))
+						) % 2 = 1
+						then substring(source.DefinitionText, Number, 1)
+					when substring(source.DefinitionText, Number, 1) not in
+						(N'[', N']', N' ', NCHAR(9), NCHAR(10), NCHAR(12), NCHAR(13), NCHAR(160))
+						then lower(substring(source.DefinitionText, Number, 1))
+					else N''
+				end
+				from Numbers
+				where Number <= len(source.DefinitionText)
+				order by Number
+				for xml path(''), type
+			).value('.', 'nvarchar(max)') RawCanonicalDefinition
+		from OwnedDefinitions source
+	)
+	insert @canonical_owned_definitions (DefinitionKey, CanonicalDefinition)
+	select DefinitionKey,
+		case
+			when left(RawCanonicalDefinition, 1) = N'('
+				and right(RawCanonicalDefinition, 1) = N')'
+			then substring(RawCanonicalDefinition, 2, len(RawCanonicalDefinition) - 2)
+			else RawCanonicalDefinition
+		end
+	from CanonicalDefinitions
+	option (maxrecursion 0)
+
+	set @incompatible_owned_object = null
+
+	select top (1) @incompatible_owned_object = 'dbo.' + expected.TableName + '.' + expected.ConstraintName
+	from @expected_check_constraints expected
+	where object_id('dbo.' + expected.TableName, 'U') is not null
+		and not (expected.IsHistoricalOptional = 1
+			and col_length('dbo.RegistrationSettingDrafts', 'Revision') is null)
+		and not exists
+		(
+			select 1
+			from sys.check_constraints actual
+			inner join @canonical_owned_definitions canonical
+				on canonical.DefinitionKey = N'C:' + convert(nvarchar(20), actual.object_id)
+			where actual.parent_object_id = object_id('dbo.' + expected.TableName)
+				and actual.name collate database_default = expected.ConstraintName
+				and actual.is_disabled = 0
+				and actual.is_not_trusted = 0
+				and canonical.CanonicalDefinition collate Latin1_General_100_BIN2 = expected.CanonicalDefinition collate Latin1_General_100_BIN2
+		)
+
+	if @incompatible_owned_object is not null
+		raiserror('Owned check constraint %s is missing, untrusted, or has an unsupported definition. Restore it before rerunning.', 16, 1, @incompatible_owned_object)
+
+	declare @expected_foreign_keys table
+	(
+		TableName sysname not null,
+		ConstraintName sysname not null,
+		ReferencedTableName sysname not null,
+		ParentColumnName sysname not null,
+		ReferencedColumnName sysname not null,
+		DeleteReferentialAction tinyint not null,
+		UpdateReferentialAction tinyint not null,
+		IsHistoricalOptional bit not null,
+		primary key (TableName, ConstraintName)
+	)
+
+	insert @expected_foreign_keys values
+		('RegistrationSettingDraftChanges','FK_RSDC_Draft','RegistrationSettingDrafts','DraftId','DraftId',1,0,0),
+		('RegistrationSettingPreviewLinks','FK_RSPL_Draft','RegistrationSettingDrafts','DraftId','DraftId',1,0,0)
+
+	set @incompatible_owned_object = null
+
+	select top (1) @incompatible_owned_object = 'dbo.' + expected.TableName + '.' + expected.ConstraintName
+	from @expected_foreign_keys expected
+	where object_id('dbo.' + expected.TableName, 'U') is not null
+		and not (expected.IsHistoricalOptional = 1
+			and col_length('dbo.RegistrationSettingDrafts', 'Revision') is null)
+		and not exists
+		(
+			select 1
+			from sys.foreign_keys actual
+			where actual.parent_object_id = object_id('dbo.' + expected.TableName)
+				and actual.name collate database_default = expected.ConstraintName
+				and actual.referenced_object_id = object_id('dbo.' + expected.ReferencedTableName)
+				and actual.delete_referential_action = expected.DeleteReferentialAction
+				and actual.update_referential_action = expected.UpdateReferentialAction
+				and actual.is_disabled = 0
+				and actual.is_not_trusted = 0
+				and actual.is_not_for_replication = 0
+				and
+				(
+					select count(*)
+					from sys.foreign_key_columns actual_column
+					where actual_column.constraint_object_id = actual.object_id
+				) = 1
+				and exists
+				(
+					select 1
+					from sys.foreign_key_columns actual_column
+					inner join sys.columns parent_column
+						on parent_column.object_id = actual.parent_object_id
+						and parent_column.column_id = actual_column.parent_column_id
+					inner join sys.columns referenced_column
+						on referenced_column.object_id = actual.referenced_object_id
+						and referenced_column.column_id = actual_column.referenced_column_id
+					where actual_column.constraint_object_id = actual.object_id
+						and actual_column.constraint_column_id = 1
+						and parent_column.name collate database_default = expected.ParentColumnName
+						and referenced_column.name collate database_default = expected.ReferencedColumnName
+				)
+			)
+
+	if @incompatible_owned_object is not null
+		raiserror('Owned foreign key %s is missing, untrusted, disabled, or has an unsupported relationship definition. Restore it before rerunning.', 16, 1, @incompatible_owned_object)
+
+	/* Defaults are part of the repository schema contract, not arbitrary app data. */
+	declare @expected_defaults table
+	(
+		TableName sysname not null,
+		ConstraintName sysname not null,
+		ColumnName sysname not null,
+		CanonicalDefinition nvarchar(200) not null,
+		IsHistoricalOptional bit not null,
+		primary key (TableName, ConstraintName)
+	)
+
+	insert @expected_defaults values
+		('RegistrationFormCodeMetadata','DF_RFCode_Created','CreatedAtUtc','sysutcdatetime()',0),
+		('RegistrationFormCodeMetadata','DF_RFCode_Modified','ModifiedAtUtc','sysutcdatetime()',0),
+		('RegistrationSettingScopeVersions','DF_RSSV_Code','FormCode','''''',0),
+		('RegistrationSettingScopeVersions','DF_RSSV_Version','Version','(0)',0),
+		('RegistrationSettingScopeVersions','DF_RSSV_Modified','ModifiedAtUtc','sysutcdatetime()',0),
+		('RegistrationSettingDrafts','DF_RSD_Code','FormCode','''''',0),
+		('RegistrationSettingDrafts','DF_RSD_Revision','Revision','(0)',1),
+		('RegistrationSettingDrafts','DF_RSD_Created','CreatedAtUtc','sysutcdatetime()',0),
+		('RegistrationSettingDrafts','DF_RSD_Modified','ModifiedAtUtc','sysutcdatetime()',0),
+		('RegistrationSettingDraftChanges','DF_RSDC_Modified','ModifiedAtUtc','sysutcdatetime()',0),
+		('RegistrationSettingPreviewLinks','DF_RSPL_Live','AllowLiveSubmission','(0)',0),
+		('RegistrationSettingPreviewLinks','DF_RSPL_Created','CreatedAtUtc','sysutcdatetime()',0),
+		('RegistrationSettingPreviewLinks','DF_RSPL_Modified','ModifiedAtUtc','sysutcdatetime()',0),
+		('RegistrationSettingAuditEvents','DF_RSAE_Time','TimestampUtc','sysutcdatetime()',0),
+		('RegistrationSettingAuditEvents','DF_RSAE_Code','FormCode','''''',0),
+		('RegistrationSettingAuditEvents','DF_RSAE_Secret','IsSensitive','(0)',0),
+		('RegistrationFormAssets','DF_RegistrationFormAssets_CreatedDate','CreatedDate','sysutcdatetime()',0),
+		('RegistrationFormAssets','DF_RegistrationFormAssets_ModifiedDate','ModifiedDate','sysutcdatetime()',0)
+
+	set @incompatible_owned_object = null
+
+	select top (1) @incompatible_owned_object = 'dbo.' + expected.TableName + '.' + expected.ConstraintName
+	from @expected_defaults expected
+	where object_id('dbo.' + expected.TableName, 'U') is not null
+		and not (expected.IsHistoricalOptional = 1
+			and col_length('dbo.RegistrationSettingDrafts', 'Revision') is null)
+		and not exists
+		(
+			select 1
+			from sys.default_constraints actual
+			inner join @canonical_owned_definitions canonical
+				on canonical.DefinitionKey = N'D:' + convert(nvarchar(20), actual.object_id)
+			where actual.parent_object_id = object_id('dbo.' + expected.TableName)
+				and actual.name collate database_default = expected.ConstraintName
+				and actual.parent_column_id = columnproperty(object_id('dbo.' + expected.TableName), expected.ColumnName, 'ColumnId')
+				and canonical.CanonicalDefinition collate Latin1_General_100_BIN2 = expected.CanonicalDefinition collate Latin1_General_100_BIN2
+		)
+
+	if @incompatible_owned_object is not null
+		raiserror('Owned default constraint %s is missing, bound to the wrong column, or has an unsupported definition. Restore it before rerunning.', 16, 1, @incompatible_owned_object)
+
 	if exists
 	(
 		select 1 from sys.check_constraints
@@ -442,27 +740,28 @@ if not exists
 		IsUnique bit not null,
 		HasFilter bit not null,
 		KeyColumns nvarchar(500) not null,
+		CanonicalFilterDefinition nvarchar(500) null,
 		IsHistoricalOptional bit not null,
 		primary key (TableName, IndexName)
 	)
 
 	insert @expected_indexes values
-		('RegistrationFormCodeMetadata','PK_RegistrationFormCodeMetadata',1,0,'OrganizationId:A,FormCode:A',0),
-		('RegistrationSettingScopeVersions','PK_RegistrationSettingScopeVersions',1,0,'OrganizationId:A,FormCode:A',0),
-		('RegistrationSettingDrafts','PK_RegistrationSettingDrafts',1,0,'DraftId:A',0),
-		('RegistrationSettingDrafts','UX_RSD_ActiveScope',1,1,'OrganizationId:A,FormCode:A',0),
-		('RegistrationSettingDraftChanges','PK_RegistrationSettingDraftChanges',1,0,'DraftChangeId:A',0),
-		('RegistrationSettingDraftChanges','UQ_RSDC_Key',1,0,'DraftId:A,SettingKey:A',0),
-		('RegistrationSettingPreviewLinks','PK_RegistrationSettingPreviewLinks',1,0,'PreviewLinkId:A',0),
-		('RegistrationSettingPreviewLinks','UQ_RSPL_Token',1,0,'TokenHash:A',0),
-		('RegistrationSettingAuditEvents','PK_RegistrationSettingAuditEvents',1,0,'AuditEventId:A',0),
-		('RegistrationSettingAuditEvents','IX_RSAE_LibraryTime',0,0,'TargetLibraryId:A,TimestampUtc:D',0),
-		('RegistrationSettingAuditEvents','IX_RSAE_ScopeFilter',0,0,'TargetOrganizationId:A,FormCode:A,EventType:A,TimestampUtc:D',0),
-		('RegistrationSettingsCacheGeneration','PK_RegistrationSettingsCacheGeneration',1,0,'Id:A',0),
-		('RegistrationFormAssets','PK_RegistrationFormAssets',1,0,'AssetId:A',0),
-		('RegistrationFormAssets','IX_RegistrationFormAssets_UploadScope',0,0,'UploadOrganizationId:A,UploadFormCode:A',1),
-		('RegistrationFormAssets','IX_RegistrationFormAssets_CreatedDate',0,0,'CreatedDate:A',1),
-		('RegistrationFormAssetReferenceLocks','PK_RegistrationFormAssetReferenceLocks',1,0,'LockId:A',0)
+		('RegistrationFormCodeMetadata','PK_RegistrationFormCodeMetadata',1,0,'OrganizationId:A,FormCode:A',null,0),
+		('RegistrationSettingScopeVersions','PK_RegistrationSettingScopeVersions',1,0,'OrganizationId:A,FormCode:A',null,0),
+		('RegistrationSettingDrafts','PK_RegistrationSettingDrafts',1,0,'DraftId:A',null,0),
+		('RegistrationSettingDrafts','UX_RSD_ActiveScope',1,1,'OrganizationId:A,FormCode:A','status=''Active''',0),
+		('RegistrationSettingDraftChanges','PK_RegistrationSettingDraftChanges',1,0,'DraftChangeId:A',null,0),
+		('RegistrationSettingDraftChanges','UQ_RSDC_Key',1,0,'DraftId:A,SettingKey:A',null,0),
+		('RegistrationSettingPreviewLinks','PK_RegistrationSettingPreviewLinks',1,0,'PreviewLinkId:A',null,0),
+		('RegistrationSettingPreviewLinks','UQ_RSPL_Token',1,0,'TokenHash:A',null,0),
+		('RegistrationSettingAuditEvents','PK_RegistrationSettingAuditEvents',1,0,'AuditEventId:A',null,0),
+		('RegistrationSettingAuditEvents','IX_RSAE_LibraryTime',0,0,'TargetLibraryId:A,TimestampUtc:D',null,0),
+		('RegistrationSettingAuditEvents','IX_RSAE_ScopeFilter',0,0,'TargetOrganizationId:A,FormCode:A,EventType:A,TimestampUtc:D',null,0),
+		('RegistrationSettingsCacheGeneration','PK_RegistrationSettingsCacheGeneration',1,0,'Id:A',null,0),
+		('RegistrationFormAssets','PK_RegistrationFormAssets',1,0,'AssetId:A',null,0),
+		('RegistrationFormAssets','IX_RegistrationFormAssets_UploadScope',0,0,'UploadOrganizationId:A,UploadFormCode:A',null,1),
+		('RegistrationFormAssets','IX_RegistrationFormAssets_CreatedDate',0,0,'CreatedDate:A',null,1),
+		('RegistrationFormAssetReferenceLocks','PK_RegistrationFormAssetReferenceLocks',1,0,'LockId:A',null,0)
 
 	declare @actual_indexes table
 	(
@@ -470,7 +769,7 @@ if not exists
 		IndexName sysname not null,
 		IsUnique bit not null,
 		HasFilter bit not null,
-		FilterDefinition nvarchar(max) null,
+		CanonicalFilterDefinition nvarchar(max) null,
 		IsDisabled bit not null,
 		KeyColumns nvarchar(500) not null,
 		primary key (TableName, IndexName)
@@ -482,7 +781,7 @@ if not exists
 		index_object.name,
 		index_object.is_unique,
 		index_object.has_filter,
-		index_object.filter_definition,
+		canonical.CanonicalDefinition,
 		index_object.is_disabled,
 		coalesce(keys.KeyColumns, '')
 	from sys.tables table_object
@@ -506,8 +805,10 @@ if not exists
 				for xml path(''), type
 			).value('.', 'nvarchar(max)'),
 			1, 1, ''
-		) KeyColumns
-	) keys
+			) KeyColumns
+		) keys
+	left join @canonical_owned_definitions canonical
+		on canonical.DefinitionKey = N'I:' + convert(nvarchar(20), index_object.object_id) + N':' + convert(nvarchar(20), index_object.index_id)
 	where table_object.schema_id = schema_id('dbo')
 
 	set @incompatible_owned_object = null
@@ -529,7 +830,9 @@ if not exists
 					or actual.HasFilter <> expected.HasFilter
 					or actual.IsDisabled <> 0
 					or actual.KeyColumns <> expected.KeyColumns
-					or (expected.HasFilter = 1 and actual.FilterDefinition not like '%Status%Active%')))
+					or (actual.CanonicalFilterDefinition collate Latin1_General_100_BIN2 <> expected.CanonicalFilterDefinition collate Latin1_General_100_BIN2
+						or (actual.CanonicalFilterDefinition is null and expected.CanonicalFilterDefinition is not null)
+						or (actual.CanonicalFilterDefinition is not null and expected.CanonicalFilterDefinition is null))))
 		)
 
 	if @incompatible_owned_object is not null
@@ -878,37 +1181,25 @@ if not exists
 		)
 	end
 
-	update p
-	set LiveSettingsGeneration = g.Generation
-	from dbo.RegistrationSettingPreviewLinks p
+	/*
+	   A NULL LiveSettingsGeneration has no durable evidence of the generation
+	   under which an old live bearer token was issued. Revoke those links while
+	   they are attached to an active draft; links for inactive drafts remain
+	   historical records, and safe-preview links are not affected by the live
+	   generation contract. A generation-bound link is never rewritten here.
+	*/
+	update preview_link
+	set RevokedAtUtc = sysutcdatetime(),
+		RevokedBy = coalesce(RevokedBy, 'settings-administration.sql'),
+		ModifiedAtUtc = sysutcdatetime(),
+		ModifiedBy = 'settings-administration.sql'
+	from dbo.RegistrationSettingPreviewLinks preview_link
 	inner join dbo.RegistrationSettingDrafts draft
-	on draft.DraftId = p.DraftId
-	cross join dbo.RegistrationSettingsCacheGeneration g
-	where p.AllowLiveSubmission = 1
-		and p.LiveSettingsGeneration is null
-		and p.RevokedAtUtc is null
+	on draft.DraftId = preview_link.DraftId
+	where preview_link.AllowLiveSubmission = 1
+		and preview_link.LiveSettingsGeneration is null
+		and preview_link.RevokedAtUtc is null
 		and draft.Status = 'Active'
-		/* Do not first bind a link that the retired-key cleanup will revoke. */
-		and not exists
-		(
-			select 1
-			from dbo.RegistrationSettingDraftChanges draft_change
-			inner join dbo.RegistrationSettingDrafts draft
-				on draft.DraftId = draft_change.DraftId
-			where draft_change.DraftId = p.DraftId
-				and draft.Status = 'Active'
-				and
-				(
-					draft_change.SettingKey = 'header_image_url'
-					or draft_change.SettingKey in
-					(
-						'legal_name_checkbox_label',
-						'ecard_checkbox_label',
-						'mailing_list_checkbox_label',
-						'require_preferred_pickup_location'
-					)
-				)
-		)
 
 
 
@@ -1227,6 +1518,125 @@ if not exists
 			from @setting_map
 		)
 
+	/* Refresh rendered definitions because this run may have created legacy objects. */
+	delete from @canonical_owned_definitions
+
+	select @max_definition_length = isnull(max(DefinitionLength), 0)
+	from
+	(
+		select len(check_constraint.definition) DefinitionLength
+		from sys.check_constraints check_constraint
+		where check_constraint.parent_object_id in
+		(
+			object_id('dbo.RegistrationFormCodeMetadata'), object_id('dbo.RegistrationSettingDrafts'),
+			object_id('dbo.RegistrationSettingDraftChanges'), object_id('dbo.RegistrationSettingAuditEvents'),
+			object_id('dbo.RegistrationFormAssets'), object_id('dbo.RegistrationFormAssetReferenceLocks')
+		)
+		union all
+		select len(default_constraint.definition) DefinitionLength
+		from sys.default_constraints default_constraint
+		where default_constraint.parent_object_id in
+		(
+			object_id('dbo.RegistrationFormCodeMetadata'), object_id('dbo.RegistrationSettingScopeVersions'),
+			object_id('dbo.RegistrationSettingDrafts'), object_id('dbo.RegistrationSettingDraftChanges'),
+			object_id('dbo.RegistrationSettingPreviewLinks'), object_id('dbo.RegistrationSettingAuditEvents'),
+			object_id('dbo.RegistrationFormAssets')
+		)
+		union all
+		select len(index_object.filter_definition) DefinitionLength
+		from sys.indexes index_object
+		where index_object.object_id in
+		(
+			object_id('dbo.RegistrationFormCodeMetadata'), object_id('dbo.RegistrationSettingScopeVersions'),
+			object_id('dbo.RegistrationSettingDrafts'), object_id('dbo.RegistrationSettingDraftChanges'),
+			object_id('dbo.RegistrationSettingPreviewLinks'), object_id('dbo.RegistrationSettingAuditEvents'),
+			object_id('dbo.RegistrationSettingsCacheGeneration'), object_id('dbo.RegistrationFormAssets'),
+			object_id('dbo.RegistrationFormAssetReferenceLocks')
+		)
+			and index_object.has_filter = 1
+			and index_object.filter_definition is not null
+	) lengths
+
+	;with OwnedDefinitions as
+	(
+		select convert(nvarchar(100), N'C:' + convert(nvarchar(20), check_constraint.object_id)) DefinitionKey,
+			check_constraint.definition DefinitionText
+		from sys.check_constraints check_constraint
+		where check_constraint.parent_object_id in
+		(
+			object_id('dbo.RegistrationFormCodeMetadata'), object_id('dbo.RegistrationSettingDrafts'),
+			object_id('dbo.RegistrationSettingDraftChanges'), object_id('dbo.RegistrationSettingAuditEvents'),
+			object_id('dbo.RegistrationFormAssets'), object_id('dbo.RegistrationFormAssetReferenceLocks')
+		)
+		union all
+		select convert(nvarchar(100), N'D:' + convert(nvarchar(20), default_constraint.object_id)) DefinitionKey,
+			default_constraint.definition DefinitionText
+		from sys.default_constraints default_constraint
+		where default_constraint.parent_object_id in
+		(
+			object_id('dbo.RegistrationFormCodeMetadata'), object_id('dbo.RegistrationSettingScopeVersions'),
+			object_id('dbo.RegistrationSettingDrafts'), object_id('dbo.RegistrationSettingDraftChanges'),
+			object_id('dbo.RegistrationSettingPreviewLinks'), object_id('dbo.RegistrationSettingAuditEvents'),
+			object_id('dbo.RegistrationFormAssets')
+		)
+		union all
+		select convert(nvarchar(100), N'I:' + convert(nvarchar(20), index_object.object_id) + N':' + convert(nvarchar(20), index_object.index_id)) DefinitionKey,
+			index_object.filter_definition DefinitionText
+		from sys.indexes index_object
+		where index_object.object_id in
+		(
+			object_id('dbo.RegistrationFormCodeMetadata'), object_id('dbo.RegistrationSettingScopeVersions'),
+			object_id('dbo.RegistrationSettingDrafts'), object_id('dbo.RegistrationSettingDraftChanges'),
+			object_id('dbo.RegistrationSettingPreviewLinks'), object_id('dbo.RegistrationSettingAuditEvents'),
+			object_id('dbo.RegistrationSettingsCacheGeneration'), object_id('dbo.RegistrationFormAssets'),
+			object_id('dbo.RegistrationFormAssetReferenceLocks')
+		)
+			and index_object.has_filter = 1
+			and index_object.filter_definition is not null
+	),
+	Numbers as
+	(
+		select 1 Number
+		union all
+		select Number + 1
+		from Numbers
+		where Number < @max_definition_length
+	),
+	CanonicalDefinitions as
+	(
+		select source.DefinitionKey,
+			(
+				select case
+					when substring(source.DefinitionText, Number, 1) = NCHAR(39)
+						then substring(source.DefinitionText, Number, 1)
+					when
+						(
+							len(left(source.DefinitionText, Number - 1))
+							- len(replace(left(source.DefinitionText, Number - 1), NCHAR(39), N''))
+						) % 2 = 1
+						then substring(source.DefinitionText, Number, 1)
+					when substring(source.DefinitionText, Number, 1) not in
+						(N'[', N']', N' ', NCHAR(9), NCHAR(10), NCHAR(12), NCHAR(13), NCHAR(160))
+						then lower(substring(source.DefinitionText, Number, 1))
+					else N''
+				end
+				from Numbers
+				where Number <= len(source.DefinitionText)
+				order by Number
+				for xml path(''), type
+			).value('.', 'nvarchar(max)') RawCanonicalDefinition
+		from OwnedDefinitions source
+	)
+	insert @canonical_owned_definitions (DefinitionKey, CanonicalDefinition)
+	select DefinitionKey,
+		case
+			when left(RawCanonicalDefinition, 1) = N'('
+				and right(RawCanonicalDefinition, 1) = N')'
+			then substring(RawCanonicalDefinition, 2, len(RawCanonicalDefinition) - 2)
+			else RawCanonicalDefinition
+		end
+	from CanonicalDefinitions
+	option (maxrecursion 0)
 
 	/* 6. Final invariant validation */
 	set @incompatible_owned_object = null
@@ -1262,17 +1672,136 @@ if not exists
 
 	set @incompatible_owned_object = null
 
-	select top (1) @incompatible_owned_object = 'dbo.' + expected.TableName + '.' + expected.IndexName
-	from @expected_indexes expected
+	select top (1) @incompatible_owned_object = 'dbo.' + expected.TableName + '.' + expected.ConstraintName
+	from @expected_check_constraints expected
 	where not exists
 	(
-		select 1 from sys.indexes actual
-		where actual.object_id = object_id('dbo.' + expected.TableName)
-			and actual.name collate database_default = expected.IndexName
-			and actual.is_unique = expected.IsUnique
-			and actual.has_filter = expected.HasFilter
+		select 1
+		from sys.check_constraints actual
+		inner join @canonical_owned_definitions canonical
+			on canonical.DefinitionKey = N'C:' + convert(nvarchar(20), actual.object_id)
+		where actual.parent_object_id = object_id('dbo.' + expected.TableName)
+			and actual.name collate database_default = expected.ConstraintName
 			and actual.is_disabled = 0
+			and actual.is_not_trusted = 0
+			and canonical.CanonicalDefinition collate Latin1_General_100_BIN2 = expected.CanonicalDefinition collate Latin1_General_100_BIN2
 	)
+
+	if @incompatible_owned_object is not null
+		raiserror('Final owned check constraint invariant failed for %s.', 16, 1, @incompatible_owned_object)
+
+	set @incompatible_owned_object = null
+
+	select top (1) @incompatible_owned_object = 'dbo.' + expected.TableName + '.' + expected.ConstraintName
+	from @expected_defaults expected
+	where not exists
+	(
+		select 1
+		from sys.default_constraints actual
+		inner join @canonical_owned_definitions canonical
+			on canonical.DefinitionKey = N'D:' + convert(nvarchar(20), actual.object_id)
+		where actual.parent_object_id = object_id('dbo.' + expected.TableName)
+			and actual.name collate database_default = expected.ConstraintName
+			and actual.parent_column_id = columnproperty(object_id('dbo.' + expected.TableName), expected.ColumnName, 'ColumnId')
+			and canonical.CanonicalDefinition collate Latin1_General_100_BIN2 = expected.CanonicalDefinition collate Latin1_General_100_BIN2
+		)
+
+	if @incompatible_owned_object is not null
+		raiserror('Final owned default constraint invariant failed for %s.', 16, 1, @incompatible_owned_object)
+
+	set @incompatible_owned_object = null
+
+	select top (1) @incompatible_owned_object = 'dbo.' + expected.TableName + '.' + expected.ConstraintName
+	from @expected_foreign_keys expected
+	where not exists
+	(
+		select 1
+		from sys.foreign_keys actual
+		where actual.parent_object_id = object_id('dbo.' + expected.TableName)
+			and actual.name collate database_default = expected.ConstraintName
+			and actual.referenced_object_id = object_id('dbo.' + expected.ReferencedTableName)
+			and actual.delete_referential_action = expected.DeleteReferentialAction
+			and actual.update_referential_action = expected.UpdateReferentialAction
+			and actual.is_disabled = 0
+			and actual.is_not_trusted = 0
+			and actual.is_not_for_replication = 0
+			and
+			(
+				select count(*)
+				from sys.foreign_key_columns actual_column
+				where actual_column.constraint_object_id = actual.object_id
+			) = 1
+			and exists
+			(
+				select 1
+				from sys.foreign_key_columns actual_column
+				inner join sys.columns parent_column
+					on parent_column.object_id = actual.parent_object_id
+					and parent_column.column_id = actual_column.parent_column_id
+				inner join sys.columns referenced_column
+					on referenced_column.object_id = actual.referenced_object_id
+					and referenced_column.column_id = actual_column.referenced_column_id
+				where actual_column.constraint_object_id = actual.object_id
+					and actual_column.constraint_column_id = 1
+					and parent_column.name collate database_default = expected.ParentColumnName
+					and referenced_column.name collate database_default = expected.ReferencedColumnName
+			)
+		)
+
+	if @incompatible_owned_object is not null
+		raiserror('Final owned foreign key invariant failed for %s.', 16, 1, @incompatible_owned_object)
+
+	/* Re-read indexes because missing current indexes may have been created above. */
+	delete from @actual_indexes
+
+	insert @actual_indexes
+	select
+		table_object.name,
+		index_object.name,
+		index_object.is_unique,
+		index_object.has_filter,
+		canonical.CanonicalDefinition,
+		index_object.is_disabled,
+		coalesce(keys.KeyColumns, '')
+	from sys.tables table_object
+	inner join sys.indexes index_object
+		on index_object.object_id = table_object.object_id and index_object.index_id > 0
+	outer apply
+	(
+		select stuff
+		(
+			(
+				select ',' + column_object.name
+					+ case when index_column.is_descending_key = 1 then ':D' else ':A' end
+				from sys.index_columns index_column
+				inner join sys.columns column_object
+					on column_object.object_id = index_column.object_id
+					and column_object.column_id = index_column.column_id
+				where index_column.object_id = index_object.object_id
+					and index_column.index_id = index_object.index_id
+					and index_column.key_ordinal > 0
+				order by index_column.key_ordinal
+				for xml path(''), type
+			).value('.', 'nvarchar(max)'),
+			1, 1, ''
+			) KeyColumns
+		) keys
+	left join @canonical_owned_definitions canonical
+		on canonical.DefinitionKey = N'I:' + convert(nvarchar(20), index_object.object_id) + N':' + convert(nvarchar(20), index_object.index_id)
+	where table_object.schema_id = schema_id('dbo')
+
+	select top (1) @incompatible_owned_object = 'dbo.' + expected.TableName + '.' + expected.IndexName
+	from @expected_indexes expected
+	left join @actual_indexes actual
+		on actual.TableName = expected.TableName and actual.IndexName = expected.IndexName
+	where actual.IndexName is null
+		or actual.IsUnique <> expected.IsUnique
+		or actual.HasFilter <> expected.HasFilter
+		or actual.IsDisabled <> 0
+		or actual.KeyColumns <> expected.KeyColumns
+		or (actual.CanonicalFilterDefinition collate Latin1_General_100_BIN2 <> expected.CanonicalFilterDefinition collate Latin1_General_100_BIN2
+			or (actual.CanonicalFilterDefinition is null and expected.CanonicalFilterDefinition is not null)
+			or (actual.CanonicalFilterDefinition is not null and expected.CanonicalFilterDefinition is null))
 
 	if @incompatible_owned_object is not null
 		raiserror('Final owned index invariant failed for %s.', 16, 1, @incompatible_owned_object)
