@@ -43,6 +43,7 @@ namespace Clc.PatronRegistration
         public string? LegalNameLast { get; set; } = string.Empty;
 
         [Required]
+        [BirthdateNotInFuture]
         [DbConfiguredDisplayName]
         public DateTime? Birthdate { get; set; }
 

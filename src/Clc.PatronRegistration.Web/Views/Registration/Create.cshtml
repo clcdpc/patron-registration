@@ -3,6 +3,7 @@
 
 @{
     Layout = "_Layout";
+    var ageBlockCheckUrl = this.BuildAction("AgeBlockCheck");
     //Layout = Clc.PatronRegistration.Helpers.HttpContextHelper.Current.Request.Method.Equals("get", StringComparison.OrdinalIgnoreCase) ? "_Layout" : null;
 }
 
@@ -350,7 +351,9 @@
     const messageDiv = q('#status-message');
     const addToMailingListCheckbox = q('#AddToMailingList');
     const smsNoticeInfo = q('#smsNoticeInfo');
+    const antiforgeryToken = q('input[name="__RequestVerificationToken"]');
 
+    let ageBlockRequestId = 0;
     let isTeacher = false;
 
     registerButton.addEventListener("click", (e) => { submitReg(e); });
@@ -370,10 +373,7 @@
     // force required asterisk to show on email field
     dispatchEvent(deliveryOptionId, "change");
 
-    if (@Settings.EnableAgeWarning.ToJavascriptBool()) {
-        AddEventHandler(birthdate, "blur", (e) => { ageCheck(); })
-    }
-    AddEventHandler(birthdate, "blur", (e) => { dupecheck(); })
+    AddEventHandler(birthdate, "blur", (e) => { handleBirthdateChanged(); })
     AddEventHandler(nameFirst, "blur", (e) => { dupecheck(); })
     AddEventHandler(nameLast, "blur", (e) => { dupecheck(); })
 
@@ -383,6 +383,58 @@
         if (element) {
             element.addEventListener(event, action);
         }
+    }
+
+    async function ageBlockCheck() {
+        const requestId = ++ageBlockRequestId;
+        const birthdateValue = birthdate.value;
+
+        if (!birthdateValue) {
+            return "allowed";
+        }
+
+        const formData = new FormData();
+        formData.append("Birthdate", birthdateValue);
+        formData.append("__RequestVerificationToken", antiforgeryToken.value);
+
+        let result = null;
+
+        try {
+            const response = await fetch("@ageBlockCheckUrl", {
+                method: "POST",
+                credentials: "same-origin",
+                body: formData
+            });
+
+            if (response.ok) {
+                result = await response.json();
+            }
+        } catch { }
+
+        if (requestId !== ageBlockRequestId || birthdate.value !== birthdateValue) {
+            return "stale";
+        }
+
+        if (result?.isBlocked) {
+            wrapperDiv.innerHTML = result.message;
+            window.scrollTo(0, 0);
+            return "blocked";
+        }
+
+        return "allowed";
+    }
+
+    async function handleBirthdateChanged() {
+        const status = await ageBlockCheck();
+        if (status === "blocked" || status === "stale") {
+            return;
+        }
+
+        if (@Settings.EnableAgeWarning.ToJavascriptBool()) {
+            ageCheck();
+        }
+
+        dupecheck();
     }
 
     function show(e) {
@@ -610,7 +662,7 @@
         window.scrollTo(0, 0);
     }
 
-    function submitReg(e) {
+    async function submitReg(e) {
         registerButton.disabled = true;
         e.preventDefault();
 
@@ -622,33 +674,39 @@
             return;
         }
 
-        var formData = new FormData(document.forms.regform);
+        const ageBlockStatus = await ageBlockCheck();
+        if (ageBlockStatus === "blocked" || ageBlockStatus === "stale") {
+            registerButton.disabled = false;
+            return;
+        }
 
-        postData("@this.BuildAction("Submit")", formData).then((data) => {
-            if (data.isSuccess) {
-                theform.reset();
-                theform.remove();
-                hide(wrapperDiv);
-                showInfoMessage(data.message);
-                if (@Model.ShouldAutoReset(ViewContext.HttpContext!.GetTrueClientIp()).ToJavascriptBool()) {
-                    setTimeout(function () { location = '@this.BuildAction("Create")'; }, @(Settings.ResetSeconds * 1000));
-                }
-            } else {
-                showWarningMessage(data.message);
+        const formData = new FormData(document.forms.regform);
+        const data = await postData("@this.BuildAction("Submit")", formData);
 
-                if (data.errors.length > 0) {
-                    var ul = document.createElement('ul');
-                    messageDiv.appendChild(ul);
-                    data.errors.forEach((element) => {
-                        var li = document.createElement('li');
-                        li.innerHTML = element.value;
-                        ul.appendChild(li);
-                    });
-                }
-
-                registerButton.disabled = false;
+        if (data.isSuccess) {
+            theform.reset();
+            theform.remove();
+            hide(wrapperDiv);
+            showInfoMessage(data.message);
+            if (@Model.ShouldAutoReset(ViewContext.HttpContext!.GetTrueClientIp()).ToJavascriptBool()) {
+                setTimeout(function () { location = '@this.BuildAction("Create")'; }, @(Settings.ResetSeconds * 1000));
             }
-        });
+            return;
+        }
+
+        showWarningMessage(data.message);
+
+        if (data.errors.length > 0) {
+            var ul = document.createElement('ul');
+            messageDiv.appendChild(ul);
+            data.errors.forEach((element) => {
+                var li = document.createElement('li');
+                li.innerHTML = element.value;
+                ul.appendChild(li);
+            });
+        }
+
+        registerButton.disabled = false;
     }
 
     function handleNotificationPreferenceChange(deliveryOptionId) {
@@ -687,25 +745,29 @@
         }
     }
 
-    function dl() {
+    async function dl() {
         var dlinfo = window.prompt("@Settings.DriversLicensePromptText");
 
-        if (dlinfo.length < 20) { return; }
+        if (!dlinfo || dlinfo.length < 20) { return; }
 
         var formData = new FormData();
         formData.append("dlinfo", dlinfo);
+        formData.append("__RequestVerificationToken", antiforgeryToken.value);
 
-        postData("@this.BuildAction("dl")", formData).then((data) => {
-            var dataJson = JSON.stringify(data);
-            nameFirst.value = data.firstName;
-            nameMiddle.value = data.middleName;
-            nameLast.value = data.lastName;
-            birthdate.value = data.birthdate.split('T')[0];
-            streetOne.value = data.address;
-            city.value = data.city;
-            postalCode.value = data.zip;
-        });
-        dupecheck();
+        const data = await postData("@this.BuildAction("dl")", formData);
+        if (!data || typeof data !== "object") {
+            return;
+        }
+
+        nameFirst.value = data.firstName || "";
+        nameMiddle.value = data.middleName || "";
+        nameLast.value = data.lastName || "";
+        birthdate.value = data.birthdate ? data.birthdate.split('T')[0] : "";
+        streetOne.value = data.address || "";
+        city.value = data.city || "";
+        postalCode.value = data.zip || "";
+
+        await handleBirthdateChanged();
     }
 
     function dupecheck() {
@@ -735,7 +797,8 @@
 
     var ageCheckShown = false;
     function ageCheck() {
-        if (!ageCheckShown && getAge(birthdate.value) < 18) {
+        const age = getAge(birthdate.value);
+        if (!ageCheckShown && age !== null && age < 18) {
             if (confirm(@Html.Raw(Settings.AgeWarningText.ToJavascriptString()))) {
                 ageCheckShown = true;
             }
@@ -746,8 +809,22 @@
     }
 
     function getAge(dateString) {
+        if (typeof dateString !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(dateString)) {
+            return null;
+        }
+
         var today = new Date();
-        var birthDate = new Date(dateString);
+        var [year, month, day] = dateString.split('-').map(Number);
+        var birthDate = new Date(year, month - 1, day);
+        if (birthDate.getFullYear() !== year || birthDate.getMonth() !== month - 1 || birthDate.getDate() !== day) {
+            return null;
+        }
+
+        var todayDate = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+        if (birthDate > todayDate) {
+            return null;
+        }
+
         var age = today.getFullYear() - birthDate.getFullYear();
         var m = today.getMonth() - birthDate.getMonth();
         if (m < 0 || (m === 0 && today.getDate() < birthDate.getDate())) {
