@@ -170,24 +170,39 @@ public class SettingsAuthorizationAndCacheTests
             .Returns(response.Object);
 
         var cache = new MemoryCache(papi.Object, db.Object, generation.Object);
+        // LongRunning gives each caller a dedicated worker. The underlying
+        // cache load deliberately blocks one worker while the other callers
+        // contend for rebuildLock, without exhausting the test runner's
+        // thread-pool workers.
         using var callersReady = new Barrier(callerCount);
         var callers = Enumerable.Range(0, callerCount)
-            .Select(_ => Task.Run(() =>
+            .Select(_ => Task.Factory.StartNew(() =>
             {
                 Assert.IsTrue(callersReady.SignalAndWait(TimeSpan.FromSeconds(5)));
                 return cache.GetSnapshotAtGeneration(requestedGeneration);
-            }))
+            }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default))
             .ToArray();
 
-        await loadStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        releaseLoad.TrySetResult(true);
-        var snapshots = await Task.WhenAll(callers).WaitAsync(TimeSpan.FromSeconds(5));
+        try
+        {
+            await loadStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            releaseLoad.TrySetResult(true);
+            var snapshots = await Task.WhenAll(callers).WaitAsync(TimeSpan.FromSeconds(5));
 
-        Assert.IsTrue(snapshots.All(snapshot => snapshot.Generation == requestedGeneration));
-        Assert.IsTrue(snapshots.All(snapshot => ReferenceEquals(snapshot, snapshots[0])));
-        papi.Verify(service => service.OrganizationsGet(OrganizationType.All), Times.Once);
-        db.Verify(service => service.GetAllSettings(), Times.Once);
-        generation.Verify(service => service.GetCacheGeneration(), Times.Exactly(2));
+            Assert.IsTrue(snapshots.All(snapshot => snapshot.Generation == requestedGeneration));
+            Assert.IsTrue(snapshots.All(snapshot => ReferenceEquals(snapshot, snapshots[0])));
+            papi.Verify(service => service.OrganizationsGet(OrganizationType.All), Times.Once);
+            db.Verify(service => service.GetAllSettings(), Times.Once);
+            generation.Verify(service => service.GetCacheGeneration(), Times.Exactly(2));
+        }
+        finally
+        {
+            // Do not leave the dedicated loader worker blocked if the test
+            // fails before the normal release path.
+            releaseLoad.TrySetResult(true);
+            try { await Task.WhenAll(callers).WaitAsync(TimeSpan.FromSeconds(5)); }
+            catch { /* Preserve the original assertion or timeout. */ }
+        }
     }
 
     [TestMethod]

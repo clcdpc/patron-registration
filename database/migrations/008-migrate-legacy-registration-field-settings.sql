@@ -62,6 +62,29 @@ VALUES
     ('mailing_list_checkbox_label', 'label.AddToMailingList'),
     ('require_preferred_pickup_location', 'require.RequestPickupBranchID');
 
+/*
+   Capture every active draft that contains a legacy mutation before changing
+   the key or deleting the row. A draft is captured once even when it contains
+   several legacy keys, so its revision advances exactly once for this logical
+   migration.
+*/
+IF OBJECT_ID('tempdb..#Migration008ChangedDrafts') IS NOT NULL
+    DROP TABLE #Migration008ChangedDrafts;
+
+CREATE TABLE #Migration008ChangedDrafts
+(
+    DraftId bigint NOT NULL PRIMARY KEY
+);
+
+INSERT #Migration008ChangedDrafts (DraftId)
+SELECT DISTINCT draftChange.DraftId
+FROM dbo.RegistrationSettingDraftChanges AS draftChange
+INNER JOIN dbo.RegistrationSettingDrafts AS draft
+    ON draft.DraftId = draftChange.DraftId
+INNER JOIN @SettingMap AS map
+    ON map.LegacyKey = draftChange.SettingKey
+WHERE draft.Status = 'Active';
+
 /* The settings table is foreign-key constrained to this allowlist. */
 INSERT dbo.RegistrationFormSettingTypes (Setting)
 SELECT map.ReplacementKey
@@ -119,11 +142,43 @@ INNER JOIN @SettingMap AS map
     ON map.LegacyKey = draftChange.SettingKey
 WHERE draft.Status = 'Active';
 
+/*
+   Legacy-key migration is an active-draft mutation. Revoke links and advance
+   the draft revision in this transaction, while keeping Revision optional for
+   installations that legitimately run this incremental migration before 012.
+*/
+IF OBJECT_ID('dbo.RegistrationSettingPreviewLinks', 'U') IS NOT NULL
+BEGIN
+    EXEC sys.sp_executesql N'
+        UPDATE previewLink
+        SET RevokedAtUtc = SYSUTCDATETIME(),
+            RevokedBy = COALESCE(RevokedBy, ''008-migrate-legacy-registration-field-settings.sql''),
+            ModifiedAtUtc = SYSUTCDATETIME(),
+            ModifiedBy = ''008-migrate-legacy-registration-field-settings.sql''
+        FROM dbo.RegistrationSettingPreviewLinks AS previewLink
+        INNER JOIN #Migration008ChangedDrafts AS changedDraft
+            ON changedDraft.DraftId = previewLink.DraftId
+        WHERE previewLink.RevokedAtUtc IS NULL;';
+END;
+
+IF COL_LENGTH('dbo.RegistrationSettingDrafts', 'Revision') IS NOT NULL
+BEGIN
+    EXEC sys.sp_executesql N'
+        UPDATE draft
+        SET Revision = draft.Revision + 1
+        FROM dbo.RegistrationSettingDrafts AS draft
+        INNER JOIN #Migration008ChangedDrafts AS changedDraft
+            ON changedDraft.DraftId = draft.DraftId
+        WHERE draft.Status = ''Active'';';
+END;
+
 /* Delete referencing live rows before removing the retired allowlist entries. */
 DELETE FROM dbo.RegistrationFormSettings
 WHERE Setting IN (SELECT LegacyKey FROM @SettingMap);
 
 DELETE FROM dbo.RegistrationFormSettingTypes
 WHERE Setting IN (SELECT LegacyKey FROM @SettingMap);
+
+DROP TABLE #Migration008ChangedDrafts;
 
 COMMIT;

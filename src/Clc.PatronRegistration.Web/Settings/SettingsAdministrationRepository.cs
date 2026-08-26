@@ -183,43 +183,15 @@ public interface ILivePreviewSubmissionAdmission : IDisposable
 {
 }
 
-internal sealed class SqlLivePreviewSubmissionAdmission : ILivePreviewSubmissionAdmission
+/// <summary>
+/// A successful live-preview admission is a committed decision, not a lease.
+/// The admission transaction is committed before this object is returned, so
+/// the permit deliberately owns no SQL resources or locks while registration
+/// is running.
+/// </summary>
+internal sealed class LivePreviewSubmissionAdmission : ILivePreviewSubmissionAdmission
 {
-    private SqlConnection? connection;
-    private SqlTransaction? transaction;
-    private int disposed;
-
-    internal SqlLivePreviewSubmissionAdmission(SqlConnection connection, SqlTransaction transaction)
-    {
-        this.connection = connection;
-        this.transaction = transaction;
-    }
-
-    public void Dispose()
-    {
-        if (Interlocked.Exchange(ref disposed, 1) != 0)
-        {
-            return;
-        }
-
-        var transaction = this.transaction;
-        this.transaction = null;
-        try
-        {
-            // The admission transaction is read-only. Rolling it back releases
-            // the generation lock without making lock-release failures part of
-            // the already-completed registration result.
-            try { transaction?.Rollback(); }
-            catch { /* Closing the connection below still releases the lock. */ }
-        }
-        finally
-        {
-            transaction?.Dispose();
-            var connection = this.connection;
-            this.connection = null;
-            connection?.Dispose();
-        }
-    }
+    public void Dispose() { }
 }
 
 public interface ISettingsAdministrationRepository
@@ -698,11 +670,10 @@ where p.TokenHash=@tokenHash and p.DraftId=@draftId and p.RevokedAtUtc is null
 
     /// <summary>
     /// Atomically admits a live-preview submission with the current live-settings
-    /// generation. The returned lease deliberately keeps the serializable
-    /// transaction open until the caller has entered and completed the real
-    /// registration workflow. Live settings publication updates the same
-    /// generation row as its final coordination lock, so publication and
-    /// admission are serialized rather than separated by a check/use race.
+    /// generation. The successful transaction commit is the admission
+    /// linearization point. The returned permit owns no SQL resources: the
+    /// request may continue with its already captured generation-bound settings
+    /// snapshot while later settings publication proceeds independently.
     ///
     /// Lock order is candidate lookup, draft, preview link, then live-settings
     /// generation. The generation row is intentionally the final lock acquired by
@@ -711,35 +682,28 @@ where p.TokenHash=@tokenHash and p.DraftId=@draftId and p.RevokedAtUtc is null
     public ILivePreviewSubmissionAdmission? TryAdmitLivePreviewSubmission(long previewLinkId, long expectedGeneration)
     {
         var nowUtc = timeProvider.GetUtcNow().UtcDateTime;
-        var connection = Open();
-        try
+        using var connection = Open();
+        // This lookup is deliberately outside the serializable transaction. It
+        // is only a candidate; the locked re-read below is authoritative.
+        var candidateDraftId = connection.QuerySingleOrDefault<long?>(
+            "select DraftId from dbo.RegistrationSettingPreviewLinks where PreviewLinkId=@previewLinkId",
+            new { previewLinkId });
+        if (!candidateDraftId.HasValue)
         {
-            // This lookup is deliberately outside the serializable transaction. It
-            // is only a candidate; the locked re-read below is authoritative.
-            var candidateDraftId = connection.QuerySingleOrDefault<long?>(
-                "select DraftId from dbo.RegistrationSettingPreviewLinks where PreviewLinkId=@previewLinkId",
-                new { previewLinkId });
-            if (!candidateDraftId.HasValue)
-            {
-                connection.Dispose();
-                return null;
-            }
+            return null;
+        }
 
-            var transaction = connection.BeginTransaction(IsolationLevel.Serializable);
-            try
-            {
-                var status = connection.QuerySingleOrDefault<string>(
-                    "select Status from dbo.RegistrationSettingDrafts with(updlock,holdlock) where DraftId=@draftId",
-                    new { draftId = candidateDraftId.Value }, transaction);
-                if (status != DraftStatus.Active.ToString())
-                {
-                    transaction.Rollback();
-                    transaction.Dispose();
-                    connection.Dispose();
-                    return null;
-                }
+        using var transaction = connection.BeginTransaction(IsolationLevel.Serializable);
+        var status = connection.QuerySingleOrDefault<string>(
+            "select Status from dbo.RegistrationSettingDrafts with(updlock,holdlock) where DraftId=@draftId",
+            new { draftId = candidateDraftId.Value }, transaction);
+        if (status != DraftStatus.Active.ToString())
+        {
+            transaction.Commit();
+            return null;
+        }
 
-                var link = connection.QuerySingleOrDefault<PreviewLinkRecord>(@"
+        var link = connection.QuerySingleOrDefault<PreviewLinkRecord>(@"
 select p.PreviewLinkId,p.DraftId,p.TokenHash,p.AllowLiveSubmission,p.RevokedAtUtc,p.ExpiresAtUtc,
  d.OrganizationId,d.FormCode,d.Status DraftStatus,p.OperationalBranchId,p.LiveSettingsGeneration
 from dbo.RegistrationSettingPreviewLinks p with(updlock,holdlock)
@@ -749,45 +713,34 @@ where p.PreviewLinkId=@previewLinkId and p.DraftId=@draftId
   and p.RevokedAtUtc is null
   and p.ExpiresAtUtc>@nowUtc
   and d.Status='Active'",
-                    new { previewLinkId, draftId = candidateDraftId.Value, nowUtc }, transaction);
-                if (link is null)
-                {
-                    transaction.Rollback();
-                    transaction.Dispose();
-                    connection.Dispose();
-                    return null;
-                }
-
-                // A transaction-held shared lock is sufficient: publications
-                // need an exclusive lock to increment this row, while unrelated
-                // admitted previews at the same generation may coexist.
-                var currentGeneration = connection.QuerySingle<long>(
-                    "select Generation from dbo.RegistrationSettingsCacheGeneration with(holdlock)",
-                    transaction: transaction);
-                if (link.LiveSettingsGeneration != expectedGeneration || currentGeneration != expectedGeneration)
-                {
-                    transaction.Rollback();
-                    transaction.Dispose();
-                    connection.Dispose();
-                    return null;
-                }
-
-                return new SqlLivePreviewSubmissionAdmission(connection, transaction);
-            }
-            catch
-            {
-                try { transaction.Rollback(); }
-                catch { /* The connection disposal below still releases the lock. */ }
-                transaction.Dispose();
-                connection.Dispose();
-                throw;
-            }
-        }
-        catch
+            new { previewLinkId, draftId = candidateDraftId.Value, nowUtc }, transaction);
+        if (link is null)
         {
-            connection.Dispose();
-            throw;
+            transaction.Commit();
+            return null;
         }
+
+        // A transaction-held shared lock is sufficient: publications need an
+        // exclusive lock to increment this row, while unrelated admissions at
+        // the same generation may coexist. The commit below releases it before
+        // the registration workflow starts.
+        var currentGeneration = connection.QuerySingle<long>(
+            "select Generation from dbo.RegistrationSettingsCacheGeneration with(holdlock)",
+            transaction: transaction);
+        if (link.LiveSettingsGeneration != expectedGeneration || currentGeneration != expectedGeneration)
+        {
+            transaction.Commit();
+            return null;
+        }
+
+        // The commit is the check/use boundary. If a publication, draft
+        // transition, or link revocation wins the relevant lock first, one of
+        // the checks above observes that committed state and returns null. Once
+        // this commit succeeds, the caller owns an admission permit and may
+        // safely use its captured snapshot even if a newer generation is
+        // published afterward.
+        transaction.Commit();
+        return new LivePreviewSubmissionAdmission();
     }
 
     public bool IsLivePreviewCurrent(long previewLinkId, long expectedGeneration)

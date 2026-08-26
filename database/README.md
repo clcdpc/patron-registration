@@ -4,18 +4,19 @@ The numbered SQL files in [`migrations/`](migrations/) are the authoritative dat
 
 ## Deployment
 
-1. Back up `clcdb` and confirm that the deployment identity can create tables, constraints, and indexes and can perform the data changes required by the migrations.
-2. Supply a connection string without putting credentials in the repository. The runner reads `PATRON_REGISTRATION_SQL_CONNECTION_STRING`, or accepts `-ConnectionStringFile` for a protected secret file. It always targets `clcdb` by default.
+1. Back up `clcdb` and confirm that the migration/deployment identity can create tables, constraints, and indexes and can perform the data changes required by the migrations. This identity is separate from the application's runtime database identity.
+2. Supply the migration connection string through a protected environment or secret file; do not commit credentials or principal names. The runner reads `PATRON_REGISTRATION_SQL_CONNECTION_STRING`, or accepts `-ConnectionStringFile` for a protected secret file. It always targets `clcdb` by default.
 3. Run the migration runner from the repository:
 
    ```powershell
-   $env:PATRON_REGISTRATION_SQL_CONNECTION_STRING = 'Server=...;User ID=...;Password=...;Encrypt=True;TrustServerCertificate=False'
    & .\database\Invoke-Migrations.ps1
    ```
 
    The runner creates `dbo.PatronRegistrationMigrations` when needed, takes the SQL Server application lock `Clc.PatronRegistration.DatabaseMigrations`, discovers and orders the files numerically, and reports each migration. Do not print the connection string or credentials.
-4. Verify the final status and history rows, then deploy the application.
-5. Upload database-backed header-image replacements where required and verify the affected registration pages.
+4. Verify the final status and history rows.
+5. Before deploying, grant the application's runtime database identity the required `SELECT`, `INSERT`, `UPDATE`, and `DELETE` access to the patron-registration tables and existing `RegistrationFormSettings`. An approved stored-procedure-based least-privilege equivalent is also supported. Runtime access must not rely on the migration identity's DDL/data-change permissions.
+6. Deploy the application only after all twelve migrations succeed.
+7. Upload database-backed header-image replacements where required and verify the affected registration pages.
 
 Normal output is intentionally short:
 

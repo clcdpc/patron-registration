@@ -325,9 +325,34 @@ begin try
 	update p
 	set LiveSettingsGeneration = g.Generation
 	from dbo.RegistrationSettingPreviewLinks p
+	inner join dbo.RegistrationSettingDrafts draft
+	on draft.DraftId = p.DraftId
 	cross join dbo.RegistrationSettingsCacheGeneration g
 	where p.AllowLiveSubmission = 1
 		and p.LiveSettingsGeneration is null
+		and p.RevokedAtUtc is null
+		and draft.Status = 'Active'
+		/* Do not first bind a link that the retired-key cleanup will revoke. */
+		and not exists
+		(
+			select 1
+			from dbo.RegistrationSettingDraftChanges draft_change
+			inner join dbo.RegistrationSettingDrafts draft
+				on draft.DraftId = draft_change.DraftId
+			where draft_change.DraftId = p.DraftId
+				and draft.Status = 'Active'
+				and
+				(
+					draft_change.SettingKey = 'header_image_url'
+					or draft_change.SettingKey in
+					(
+						'legal_name_checkbox_label',
+						'ecard_checkbox_label',
+						'mailing_list_checkbox_label',
+						'require_preferred_pickup_location'
+					)
+				)
+		)
 
 	if object_id('dbo.RegistrationFormAssets', 'U') is null
 	begin
@@ -446,6 +471,35 @@ begin try
 		('ecard_checkbox_label', 'label.IsECard'),
 		('mailing_list_checkbox_label', 'label.AddToMailingList'),
 		('require_preferred_pickup_location', 'require.RequestPickupBranchID')
+
+	/*
+	   Capture active drafts before the legacy-key and retired-header cleanup.
+	   The primary key ensures one revision bump per draft for this convergence
+	   run, even when several retired mutations are present.
+	*/
+	if object_id('tempdb..#SettingsAdministrationChangedDrafts') is not null
+		drop table #SettingsAdministrationChangedDrafts
+
+	create table #SettingsAdministrationChangedDrafts
+	(
+		DraftId bigint not null primary key
+	)
+
+	insert #SettingsAdministrationChangedDrafts (DraftId)
+	select distinct draft_change.DraftId
+	from dbo.RegistrationSettingDraftChanges draft_change
+	inner join dbo.RegistrationSettingDrafts draft
+		on draft.DraftId = draft_change.DraftId
+	where draft.Status = 'Active'
+		and
+		(
+			draft_change.SettingKey = 'header_image_url'
+			or draft_change.SettingKey in
+			(
+				select LegacyKey
+				from @setting_map
+			)
+		)
 
 	/* Compatibility-only setting types are intentionally omitted; catalog registration is insert-only and retains existing rows. */
 	/* BEGIN SETTING_CATALOG_ALLOWLIST */
@@ -661,6 +715,29 @@ begin try
 	where draft_change.SettingKey = 'header_image_url'
 		and draft.Status = 'Active'
 
+	/*
+	   The retired-key cleanup is an active-draft mutation. Invalidate every
+	   still-active link for the changed drafts and advance each draft revision
+	   once, in the same transaction. The convergence path creates Revision for
+	   older schemas before reaching this point.
+	*/
+	update preview_link
+	set RevokedAtUtc = sysutcdatetime(),
+		RevokedBy = coalesce(RevokedBy, 'settings-administration.sql'),
+		ModifiedAtUtc = sysutcdatetime(),
+		ModifiedBy = 'settings-administration.sql'
+	from dbo.RegistrationSettingPreviewLinks preview_link
+	inner join #SettingsAdministrationChangedDrafts changed_draft
+	on changed_draft.DraftId = preview_link.DraftId
+	where preview_link.RevokedAtUtc is null
+
+	update draft
+	set Revision = draft.Revision + 1
+	from dbo.RegistrationSettingDrafts draft
+	inner join #SettingsAdministrationChangedDrafts changed_draft
+	on changed_draft.DraftId = draft.DraftId
+	where draft.Status = 'Active'
+
 	delete from dbo.RegistrationFormSettings
 	where Setting = 'header_image_url'
 		or Setting in
@@ -841,6 +918,8 @@ begin try
 	begin
 		raiserror('RegistrationSettingsCacheGeneration row 1 is missing after deployment.', 16, 1)
 	end
+
+	drop table #SettingsAdministrationChangedDrafts
 
 	commit transaction
 end try
