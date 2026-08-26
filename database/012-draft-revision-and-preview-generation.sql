@@ -1,4 +1,4 @@
-/* Add optimistic draft revisions and bind live preview links to the settings generation. */
+/* Add optimistic draft revisions and generation-bound live-preview admission. */
 SET XACT_ABORT ON;
 BEGIN TRANSACTION;
 
@@ -23,11 +23,28 @@ BEGIN
         ADD LiveSettingsGeneration bigint NULL;
 END;
 
+/*
+   A NULL LiveSettingsGeneration identifies a live link issued before the
+   generation-bound admission contract existed. Do not bind those links to
+   the current generation: migration 007 or 008 may already have transformed
+   their active draft and older copies of those migrations left no durable
+   marker by which this migration could distinguish the changed draft. A
+   blanket revocation is therefore required to avoid silently legitimizing an
+   old bearer token. Links issued after this migration receive the generation
+   in the repository transaction; rerunning this migration does not touch
+   already-revoked rows.
+*/
 UPDATE p
-SET LiveSettingsGeneration = g.Generation
-FROM dbo.RegistrationSettingPreviewLinks p
-CROSS JOIN dbo.RegistrationSettingsCacheGeneration g
+SET RevokedAtUtc = SYSUTCDATETIME(),
+    RevokedBy = COALESCE(RevokedBy, '012-draft-revision-and-preview-generation.sql'),
+    ModifiedAtUtc = SYSUTCDATETIME(),
+    ModifiedBy = '012-draft-revision-and-preview-generation.sql'
+FROM dbo.RegistrationSettingPreviewLinks AS p
+INNER JOIN dbo.RegistrationSettingDrafts AS d
+    ON d.DraftId = p.DraftId
 WHERE p.AllowLiveSubmission = 1
-  AND p.LiveSettingsGeneration IS NULL;
+  AND p.LiveSettingsGeneration IS NULL
+  AND p.RevokedAtUtc IS NULL
+  AND d.Status = 'Active';
 
 COMMIT;
