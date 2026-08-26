@@ -1,75 +1,30 @@
-# Settings administration database deployment
+# Database convergence deployment
 
-The numbered SQL files in [`migrations/`](migrations/) are the authoritative database change history for patron-registration. The application does not apply production migrations at startup.
+[`settings-administration.sql`](settings-administration.sql) is the authoritative deployment for the patron-registration settings-administration schema and data. It computes the current required database state from the state it finds; deployment numbers, checksums, and deployment history are intentionally not stored.
+
+The script can be run against an older prerequisite database, a partially updated database, an already-current database, or a database where this update has run before. It creates missing patron-registration-owned tables and objects, adds the supported later columns, repairs required keys/indexes/defaults, transforms supported legacy setting data, and validates the final invariants.
 
 ## Deployment
 
-1. Back up `clcdb` and confirm that the migration/deployment identity can create tables, constraints, and indexes and can perform the data changes required by the migrations. This identity is separate from the application's runtime database identity.
-2. Supply the migration connection string through a protected environment or secret file; do not commit credentials or principal names. The runner reads `PATRON_REGISTRATION_SQL_CONNECTION_STRING`, or accepts `-ConnectionStringFile` for a protected secret file. It always targets `clcdb` by default.
-3. Run the migration runner from the repository:
+1. Back up `clcdb` and review the data changes before deployment. The update intentionally removes retired settings such as `header_image_url`; a backup is the recovery path for any unexpected data condition.
+2. Use a protected deployment identity with the DDL and data permissions needed to create or repair the patron-registration-owned objects. Do not put credentials in the repository.
+3. Provide the SQL Server connection string through `PATRON_REGISTRATION_SQL_CONNECTION_STRING`, `-ConnectionString`, or a protected `-ConnectionStringFile`. The database name defaults to `clcdb`.
 
    ```powershell
-   & .\database\Invoke-Migrations.ps1
+   & .\database\Invoke-DatabaseUpdate.ps1
    ```
 
-   The runner creates `dbo.PatronRegistrationMigrations` when needed, takes the SQL Server application lock `Clc.PatronRegistration.DatabaseMigrations`, discovers and orders the files numerically, and reports each migration. Do not print the connection string or credentials.
-4. Verify the final status and history rows.
-5. Before deploying, grant the application's runtime database identity the required `SELECT`, `INSERT`, `UPDATE`, and `DELETE` access to the patron-registration tables and existing `RegistrationFormSettings`. An approved stored-procedure-based least-privilege equivalent is also supported. Runtime access must not rely on the migration identity's DDL/data-change permissions.
-6. Deploy the application only after all twelve migrations succeed.
-7. Upload database-backed header-image replacements where required and verify the affected registration pages.
+   The wrapper reads `settings-administration.sql`, targets the selected database, and executes it with a long command timeout. It does not inspect or order database changes in PowerShell and does not print the connection string.
+4. Deploy the application after the update succeeds.
 
-Normal output is intentionally short:
+The application runtime identity remains separate from the deployment identity. Grant runtime access only to the tables and operations the application needs; runtime access must not depend on DDL or deployment data-change permissions.
 
-```text
-001 already applied
-002 already applied
-...
-012 already applied
-013 applying...
-013 applied
-Database current at migration 013
-```
+## Safety and repeatability
 
-The runner is the only normal deployment entry point. It skips an applied migration only when both its filename and SHA-256 checksum match the history row. Numbered migration files are repository text files with a canonical LF line ending, enforced by the root `.gitattributes` policy; the checksum is over those canonical checked-out bytes. Do not convert migration files to CRLF or otherwise rewrite them outside Git. A changed applied file fails before any new migration runs and reports the migration ID, filename, stored checksum, and current checksum. Applied migration files are immutable; corrections require a new migration.
+The SQL script starts one transaction with `SET XACT_ABORT ON`, acquires an exclusive SQL Server application lock with `sp_getapplock` scoped to that transaction, validates shared `clcdb` prerequisites, converges the owned state, and checks the final invariants. A second deployment waits for the lock and then evaluates the resulting state. Any failure rolls back the complete update, including schema and data changes.
 
-## Existing databases: explicit baseline/adoption
+The script is safe to run repeatedly. A successful second run does not duplicate catalog rows, singleton rows, settings, drafts, assets, or indexes. Legacy values are copied to their current keys before retired rows are removed. When both a legacy value and its current replacement exist, the current replacement is retained; active draft mutations follow the same replacement-wins rule. Ambiguous structural or data states that cannot be repaired safely fail with an actionable error.
 
-Do not run 001–012 directly against a database that may already contain their changes. For an environment where those migrations were previously applied manually, take a backup and intentionally adopt the existing state:
+The shared prerequisite tables `dbo.RegistrationFormSettingTypes` and `dbo.RegistrationFormSettings` must already exist with the columns and trusted relationship required by the application. The script validates those shared objects but does not take ownership of their schema. Missing or incompatible prerequisites fail before deployment can commit.
 
-```powershell
-& .\database\Invoke-Migrations.ps1 -Baseline
-```
-
-`-Baseline` is a separate operation. It does not execute the SQL files. It requires migration files 001 through 012, an empty migration-history table, and explicit schema/data invariants covering the exact required column definitions, primary keys, unique constraints, trusted foreign keys (including draft-delete cascades), check constraints, behavior-dependent defaults, index keys/include columns/filter predicates, the cache-generation and asset-reference singleton rows, the preview-link generation state, the header-image/catalog state, and removal of retired live and active-draft keys. Missing or incompatible invariants cause the baseline to fail without recording migrations. A successful baseline records the current repository checksums for 001–012 and clearly reports each baselined ID; a later normal run applies any migration after 012.
-
-If a history table already contains rows, use normal execution to finish a partially recorded deployment. Do not use baseline to bypass checksum validation.
-
-## Migration history and execution safety
-
-`dbo.PatronRegistrationMigrations` is owned by patron-registration and contains:
-
-| Column | Purpose |
-| --- | --- |
-| `MigrationId` | Numeric filename prefix; primary key. |
-| `Name` | Exact migration filename; unique and immutable. |
-| `Checksum` | Exact-file SHA-256 stored as `varbinary(32)`. |
-| `AppliedAtUtc` | UTC application timestamp. |
-| `AppliedBy` | Deployment actor recorded by the runner. |
-
-The runner owns an outer transaction for every new migration. It enables `XACT_ABORT`, executes the migration, inserts its history row, and commits both together. Failures roll back the migration and history insert together. Existing 001–012 files contain `BEGIN TRANSACTION`/`COMMIT` pairs; they are intentionally unchanged and work as nested transactions inside the runner-owned transaction. A new migration must not commit or roll back the runner's outer transaction. The runner rejects a migration that changes the outer transaction shape.
-
-The application lock prevents two deployment processes from running this workflow concurrently. The lock is session-owned, waits for the configured timeout, and is released in a `finally` block; closing the connection also releases a session lock if release itself encounters an error.
-
-Only files matching `NNN-name.sql` in `database/migrations/` are migration files. The runner rejects malformed names, non-canonical numeric prefixes, duplicate numeric IDs, gaps in the sequence from 001 through the highest repository migration, and pending migrations below an already-applied higher ID before applying work. It also preserves filename and checksum immutability for applied rows. `database/settings-administration.sql` is a separate convergence script and is not discovered by the runner.
-
-## Adding migration 013+
-
-1. Add one new file under `database/migrations/`, using the next numeric prefix, for example `013-add-registration-option.sql`. The repository must remain contiguous from 001 through that new ID.
-2. Derive ordering from the filename; do not add an order list to code or documentation.
-3. Put the business change in that file. New migrations do not need `IF EXISTS` or `IF NOT EXISTS` guards merely for repeatable deployment because history prevents a second execution. Keep guards when they express a genuinely convergent business operation, such as ensuring a catalog row exists.
-4. Run the runner against an isolated integration database, then run it a second time and confirm the new migration is skipped.
-5. Never edit or rename a migration after it has been applied. Add a subsequent migration for every correction.
-
-The application continues to use the shared existing `clcdb`; the runner is responsible only for the numbered patron-registration migration directory and its own history table. It does not create unrelated `clcdb` schema.
-
-The filtered draft index, catalog/data transformations, asset reference lock, cache-generation counter, and preview-generation behavior are described in the administration documentation. The convergence script remains available for its existing compatibility/test scenarios, but it is not a replacement for migration history and is not run at application startup.
+The deployment identity should be used only for this update. Configure the application with its normal runtime identity after the database is current.
