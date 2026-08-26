@@ -79,8 +79,10 @@ public sealed class PreviewContextResolver(
             // The SQL lookup and cache capture are separate operations. If a
             // publication completed while the context was being assembled,
             // retry so safe previews do not knowingly overlay a stale baseline
-            // on newer authoritative state. Live submissions also retain the
-            // final admission transaction as their check/use boundary.
+            // on newer authoritative state. Live submissions perform their
+            // final admission as a separate atomic commit immediately before
+            // registration; the captured snapshot remains valid for that
+            // already-admitted request after a later publication.
             bool generationStillCurrent;
             try
             {

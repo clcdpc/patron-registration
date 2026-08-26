@@ -1,9 +1,20 @@
 using System.Data;
+using Clc.Melissa;
 using Clc.PatronRegistration.Administration;
 using Clc.PatronRegistration.Configuration;
+using Clc.PatronRegistration.Data;
+using Clc.PatronRegistration.Helpers;
+using Clc.PatronRegistration.Web.Controllers;
 using Clc.PatronRegistration.Web.Settings;
+using Clc.Polaris.Api;
+using Clc.Polaris.Api.Models;
+using Clc.Rest;
+using Clc.Rest.Models;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Options;
+using Moq;
 using System.Text.Json;
 
 #nullable enable
@@ -592,7 +603,7 @@ update dbo.RegistrationSettingsCacheGeneration set Generation=0,ModifiedAtUtc=SY
     }
 
     [TestMethod]
-    public async Task LivePreviewAdmission_SerializesDirectSaveAndRejectsStaleAdmission()
+    public async Task LivePreviewAdmission_ReleasesPublicationLocksBeforeRegistrationAndRejectsStaleAdmission()
     {
         SeedVersion(0);
         var draftId = SeedActiveDraft(0, First, "draft");
@@ -620,11 +631,8 @@ update dbo.RegistrationSettingsCacheGeneration set Generation=0,ModifiedAtUtc=SY
                 }
             });
 
-            await generationUpdateAttempted.Task.WaitAsync(ConcurrencyTestTimeout);
-            Assert.IsFalse(save.IsCompleted, "The live-settings publication passed the generation lock while admission was held.");
-
-            admission.Dispose();
             await save.WaitAsync(ConcurrencyTestTimeout);
+            await generationUpdateAttempted.Task.WaitAsync(ConcurrencyTestTimeout);
             Assert.IsNull(save.Result, save.Result?.ToString());
             Assert.AreEqual(issued.LiveSettingsGeneration.Value + 1, repository.GetCacheGeneration());
             Assert.IsFalse(repository.IsLivePreviewCurrent(linkId, issued.LiveSettingsGeneration.Value));
@@ -641,7 +649,7 @@ update dbo.RegistrationSettingsCacheGeneration set Generation=0,ModifiedAtUtc=SY
     }
 
     [TestMethod]
-    public async Task LivePreviewAdmission_AllowsIndependentAdmissionsWhileSerializingPublication()
+    public async Task LivePreviewAdmission_AllowsIndependentAdmissionsAndPublicationWhileRegistrationIsInFlight()
     {
         var firstDraftId = SeedDraftAtScope(101, "preview-one", "Active");
         var secondDraftId = SeedDraftAtScope(101, "preview-two", "Active");
@@ -664,7 +672,7 @@ update dbo.RegistrationSettingsCacheGeneration set Generation=0,ModifiedAtUtc=SY
         {
             secondAdmission = await secondAdmissionTask.WaitAsync(ConcurrencyTestTimeout);
             Assert.IsNotNull(secondAdmission,
-                "An independent preview at the same generation should be admitted while the first lease is held.");
+                "An independent preview at the same generation should be admitted while the first registration is in flight.");
 
             SettingsAdministrationRepository.BeforeLiveSettingsGenerationIncrementForTesting = () =>
                 generationUpdateAttempted.TrySetResult(true);
@@ -682,18 +690,8 @@ update dbo.RegistrationSettingsCacheGeneration set Generation=0,ModifiedAtUtc=SY
                 }
             });
 
-            await generationUpdateAttempted.Task.WaitAsync(ConcurrencyTestTimeout);
-            Assert.IsFalse(publication.IsCompleted,
-                "Live-settings publication passed the generation lock while both admissions were held.");
-
-            firstAdmission.Dispose();
-            var secondLeaseProbe = Task.Delay(TimeSpan.FromMilliseconds(250));
-            var completedWhileSecondHeld = await Task.WhenAny(publication, secondLeaseProbe);
-            Assert.AreSame(secondLeaseProbe, completedWhileSecondHeld,
-                "Live-settings publication completed while the second admission was still held.");
-
-            secondAdmission.Dispose();
             await publication.WaitAsync(ConcurrencyTestTimeout);
+            await generationUpdateAttempted.Task.WaitAsync(ConcurrencyTestTimeout);
             Assert.IsNull(publication.Result, publication.Result?.ToString());
             Assert.AreEqual(generation + 1, repository.GetCacheGeneration());
 
@@ -721,7 +719,7 @@ update dbo.RegistrationSettingsCacheGeneration set Generation=0,ModifiedAtUtc=SY
     }
 
     [TestMethod]
-    public async Task LivePreviewAdmission_SerializesCommitDraftAndRejectsRevokedAdmission()
+    public async Task LivePreviewAdmission_ReleasesDraftLocksBeforeRegistrationAndRejectsRevokedAdmission()
     {
         SeedVersion(0);
         var draftId = SeedActiveDraft(0, Html, "draft");
@@ -755,11 +753,8 @@ update dbo.RegistrationSettingsCacheGeneration set Generation=0,ModifiedAtUtc=SY
                 }
             });
 
-            await commitAttempted.Task.WaitAsync(ConcurrencyTestTimeout);
-            Assert.IsFalse(commit.IsCompleted, "The draft commit passed the admitted-preview draft lock.");
-
-            admission.Dispose();
             await commit.WaitAsync(ConcurrencyTestTimeout);
+            await commitAttempted.Task.WaitAsync(ConcurrencyTestTimeout);
             Assert.IsNull(commit.Result, commit.Result?.ToString());
 
             using var staleAdmission = repository.TryAdmitLivePreviewSubmission(
@@ -776,6 +771,193 @@ update dbo.RegistrationSettingsCacheGeneration set Generation=0,ModifiedAtUtc=SY
                 try { await commit.WaitAsync(ConcurrencyTestTimeout); }
                 catch { /* Preserve the original test failure. */ }
             }
+        }
+    }
+
+    [TestMethod]
+    public void LivePreviewAdmission_StaleGenerationIsRejectedBeforeRegistrationSideEffects()
+    {
+        SeedVersion(0);
+        var draftId = SeedActiveDraft(0, First, "draft");
+        var linkId = CreatePreviewLinkAtCurrentRevision(
+            draftId, Enumerable.Repeat((byte)82, 32).ToArray(), true, 101, 1, Catalog, true, Audit());
+        var issued = repository.GetPreviewLink(linkId)!;
+        var context = CreatePreviewRequestContext(linkId, draftId, issued.LiveSettingsGeneration!.Value);
+
+        repository.DirectSave(202, "publication", 0, [Upsert(First, "published")], Catalog, Audit());
+
+        var (controller, papi, melissa, email) = CreatePreviewSubmissionController(context);
+        var result = controller.Submit("ignored", new Registration(context.Settings));
+
+        Assert.IsInstanceOfType<NotFoundObjectResult>(result);
+        papi.VerifyNoOtherCalls();
+        melissa.VerifyNoOtherCalls();
+        email.VerifyNoOtherCalls();
+    }
+
+    [DataTestMethod]
+    [DataRow("expired")]
+    [DataRow("revoked")]
+    [DataRow("invalidated")]
+    public void LivePreviewAdmission_InvalidLinkIsRejectedBeforeRegistrationSideEffects(string invalidation)
+    {
+        SeedVersion(0);
+        var draftId = SeedActiveDraft(0, First, "draft");
+        var linkId = CreatePreviewLinkAtCurrentRevision(
+            draftId, Enumerable.Repeat((byte)(83 + invalidation.Length), 32).ToArray(), true, 101, 1, Catalog, true, Audit());
+        var issued = repository.GetPreviewLink(linkId)!;
+        var context = CreatePreviewRequestContext(linkId, draftId, issued.LiveSettingsGeneration!.Value);
+
+        switch (invalidation)
+        {
+            case "expired":
+                clock.Advance(TimeSpan.FromHours(2));
+                break;
+            case "revoked":
+                repository.RevokePreviewLink(linkId, Catalog, true, Audit());
+                break;
+            case "invalidated":
+                repository.DirectSave(202, "publication", 0, [Upsert(First, "published")], Catalog, Audit());
+                break;
+            default:
+                Assert.Fail($"Unknown invalidation: {invalidation}");
+                break;
+        }
+
+        var (controller, papi, melissa, email) = CreatePreviewSubmissionController(context);
+        var result = controller.Submit("ignored", new Registration(context.Settings));
+
+        Assert.IsInstanceOfType<NotFoundObjectResult>(result);
+        papi.VerifyNoOtherCalls();
+        melissa.VerifyNoOtherCalls();
+        email.VerifyNoOtherCalls();
+    }
+
+    [TestMethod]
+    public async Task LivePreviewAdmission_AllowsPublicationWhileRegistrationWorkflowIsPaused()
+    {
+        SeedVersion(0);
+        var draftId = SeedActiveDraft(0, First, "draft");
+        var linkId = CreatePreviewLinkAtCurrentRevision(
+            draftId, Enumerable.Repeat((byte)84, 32).ToArray(), true, 101, 1, Catalog, true, Audit());
+        var issued = repository.GetPreviewLink(linkId)!;
+        var context = CreatePreviewRequestContext(linkId, draftId, issued.LiveSettingsGeneration!.Value);
+
+        var db = new Mock<IDbHelper>();
+        db.Setup(service => service.CheckPatronIsDuplicate(
+                It.IsAny<int>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<DateTime>()))
+            .Returns(false);
+        db.Setup(service => service.AddRegistrationHistoryEntry(It.IsAny<RegistrationHistoryEntry>())).Returns(true);
+
+        var registrationStarted = CompletionSource();
+        var releaseRegistration = CompletionSource();
+        var papi = new Mock<IPapiClient>();
+        var response = new RestResponse<PatronRegistrationCreateResult>
+        {
+            Data = new PatronRegistrationCreateResult
+            {
+                PatronID = 123,
+                Barcode = "2000000000123",
+                PAPIErrorCode = 0
+            }
+        };
+        papi.Setup(service => service.PatronRegistrationCreate(It.IsAny<PatronRegistrationParams>()))
+            .Callback(() =>
+            {
+                registrationStarted.TrySetResult(true);
+                releaseRegistration.Task.GetAwaiter().GetResult();
+            })
+            .Returns(response);
+        var melissa = new Mock<IMelissaRestClient>();
+        melissa.Setup(service => service.PersonatorRequest(It.IsAny<Clc.Melissa.Models.PersonatorRequestRecord>()))
+            .Returns(new RestResponse<Clc.Melissa.Models.PersonatorResponse>
+            {
+                Data = new Clc.Melissa.Models.PersonatorResponse
+                {
+                    Records =
+                    [
+                        new Clc.Melissa.Models.Record
+                        {
+                            Results = "AS01",
+                            AddressLine1 = "1 Main St",
+                            AddressLine2 = string.Empty,
+                            City = "Columbus",
+                            State = "OH",
+                            PostalCode = "43215"
+                        }
+                    ]
+                }
+            });
+        var email = new Mock<IEmailSender>();
+        var controller = new PreviewController(
+            repository,
+            new PreviewRequestContextAccessor { IsPreviewRequest = true, Current = context },
+            new TestCache(),
+            db.Object,
+            papi.Object,
+            melissa.Object,
+            email.Object)
+        {
+            ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() }
+        };
+        var registration = new Registration(context.Settings)
+        {
+            NameFirst = "Jane",
+            NameLast = "Doe",
+            Birthdate = new DateTime(2000, 1, 1),
+            DeliveryOptionId = 1,
+            PatronBranchID = 101,
+            State = "OH",
+            StreetOne = "1 Main St",
+            City = "Columbus",
+            PostalCode = "43215"
+        };
+
+        var previousGlobal = DbHelper.Global;
+        DbHelper.Global = db.Object;
+        Task<IActionResult>? submission = null;
+        Task<Exception?>? publication = null;
+        try
+        {
+            submission = Task.Run(() => controller.Submit("ignored", registration));
+            await registrationStarted.Task.WaitAsync(ConcurrencyTestTimeout);
+
+            publication = Task.Run(() =>
+            {
+                try
+                {
+                    repository.DirectSave(202, "publication", 0, [Upsert(First, "published")], Catalog, Audit());
+                    return (Exception?)null;
+                }
+                catch (Exception exception)
+                {
+                    return exception;
+                }
+            });
+            await publication.WaitAsync(ConcurrencyTestTimeout);
+            Assert.IsNull(publication.Result, publication.Result?.ToString());
+            Assert.AreEqual(issued.LiveSettingsGeneration.Value + 1, repository.GetCacheGeneration());
+
+            releaseRegistration.TrySetResult(true);
+            var result = await submission.WaitAsync(ConcurrencyTestTimeout);
+
+            Assert.IsInstanceOfType<JsonResult>(result);
+            papi.Verify(service => service.PatronRegistrationCreate(It.IsAny<PatronRegistrationParams>()), Times.Once);
+        }
+        finally
+        {
+            releaseRegistration.TrySetResult(true);
+            if (submission is not null)
+            {
+                try { await submission.WaitAsync(ConcurrencyTestTimeout); }
+                catch { /* Preserve the original assertion or workflow failure. */ }
+            }
+            if (publication is not null)
+            {
+                try { await publication.WaitAsync(ConcurrencyTestTimeout); }
+                catch { /* Preserve the original assertion or publication failure. */ }
+            }
+            DbHelper.Global = previousGlobal;
         }
     }
 
@@ -2229,6 +2411,46 @@ output inserted.PreviewLinkId values(@draftId,@hash,0,101,'other','other',@expir
         Assert.IsNotNull(expectedDraftRevision);
         return repository.CreatePreviewLink(draftId, tokenHash, allowLiveSubmission, operationalBranchId,
             lifetimeHours, catalog, canManageSensitive, audit, expectedDraftRevision);
+    }
+
+    private PreviewRequestContext CreatePreviewRequestContext(long linkId, long draftId, long generation)
+    {
+        var link = repository.GetPreviewLink(linkId)!;
+        var draft = repository.GetDraft(draftId)!;
+        var cache = new TestCache { Generation = generation };
+        cache.OrganizationCache = cache.OrganizationCache
+            .Append(new OrganizationsGetRow
+            {
+                OrganizationID = link.OperationalBranchId,
+                Name = "Integration branch",
+                OrganizationCodeID = 3,
+                ParentOrganizationID = 2
+            })
+            .ToList();
+        return new PreviewRequestContext(
+            link,
+            draft,
+            new PreviewSettingProvider(draft, link.OperationalBranchId, cache, 1));
+    }
+
+    private (PreviewController Controller, Mock<IPapiClient> Papi, Mock<IMelissaRestClient> Melissa, Mock<IEmailSender> Email)
+        CreatePreviewSubmissionController(PreviewRequestContext context)
+    {
+        var papi = new Mock<IPapiClient>();
+        var melissa = new Mock<IMelissaRestClient>();
+        var email = new Mock<IEmailSender>();
+        var controller = new PreviewController(
+            repository,
+            new PreviewRequestContextAccessor { IsPreviewRequest = true, Current = context },
+            new TestCache(),
+            Mock.Of<IDbHelper>(),
+            papi.Object,
+            melissa.Object,
+            email.Object)
+        {
+            ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() }
+        };
+        return (controller, papi, melissa, email);
     }
 
     private void SeedFormCodeMetadata(string formCode, string displayName, DateTime modifiedAtUtc)
