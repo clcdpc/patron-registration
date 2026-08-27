@@ -116,8 +116,6 @@ namespace Clc.PatronRegistration.Web
 
             HttpContextHelper.Configure(app.Services.GetRequiredService<IHttpContextAccessor>());
             CacheHelper.Configure(app.Services.GetRequiredService<ICache>());
-            DbHelper.Global = app.Services.GetRequiredService<IDbHelper>();
-
             app.UseCors(MyAllowSpecificOrigins);
             app.UseHttpsRedirection();
             app.UseStaticFiles();

@@ -1,0 +1,197 @@
+# Registration testing and release validation
+
+This repository has two deliberately different registration checks:
+
+* Deterministic tests run in pull requests, ordinary branch pushes, and local
+  development. They exercise the checked-out MVC binding, selected-branch
+  revalidation, `Registration.CreateRegistration`, transformations, and final
+  `PatronRegistrationParams` generation with mocked PAPI, Melissa, email, and
+  database collaborators. They are repeatable and never create a patron in
+  Polaris.
+* The `LiveDevelopment` check is a small contract test run only by the release
+  workflow (or an explicitly opted-in developer diagnostic). It uses the same
+  checked-out application code and sends the final request to the approved
+  DEVELOPMENT Polaris host. Melissa, email, history, and duplicate persistence
+  remain substituted; DEVELOPMENT SQL is not needed for this contract.
+
+Both are needed: deterministic tests catch application regressions without
+shared-state risk, while the live check catches an incompatible final payload
+or operational identifier that mocks cannot detect.
+
+## Local entry points
+
+`./test.sh` is the normal deterministic entry point. It runs the JavaScript
+checks, then .NET tests with `TestCategory!=LiveDevelopment`. A caller may pass
+ordinary `dotnet test` arguments; a supplied `--filter` is composed with the
+mandatory live exclusion. Filters mentioning `LiveDevelopment` are rejected,
+so credentials or a clever raw filter cannot turn an ordinary run into a live
+mutation. The SQL integration tests use the existing
+`PATRON_REGISTRATION_TEST_SQL_CONNECTION_STRING` convention; local runs do not
+start DEVELOPMENT SQL. CI supplies an isolated SQL Server and fails if the
+SQL-enabled run reports skipped tests.
+
+The live entry point is:
+
+```sh
+PATRON_REGISTRATION_LIVE_TESTS=true ./test.sh --live-development
+```
+
+Live mode runs only the single categorized orchestration test. Raw `--filter`
+arguments are rejected; use `PATRON_REGISTRATION_LIVE_SCENARIOS` for a deliberate
+subset. The fixed allowlist is `standard,school,ecard`. An absent selector runs
+all three in that order. Names are trimmed and case-folded, duplicates are
+deduplicated, and empty or unknown names fail before any create.
+
+The live test also requires all live configuration variables, positive
+DEVELOPMENT operational IDs, credentials, and `PATRON_REGISTRATION_LIVE_TESTS=true`.
+The endpoint must be HTTPS and match the committed exact host allowlist in
+`LiveDevelopmentConfiguration`; a hostname containing “dev” is not sufficient.
+The test performs the read-only `ApiKeyValidate` call before constructing an
+attempt or calling `PatronRegistrationCreate`. It never falls back to a
+production endpoint. Read-only setup has no automatic retry today; if a retry is
+added, it must remain finite and read-only.
+
+## Deterministic registration matrix
+
+`RegistrationControllerSubmitIntegrationTests` binds a real form body through
+ASP.NET MVC and invokes the real controller. The resolver is a deterministic
+test double, but selected-branch revalidation is production MVC behavior. The
+mock PAPI response is successful and captures the exact final payload; the
+tests verify one create call and stable final fields. Coverage includes:
+
+* a normalized/standard registration;
+* school-enabled UAPL with empty `User1` for a non-student/non-teacher (the
+  historical nullable-property regression);
+* UAPL e-card `User1` clearing;
+* school student and teacher patron-code selection and school preservation; and
+* a general e-card code, expiration, and generated barcode.
+
+The historical mutation (`string? User1` to `string User1`) was reproduced once
+against the school-enabled empty-`User1` test. MVC required validation rejected
+the form; the nullable source was restored and the test passed again. No
+mutation framework or alternate production path is committed.
+
+Registration history now uses the `IDbHelper` passed through the production
+flow. `DbHelper.Global` is not initialized by the web application and is not
+read by registration processing. A static compatibility member remains only
+for older tests/API consumers; new successful-path tests use the injected mock.
+
+## Live orchestration and mutation safety
+
+There is one `[TestCategory("LiveDevelopment")]`, `[DoNotParallelize]`
+orchestration test. It constructs every selected scenario and runs every
+preflight before the first marker or create. A failed preflight means zero
+creates. After preflight, scenarios run serially and the first rejected,
+ambiguous, or downstream-failed scenario stops the remaining matrix.
+
+The live boundary is intentionally narrow:
+
+* real: checked-out MVC/controller/registration code, transformations, final
+  payload construction, and the real `PatronRegistrationCreate` request;
+* substituted: Melissa, email/Postmark, duplicate/history persistence, and
+  unrelated post-create collaborators; and
+* settings: explicit positive IDs and school value are supplied by the
+  environment, while the test fixes the UAPL format and safe no-side-effect
+  options. The forwarding `IPapiClient` exists only in test code, delegates the
+  request unchanged to `PapiClient`, and captures the real response immediately.
+
+The create call is made exactly once. There is no `Task.Run`/abandoned-request
+timeout and no retry after a timeout, connection interruption, cancellation,
+malformed response, or other ambiguous result. The current PAPI interface does
+not expose a clean request-cancellation seam, so the release job's finite
+timeout is the final guard; an interruption during create must be treated as
+potentially ambiguous and investigated before any recovery.
+
+Create state and scenario state are separate. The store records
+`attempting/running` before each create, `created` immediately after a positive
+response, and only then `passed` after downstream assertions. A later failure
+leaves `created/failed`; a safely proven API rejection is `rejected/failed`; an
+uncertain transport result is `unknown/failed`. The store appends transitions
+and atomically replaces the JSON manifest after each transition, so earlier
+attempts survive later failures.
+
+Every live identity is synthetic. The token is a short SHA-256 digest derived
+from tag, resolved commit, scenario, and (only for local runs) an invocation ID;
+an optional recovery nonce is included. The token is placed in a duplicate-
+relevant name field and is constrained to supported characters. For a release,
+`GITHUB_RUN_ID` and `GITHUB_RUN_ATTEMPT` are audit metadata only, so an ordinary
+workflow rerun does not silently generate a new logical patron identity. Local
+runs receive a random invocation ID.
+
+Before every create the public-safe breadcrumb and manifest contain only the
+scenario, token, tag, commit, run metadata, timestamp, and safe state/failure
+classification. PatronID, barcode, credentials, authorization material,
+connection strings, and real PII stay in memory and are never logged, placed in
+the public manifest, or included in exceptions. The token is the investigation
+and cleanup key for DEVELOPMENT staff; this task does not automatically delete
+synthetic patrons.
+
+## Workflows and release identity
+
+`.github/workflows/test.yml` calls the reusable deterministic workflow for both
+pushes and pull requests. The reusable workflow checks out its explicit
+`commit-sha`, runs JavaScript and the normal .NET suite through `test.sh`, and
+retains isolated SQL convergence coverage. It has `contents: read`, does not
+receive live secrets, and never targets the live runner.
+
+`.github/workflows/release-validation.yml` triggers on version-shaped `v*` tags
+and is terminal validation (there is no deployment workflow here). It:
+
+1. validates `vMAJOR.MINOR.PATCH` with an optional prerelease suffix;
+2. peels the tag-push event SHA with `git rev-parse "${EVENT_SHA}^{commit}"`;
+3. fetches the current remote tag into a separate ref and requires its peeled
+   commit to equal the event commit (supporting lightweight and annotated tags
+   and rejecting deleted/moved tags);
+4. freshly fetches `origin/master` and requires the release commit to be an
+   ancestor, but deliberately does not require it to equal the current master
+   tip; and
+5. passes that exact commit to deterministic CI and then, after it succeeds,
+   the serialized live DEVELOPMENT job.
+
+The live job passes the resolved commit separately as
+`PATRON_REGISTRATION_LIVE_COMMIT_SHA`; this keeps live breadcrumbs and synthetic
+identity tied to the peeled release commit even when the pushed tag is annotated.
+
+The live job uses the dedicated `live-development-tests` Environment, separate
+environment-scoped secrets/variables, the `patron-registration-live-development`
+self-hosted label, `cancel-in-progress: false`, `[DoNotParallelize]`, and a
+30-minute outer timeout. Only the live job is globally serialized; deterministic
+validation for different tags may run concurrently. The manifest upload is
+best-effort with `if: always()` and cannot hide the test result. The workflow
+checkout disables persisted credentials.
+
+An ordinary GitHub rerun has `GITHUB_RUN_ATTEMPT > 1` and fails closed before
+live setup/mutation. Operators must inspect the prior public-safe manifest and
+breadcrumbs, locate any patron by synthetic token, and use the normal approved
+DEVELOPMENT cleanup process. There is no automatic recovery mode and a rerun is
+not an acknowledgement to repeat a non-idempotent create.
+
+## Required external controls
+
+Repository YAML cannot configure organization policy. Before enabling the live
+job, administrators must verify the `live-development-tests` Environment has
+the intended required reviewers and release-tag deployment restrictions, and
+that its secrets are separate from ordinary CI. A tag ruleset should restrict
+creation, update, and deletion of `v*` release tags to trusted release actors;
+the event-SHA/current-tag check remains required even with that ruleset.
+`master` should have the normal review and required-CI branch protection. These
+are assumptions to verify externally, not settings claimed by this repository.
+
+Because this is a public repository, the live runner must be a dedicated,
+ephemeral or tightly restricted runner group available only to this repository
+and approved release workflow, never to arbitrary PR/branch workflows. The
+label in the workflow is not proof that organization-level restrictions exist;
+if they cannot be established, leave the live job blocked. Prefer first-party
+actions and pin actions on the internal runner to verified immutable full SHAs
+when the organization can resolve them. The workflow currently uses first-party
+version tags because this source does not fabricate unverifiable SHA pins; that
+external hardening remains required.
+
+## Investigating a failed live attempt
+
+Download the public-safe manifest and search the job log for the last
+`live-registration attempt` breadcrumb. Use scenario, synthetic token, release
+tag, commit, and UTC timestamp to locate/clean up the synthetic DEVELOPMENT
+patron through the approved internal process. Treat `unknown` as “possibly
+created,” never as “rejected,” and do not rerun the create until an operator has
+reviewed the prior attempt and selected an explicitly approved recovery process.

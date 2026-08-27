@@ -344,7 +344,7 @@ public class PreviewRequestContextTests
         db.Setup(service => service.AddRegistrationHistoryEntry(It.IsAny<RegistrationHistoryEntry>())).Returns(true);
 
         var melissa = new Mock<IMelissaRestClient>();
-        melissa.Setup(service => service.PersonatorRequest(It.IsAny<Clc.Melissa.Models.PersonatorRequestRecord>()))
+        melissa.Setup(service => service.PersonatorRequest(It.IsAny<Clc.Melissa.Models.PersonatorRequest>()))
             .Returns(new RestResponse<Clc.Melissa.Models.PersonatorResponse>
             {
                 Data = new Clc.Melissa.Models.PersonatorResponse
@@ -409,7 +409,7 @@ public class PreviewRequestContextTests
 
             Assert.AreEqual(RegistrationStatus.Success, attempt.Status);
             papi.Verify(service => service.PatronRegistrationCreate(It.IsAny<PatronRegistrationParams>()), Times.Once);
-            melissa.Verify(service => service.PersonatorRequest(It.IsAny<Clc.Melissa.Models.PersonatorRequestRecord>()), Times.Once);
+            melissa.Verify(service => service.PersonatorRequest(It.IsAny<Clc.Melissa.Models.PersonatorRequest>()), Times.Once);
             repository.Verify(service => service.WriteAudit(
                 "LivePreviewSubmission", true, It.IsAny<AuditContext>(), null, null, context.Link.PreviewLinkId,
                 It.Is<string>(json => json.Contains("Success", StringComparison.Ordinal))), Times.Once);

@@ -61,7 +61,7 @@ public class RegistrationModelStateTests
         var db = new Mock<IDbHelper>();
         db.Setup(value => value.CheckPatronIsDuplicate(It.IsAny<int>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<DateTime>())).Returns(false);
         var melissa = new Mock<IMelissaRestClient>();
-        melissa.Setup(value => value.PersonatorRequest(It.IsAny<PersonatorRequestRecord>())).Throws(new InvalidOperationException("workflow reached"));
+        melissa.Setup(value => value.PersonatorRequest(It.IsAny<PersonatorRequest>())).Throws(new InvalidOperationException("workflow reached"));
         var registration = new Registration(settings.Object)
         {
             NameFirst = "Jane",
@@ -77,7 +77,7 @@ public class RegistrationModelStateTests
             "127.0.0.1", new ModelStateDictionary(), settings.Object, db.Object, Mock.Of<IPapiClient>(), melissa.Object, Mock.Of<IEmailSender>()));
 
         Assert.AreEqual("workflow reached", exception.Message);
-        melissa.Verify(value => value.PersonatorRequest(It.IsAny<PersonatorRequestRecord>()), Times.Once);
+        melissa.Verify(value => value.PersonatorRequest(It.IsAny<PersonatorRequest>()), Times.Once);
     }
 
     [TestMethod]
@@ -106,7 +106,7 @@ public class RegistrationModelStateTests
             Assert.AreEqual("Underage registrations are not allowed.", result.Message);
             db.Verify(value => value.CheckPatronIsDuplicate(It.IsAny<int>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<DateTime>()), Times.Never);
             db.Verify(value => value.AddRegistrationHistoryEntry(It.IsAny<RegistrationHistoryEntry>()), Times.Never);
-            melissa.Verify(value => value.PersonatorRequest(It.IsAny<PersonatorRequestRecord>()), Times.Never);
+            melissa.Verify(value => value.PersonatorRequest(It.IsAny<PersonatorRequest>()), Times.Never);
             papi.Verify(value => value.PatronRegistrationCreate(It.IsAny<PatronRegistrationParams>()), Times.Never);
             papi.Verify(value => value.RecordSetContentAdd(It.IsAny<int>(), It.IsAny<int>(), It.IsAny<int>(), It.IsAny<int>()), Times.Never);
             email.VerifyNoOtherCalls();
@@ -142,7 +142,7 @@ public class RegistrationModelStateTests
         Assert.IsFalse(result.Message.Contains("Underage", StringComparison.Ordinal));
         db.Verify(value => value.CheckPatronIsDuplicate(It.IsAny<int>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<DateTime>()), Times.Never);
         db.Verify(value => value.AddRegistrationHistoryEntry(It.IsAny<RegistrationHistoryEntry>()), Times.Never);
-        melissa.Verify(value => value.PersonatorRequest(It.IsAny<PersonatorRequestRecord>()), Times.Never);
+        melissa.Verify(value => value.PersonatorRequest(It.IsAny<PersonatorRequest>()), Times.Never);
         papi.Verify(value => value.PatronRegistrationCreate(It.IsAny<PatronRegistrationParams>()), Times.Never);
         papi.Verify(value => value.RecordSetContentAdd(It.IsAny<int>(), It.IsAny<int>(), It.IsAny<int>(), It.IsAny<int>()), Times.Never);
         email.VerifyNoOtherCalls();

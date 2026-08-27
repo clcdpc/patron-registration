@@ -1,0 +1,117 @@
+name: Deterministic tests
+
+on:
+  workflow_call:
+    inputs:
+      commit_sha:
+        description: Exact commit to test
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out exact commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.commit_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.x
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20.x
+
+      - name: Start SQL Server 2022
+        shell: bash
+        env:
+          SQL_CONTAINER: patron-registration-sql
+        run: |
+          set -euo pipefail
+
+          sql_password="PatronRegistrationCI_$(openssl rand -hex 24)Aa1!"
+          echo "::add-mask::$sql_password"
+          echo "PATRON_REGISTRATION_SQL_PASSWORD=$sql_password" >> "$GITHUB_ENV"
+
+          docker pull mcr.microsoft.com/mssql/server:2022-latest
+          docker run --detach \
+            --name "$SQL_CONTAINER" \
+            --publish 1433:1433 \
+            --env ACCEPT_EULA=Y \
+            --env MSSQL_PID=Developer \
+            --env MSSQL_SA_PASSWORD="$sql_password" \
+            mcr.microsoft.com/mssql/server:2022-latest
+
+          sqlcmd_path=""
+          for candidate in /opt/mssql-tools18/bin/sqlcmd /opt/mssql-tools/bin/sqlcmd; do
+            if docker exec "$SQL_CONTAINER" test -x "$candidate"; then
+              sqlcmd_path="$candidate"
+              break
+            fi
+          done
+          if [[ -z "$sqlcmd_path" ]]; then
+            docker logs "$SQL_CONTAINER"
+            echo "The SQL Server image does not contain sqlcmd."
+            exit 1
+          fi
+
+          for attempt in $(seq 1 60); do
+            if docker exec --env SQLCMDPASSWORD="$sql_password" "$SQL_CONTAINER" \
+                "$sqlcmd_path" -S localhost -U sa -C -b -Q "SET NOCOUNT ON; SELECT 1;" \
+                >/dev/null 2>&1; then
+              exit 0
+            fi
+            if [[ "$(docker inspect --format='{{.State.Running}}' "$SQL_CONTAINER")" != "true" ]]; then
+              docker logs "$SQL_CONTAINER"
+              echo "SQL Server stopped before becoming ready."
+              exit 1
+            fi
+            sleep 2
+          done
+
+          docker logs "$SQL_CONTAINER"
+          echo "SQL Server did not become ready within the allotted time."
+          exit 1
+
+      - name: Verify database convergence with SQL integration
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PATRON_REGISTRATION_TEST_SQL_CONNECTION_STRING="Server=127.0.0.1,1433;Initial Catalog=master;User ID=sa;Password=${PATRON_REGISTRATION_SQL_PASSWORD};Encrypt=False;TrustServerCertificate=True;Connect Timeout=10;"
+          dotnet test src/Clc.PatronRegistration.Web.Tests/Clc.PatronRegistration.Tests.csproj \
+            --filter "FullyQualifiedName~DatabaseConvergenceIntegrationTests" \
+            --logger "console;verbosity=normal"
+
+      - name: Run deterministic suite
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PATRON_REGISTRATION_TEST_SQL_CONNECTION_STRING="Server=127.0.0.1,1433;Initial Catalog=master;User ID=sa;Password=${PATRON_REGISTRATION_SQL_PASSWORD};Encrypt=False;TrustServerCertificate=True;Connect Timeout=10;"
+          ./test.sh --logger "console;verbosity=normal" 2>&1 | tee "$RUNNER_TEMP/patron-registration-test.log"
+
+      - name: Verify no tests were skipped
+        shell: bash
+        run: |
+          set -euo pipefail
+          if grep -Eq 'Skipped: *[1-9][0-9]*' "$RUNNER_TEMP/patron-registration-test.log"; then
+            echo "The SQL-enabled test run reported skipped tests."
+            exit 1
+          fi
+
+      - name: Stop SQL Server
+        if: always()
+        env:
+          SQL_CONTAINER: patron-registration-sql
+        run: docker rm --force "$SQL_CONTAINER" >/dev/null 2>&1 || true

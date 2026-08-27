@@ -67,7 +67,7 @@ namespace Clc.PatronRegistration.Tests
             _mockSettings.Setup(s => s.DriversLicenseButtonEnabledIpAddresses).Returns([]);
             _mockDbHelper.Setup(db => db.CheckPatronIsDuplicate(
                 It.IsAny<int>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<DateTime>())).Returns(false);
-            _mockMelissaClient.Setup(client => client.PersonatorRequest(It.IsAny<Clc.Melissa.Models.PersonatorRequestRecord>()))
+            _mockMelissaClient.Setup(client => client.PersonatorRequest(It.IsAny<Clc.Melissa.Models.PersonatorRequest>()))
                 .Returns(new RestResponse<Clc.Melissa.Models.PersonatorResponse>
                 {
                     Data = new Clc.Melissa.Models.PersonatorResponse
@@ -143,7 +143,7 @@ namespace Clc.PatronRegistration.Tests
             _mockSettings.Setup(s => s.RegistrationText).Returns("Registration complete");
             _mockDbHelper.Setup(db => db.CheckPatronIsDuplicate(
                 It.IsAny<int>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<DateTime>())).Returns(false);
-            _mockMelissaClient.Setup(client => client.PersonatorRequest(It.IsAny<Clc.Melissa.Models.PersonatorRequestRecord>()))
+            _mockMelissaClient.Setup(client => client.PersonatorRequest(It.IsAny<Clc.Melissa.Models.PersonatorRequest>()))
                 .Returns(new RestResponse<Clc.Melissa.Models.PersonatorResponse>
                 {
                     Data = new Clc.Melissa.Models.PersonatorResponse

@@ -1,0 +1,128 @@
+name: Release validation
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+jobs:
+  resolve_release:
+    runs-on: ubuntu-latest
+    outputs:
+      commit_sha: ${{ steps.resolve.outputs.commit_sha }}
+      release_tag: ${{ steps.resolve.outputs.release_tag }}
+    steps:
+      - name: Check out event object
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Resolve and verify immutable release identity
+        id: resolve
+        shell: bash
+        env:
+          EVENT_SHA: ${{ github.sha }}
+          EVENT_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          if [[ ! "$EVENT_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "Release tag must use vMAJOR.MINOR.PATCH with an optional prerelease suffix."
+            exit 1
+          fi
+
+          event_commit="$(git rev-parse "${EVENT_SHA}^{commit}")"
+
+          # Fetch the current remote tag into a private ref. A deleted tag makes this
+          # fetch fail; a moved tag resolves to a different commit below.
+          git fetch --force --no-tags origin \
+            "refs/tags/${EVENT_TAG}:refs/remotes/origin/release-tag-check"
+          current_tag_commit="$(git rev-parse "refs/remotes/origin/release-tag-check^{commit}")"
+          if [[ "$event_commit" != "$current_tag_commit" ]]; then
+            echo "The release tag moved after the event was emitted."
+            exit 1
+          fi
+
+          git fetch --prune origin "+refs/heads/master:refs/remotes/origin/master"
+          if ! git merge-base --is-ancestor "$event_commit" refs/remotes/origin/master; then
+            echo "The tagged commit is not in the current origin/master history."
+            exit 1
+          fi
+
+          {
+            echo "commit_sha=$event_commit"
+            echo "release_tag=$EVENT_TAG"
+          } >> "$GITHUB_OUTPUT"
+
+  deterministic:
+    needs: resolve_release
+    uses: ./.github/workflows/deterministic.yml
+    with:
+      commit_sha: ${{ needs.resolve_release.outputs.commit_sha }}
+
+  live-development:
+    name: DEVELOPMENT Polaris live gate
+    needs: [resolve_release, deterministic]
+    runs-on: [self-hosted, patron-registration-live-development]
+    timeout-minutes: 30
+    concurrency:
+      group: patron-registration-live-development
+      cancel-in-progress: false
+    environment:
+      name: live-development-tests
+    env:
+      PATRON_REGISTRATION_LIVE_TESTS: 'true'
+      PATRON_REGISTRATION_PAPI_HOST: ${{ vars.PATRON_REGISTRATION_PAPI_HOST }}
+      PATRON_REGISTRATION_PAPI_ACCESS_ID: ${{ secrets.PATRON_REGISTRATION_PAPI_ACCESS_ID }}
+      PATRON_REGISTRATION_PAPI_ACCESS_KEY: ${{ secrets.PATRON_REGISTRATION_PAPI_ACCESS_KEY }}
+      PATRON_REGISTRATION_PAPI_ORGANIZATION_ID: ${{ vars.PATRON_REGISTRATION_PAPI_ORGANIZATION_ID }}
+      PATRON_REGISTRATION_PAPI_LIBRARY_ID: ${{ vars.PATRON_REGISTRATION_PAPI_LIBRARY_ID }}
+      PATRON_REGISTRATION_PAPI_BRANCH_ID: ${{ vars.PATRON_REGISTRATION_PAPI_BRANCH_ID }}
+      PATRON_REGISTRATION_PAPI_PATRON_CODE_ID: ${{ vars.PATRON_REGISTRATION_PAPI_PATRON_CODE_ID }}
+      PATRON_REGISTRATION_PAPI_LOGON_USER_ID: ${{ vars.PATRON_REGISTRATION_PAPI_LOGON_USER_ID }}
+      PATRON_REGISTRATION_PAPI_ECARD_PATRON_CODE_ID: ${{ vars.PATRON_REGISTRATION_PAPI_ECARD_PATRON_CODE_ID }}
+      PATRON_REGISTRATION_PAPI_STUDENT_PATRON_CODE_ID: ${{ vars.PATRON_REGISTRATION_PAPI_STUDENT_PATRON_CODE_ID }}
+      PATRON_REGISTRATION_PAPI_TEACHER_PATRON_CODE_ID: ${{ vars.PATRON_REGISTRATION_PAPI_TEACHER_PATRON_CODE_ID }}
+      PATRON_REGISTRATION_PAPI_SCHOOL: ${{ vars.PATRON_REGISTRATION_PAPI_SCHOOL }}
+      PATRON_REGISTRATION_LIVE_COMMIT_SHA: ${{ needs.resolve_release.outputs.commit_sha }}
+    steps:
+      - name: Check out exact tagged commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve_release.outputs.commit_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.x
+
+      - name: Stop ordinary workflow reruns before any live setup
+        shell: bash
+        env:
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          if [[ "$RUN_ATTEMPT" -gt 1 ]]; then
+            echo "This is a workflow rerun. Inspect the prior public-safe manifest and use the documented manual recovery process."
+            exit 1
+          fi
+
+      - name: Run serial DEVELOPMENT gate
+        shell: bash
+        env:
+          PATRON_REGISTRATION_LIVE_MANIFEST: ${{ runner.temp }}/patron-registration-live-results.json
+        run: ./test.sh --live-development
+
+      - name: Publish public-safe live manifest
+        if: always()
+        uses: actions/upload-artifact@v4
+        continue-on-error: true
+        with:
+          name: patron-registration-live-results
+          path: ${{ runner.temp }}/patron-registration-live-results.json

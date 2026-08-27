@@ -218,7 +218,7 @@ namespace Clc.PatronRegistration
 
             if (!ValidateRegistration(db, papi))
             {
-                AddHistoryEntry(ip);
+                AddHistoryEntry(db, ip);
                 return new RegistrationAttempt { Status = RegistrationStatus.Error, Errors = ModelErrors };
             }
 
@@ -246,7 +246,7 @@ namespace Clc.PatronRegistration
 
             if (!ValidateRegistration(db, papi))
             {
-                AddHistoryEntry(ip);
+                AddHistoryEntry(db, ip);
                 return new RegistrationAttempt { Status = RegistrationStatus.Error, Errors = ModelErrors };
             }
 
@@ -267,17 +267,17 @@ namespace Clc.PatronRegistration
 
             if (!BypassPapiDupeCheck(registrationParams, papiResponse, papi, out papiResponse))
             {
-                AddHistoryEntry(ip, papiResponse, "duplicate that cannot be bypassed");
+                AddHistoryEntry(db, ip, papiResponse, "duplicate that cannot be bypassed");
                 return new RegistrationAttempt { Status = RegistrationStatus.Duplicate, Message = DuplicateMessage(papi) };
             }
 
             if ((papiResponse?.Data?.PatronID).GetValueOrDefault(0) <= 0)
             {
-                AddHistoryEntry(ip, papiResponse, $"{papiResponse.Data?.PAPIErrorCode} - {papiResponse.Data?.ErrorMessage}");
+                AddHistoryEntry(db, ip, papiResponse, $"{papiResponse.Data?.PAPIErrorCode} - {papiResponse.Data?.ErrorMessage}");
                 return HandlePapiRegistrationCreateError(papiResponse);
             }
 
-            AddHistoryEntry(ip, papiResponse);
+            AddHistoryEntry(db, ip, papiResponse);
             return FinalizeRegistration(ip, papiResponse, db, papi, emailSender);
         }
 
@@ -703,7 +703,7 @@ namespace Clc.PatronRegistration
             return new RegistrationAttempt { Status = RegistrationStatus.Success, Message = GetRegistrationSuccessText(ip) };
         }
 
-        public void AddHistoryEntry(string ip, IRestResponse<PatronRegistrationCreateResult> papiResponse = null!, string status = "")
+        public void AddHistoryEntry(IDbHelper db, string ip, IRestResponse<PatronRegistrationCreateResult> papiResponse = null!, string status = "")
         {
             if (string.IsNullOrWhiteSpace(status))
             {
@@ -724,7 +724,7 @@ namespace Clc.PatronRegistration
 
 
             var entry = new RegistrationHistoryEntry(ip, status, this) { Result = status, SettingsSnapshot = settingsSnapshot, PapiResponse = papiResponseJson };
-            DbHelper.Global.AddRegistrationHistoryEntry(entry);
+            db.AddRegistrationHistoryEntry(entry);
         }
         string GetRegistrationSuccessText(string ip)
         {
