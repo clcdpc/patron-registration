@@ -103,12 +103,13 @@ timeout is the final guard; an interruption during create must be treated as
 potentially ambiguous and investigated before any recovery.
 
 Create state and scenario state are separate. The store records
-`attempting/running` before each create, `created` immediately after a positive
-response, and only then `passed` after downstream assertions. A later failure
-leaves `created/failed`; a safely proven API rejection is `rejected/failed`; an
-uncertain transport result is `unknown/failed`. The store appends transitions
-and atomically replaces the JSON manifest after each transition, so earlier
-attempts survive later failures.
+`attempting/running` before each create, `created` immediately after a confirmed
+positive response, and only then `passed` after downstream assertions. A
+pre-create failure is `not_attempted/failed`; a safely proven API rejection is
+`rejected/failed`; an invoked response that is malformed, partial, or otherwise
+inconclusive is `unknown/failed` and is never retried. A later failure leaves
+`created/failed`. The store appends transitions and atomically replaces the JSON
+manifest after each transition, so earlier attempts survive later failures.
 
 Every live identity is synthetic. The token is a short SHA-256 digest derived
 from tag, resolved commit, scenario, and (only for local runs) an invocation ID;

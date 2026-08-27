@@ -61,13 +61,22 @@ public sealed record LiveCreateOutcome(
     LiveCreateState State,
     int PatronId = 0,
     string Barcode = "",
-    bool FinalizationSucceeded = true)
+    bool FinalizationSucceeded = true,
+    LivePublicResult? CreatedRecord = null)
 {
-    public static LiveCreateOutcome Created(int patronId, string barcode) =>
-        new(LiveCreateState.Created, patronId, barcode);
+    public static LiveCreateOutcome Created(
+        int patronId,
+        string barcode,
+        LivePublicResult? createdRecord = null) =>
+        new(LiveCreateState.Created, patronId, barcode, CreatedRecord: createdRecord);
 
-    public static LiveCreateOutcome CreatedWithFailedFinalization(int patronId, string barcode) =>
-        new(LiveCreateState.Created, patronId, barcode, FinalizationSucceeded: false);
+    public static LiveCreateOutcome CreatedWithFailedFinalization(
+        int patronId,
+        string barcode,
+        LivePublicResult? createdRecord = null) =>
+        new(LiveCreateState.Created, patronId, barcode, FinalizationSucceeded: false, CreatedRecord: createdRecord);
+
+    public static LiveCreateOutcome NotAttempted() => new(LiveCreateState.NotAttempted);
 
     public static LiveCreateOutcome Rejected() => new(LiveCreateState.Rejected);
 
@@ -326,13 +335,23 @@ public static class LiveDevelopmentGateRunner
                 return new LiveGateRunResult(false, store.History);
             }
 
+            if (outcome is null)
+            {
+                store.Transition(attempt, LiveCreateState.Unknown, LiveScenarioState.Failed, "transport-ambiguous");
+                return new LiveGateRunResult(false, store.History);
+            }
+
             if (outcome.State == LiveCreateState.Created)
             {
-                var created = store.Transition(attempt, LiveCreateState.Created, LiveScenarioState.Running);
+                // The forwarding callback may already have persisted this marker before
+                // production finalization returned. Fakes without that callback use the
+                // fallback transition so the runner remains deterministic.
+                var created = outcome.CreatedRecord ??
+                    store.Transition(attempt, LiveCreateState.Created, LiveScenarioState.Running);
                 bool valid;
                 try
                 {
-                    valid = scenario.ValidateCreated(outcome);
+                    valid = outcome.FinalizationSucceeded && scenario.ValidateCreated(outcome);
                 }
                 catch
                 {
@@ -341,7 +360,11 @@ public static class LiveDevelopmentGateRunner
 
                 if (!valid)
                 {
-                    store.Transition(created, LiveCreateState.Created, LiveScenarioState.Failed, "post-create");
+                    store.Transition(
+                        created,
+                        LiveCreateState.Created,
+                        LiveScenarioState.Failed,
+                        outcome.FinalizationSucceeded ? "post-create" : "finalization-failed");
                     return new LiveGateRunResult(false, store.History);
                 }
 
@@ -349,8 +372,19 @@ public static class LiveDevelopmentGateRunner
                 continue;
             }
 
-            var failureClass = outcome.State == LiveCreateState.Rejected ? "rejected" : "transport-ambiguous";
-            store.Transition(attempt, outcome.State, LiveScenarioState.Failed, failureClass);
+            var safeCreateState = outcome.State switch
+            {
+                LiveCreateState.NotAttempted => LiveCreateState.NotAttempted,
+                LiveCreateState.Rejected => LiveCreateState.Rejected,
+                _ => LiveCreateState.Unknown
+            };
+            var failureClass = safeCreateState switch
+            {
+                LiveCreateState.NotAttempted => "not-attempted",
+                LiveCreateState.Rejected => "rejected",
+                _ => "transport-ambiguous"
+            };
+            store.Transition(attempt, safeCreateState, LiveScenarioState.Failed, failureClass);
             return new LiveGateRunResult(false, store.History);
         }
 
@@ -487,9 +521,9 @@ public sealed class LiveDevelopmentRegistrationGateTests
             Assert.Fail("DEVELOPMENT Polaris ApiKeyValidate did not establish a usable target; no patron mutation was attempted.");
         }
 
-        using var harness = LiveSubmissionHarness.Create(configuration, realPapi);
-        var definitions = selectedNames.Select(name => harness.BuildScenario(name, identity)).ToArray();
         using var store = new LiveAttemptStore(configuration.ManifestPath);
+        using var harness = LiveSubmissionHarness.Create(configuration, realPapi, store);
+        var definitions = selectedNames.Select(name => harness.BuildScenario(name, identity)).ToArray();
         var result = LiveDevelopmentGateRunner.Run(definitions, identity, store);
         Assert.IsTrue(result.Succeeded, result.SafeSummary());
     }
@@ -504,8 +538,12 @@ public sealed class LiveDevelopmentRegistrationGateTests
         private readonly Mock<IEmailSender> email;
         private readonly Mock<IPapiClient> forwardingPapi;
         private readonly LiveDevelopmentConfiguration configuration;
+        private readonly LiveAttemptStore attemptStore;
         private PatronRegistrationParams? lastParameters;
         private IRestResponse<PatronRegistrationCreateResult>? lastResponse;
+        private LivePublicResult? currentAttempt;
+        private LivePublicResult? confirmedCreateRecord;
+        private bool createInvoked;
 
         private LiveSubmissionHarness(
             ServiceProvider provider,
@@ -515,7 +553,8 @@ public sealed class LiveDevelopmentRegistrationGateTests
             Mock<IMelissaRestClient> melissa,
             Mock<IEmailSender> email,
             Mock<IPapiClient> forwardingPapi,
-            LiveDevelopmentConfiguration configuration)
+            LiveDevelopmentConfiguration configuration,
+            LiveAttemptStore attemptStore)
         {
             this.provider = provider;
             this.httpContext = httpContext;
@@ -525,11 +564,13 @@ public sealed class LiveDevelopmentRegistrationGateTests
             this.email = email;
             this.forwardingPapi = forwardingPapi;
             this.configuration = configuration;
+            this.attemptStore = attemptStore;
         }
 
         public static LiveSubmissionHarness Create(
             LiveDevelopmentConfiguration configuration,
-            IPapiClient realPapi)
+            IPapiClient realPapi,
+            LiveAttemptStore attemptStore)
         {
             var settings = LiveSettings(configuration).Object;
             var db = new Mock<IDbHelper>();
@@ -578,18 +619,32 @@ public sealed class LiveDevelopmentRegistrationGateTests
                 ControllerContext = new ControllerContext { HttpContext = httpContext }
             };
 
-            var harness = new LiveSubmissionHarness(provider, httpContext, settings, db, melissa, email, forwardingPapi, configuration)
+            var harness = new LiveSubmissionHarness(provider, httpContext, settings, db, melissa, email, forwardingPapi, configuration, attemptStore)
             {
                 Controller = controller
             };
             forwardingPapi.Setup(value => value.PatronRegistrationCreate(It.IsAny<PatronRegistrationParams>()))
                 .Returns((PatronRegistrationParams parameters) =>
                 {
+                    harness.createInvoked = true;
+                    harness.lastParameters = null;
+                    harness.lastResponse = null;
                     var response = realPapi.PatronRegistrationCreate(parameters);
                     // Capture the response immediately; later controller finalization
                     // must never cause another create call.
                     harness.lastParameters = parameters;
-                    return harness.lastResponse = response;
+                    harness.lastResponse = response;
+                    if (harness.HasConfirmedCreateResponse && harness.currentAttempt is not null)
+                    {
+                        // Persist only the public-safe marker before returning to the
+                        // production controller, which may still fail during finalization.
+                        harness.confirmedCreateRecord = harness.attemptStore.Transition(
+                            harness.currentAttempt,
+                            LiveCreateState.Created,
+                            LiveScenarioState.Running);
+                    }
+
+                    return response;
                 });
             return harness;
         }
@@ -602,7 +657,7 @@ public sealed class LiveDevelopmentRegistrationGateTests
             return new LiveScenarioDefinition(
                 name,
                 () => ScenarioPreflight(name, token),
-                marker => Submit(name, marker.SyntheticToken),
+                marker => Submit(name, marker),
                 outcome => outcome.PatronId > 0 && !string.IsNullOrWhiteSpace(outcome.Barcode) &&
                     outcome.FinalizationSucceeded &&
                     lastParameters?.NameLast.StartsWith(token, StringComparison.Ordinal) == true);
@@ -645,12 +700,16 @@ public sealed class LiveDevelopmentRegistrationGateTests
             };
         }
 
-        private LiveCreateOutcome Submit(string scenario, string token)
+        private LiveCreateOutcome Submit(string scenario, LivePublicResult marker)
         {
             // A successful previous scenario must never be reused if this scenario
             // exits before invoking PAPI.
             lastParameters = null;
             lastResponse = null;
+            currentAttempt = null;
+            confirmedCreateRecord = null;
+            createInvoked = false;
+            var token = marker.SyntheticToken;
             var values = BuildFormValues(scenario, token);
             var body = string.Join("&", values.Select(pair =>
                 $"{Uri.EscapeDataString(pair.Key)}={Uri.EscapeDataString(pair.Value)}"));
@@ -691,10 +750,11 @@ public sealed class LiveDevelopmentRegistrationGateTests
                 null).GetAwaiter().GetResult();
             if (!bindingResult.IsModelSet || !Controller.ModelState.IsValid)
             {
-                return LiveCreateOutcome.Rejected();
+                return LiveCreateOutcome.NotAttempted();
             }
 
             var registration = (Registration)bindingResult.Model!;
+            currentAttempt = marker;
             RegistrationAttempt attempt;
             try
             {
@@ -702,42 +762,56 @@ public sealed class LiveDevelopmentRegistrationGateTests
             }
             catch
             {
-                return CreatedOutcome(downstreamSucceeded: false);
+                return OutcomeAfterFinalizationFailure();
             }
 
             if (attempt.Status != RegistrationStatus.Success)
             {
-                if (lastResponse?.Data?.PatronID > 0)
-                {
-                    return CreatedOutcome(downstreamSucceeded: false);
-                }
-
-                return LiveCreateOutcome.Rejected();
+                return OutcomeAfterFinalizationFailure();
             }
 
-            if (lastResponse is null || lastParameters is null)
+            return ClassifyCreateResponse();
+        }
+
+        private bool HasConfirmedCreateResponse =>
+            lastResponse?.Data is not null &&
+            lastResponse.Data.PAPIErrorCode >= 0 &&
+            lastResponse.Data.PatronID > 0 &&
+            !string.IsNullOrWhiteSpace(lastResponse.Data.Barcode);
+
+        private LiveCreateOutcome OutcomeAfterFinalizationFailure() =>
+            HasConfirmedCreateResponse && confirmedCreateRecord is not null
+                ? LiveCreateOutcome.CreatedWithFailedFinalization(
+                    lastResponse!.Data!.PatronID,
+                    lastResponse.Data.Barcode,
+                    confirmedCreateRecord)
+                : ClassifyCreateResponse();
+
+        private LiveCreateOutcome ClassifyCreateResponse()
+        {
+            if (!createInvoked)
+            {
+                return LiveCreateOutcome.NotAttempted();
+            }
+
+            var data = lastResponse?.Data;
+            if (data is null)
             {
                 return LiveCreateOutcome.Unknown();
             }
 
-            var response = lastResponse;
-            if (response?.Data?.PatronID > 0 && !string.IsNullOrWhiteSpace(response.Data.Barcode))
+            var hasPatronId = data.PatronID > 0;
+            var hasBarcode = !string.IsNullOrWhiteSpace(data.Barcode);
+            if (hasPatronId || hasBarcode)
             {
-                return LiveCreateOutcome.Created(response.Data.PatronID, response.Data.Barcode);
-            }
-
-            return response?.Data is not null && response.Data.PAPIErrorCode < 0
-                ? LiveCreateOutcome.Rejected()
-                : LiveCreateOutcome.Unknown();
-
-            LiveCreateOutcome CreatedOutcome(bool downstreamSucceeded)
-            {
-                return lastResponse?.Data?.PatronID > 0 && !string.IsNullOrWhiteSpace(lastResponse.Data.Barcode)
-                    ? (downstreamSucceeded
-                        ? LiveCreateOutcome.Created(lastResponse.Data.PatronID, lastResponse.Data.Barcode)
-                        : LiveCreateOutcome.CreatedWithFailedFinalization(lastResponse.Data.PatronID, lastResponse.Data.Barcode))
+                return HasConfirmedCreateResponse && confirmedCreateRecord is not null
+                    ? LiveCreateOutcome.Created(data.PatronID, data.Barcode, confirmedCreateRecord)
                     : LiveCreateOutcome.Unknown();
             }
+
+            return data.PAPIErrorCode < 0
+                ? LiveCreateOutcome.Rejected()
+                : LiveCreateOutcome.Unknown();
         }
 
         private Dictionary<string, string> BuildFormValues(string scenario, string token) =>
@@ -858,6 +932,42 @@ public sealed class LiveDevelopmentGateSafetyTests
     }
 
     [TestMethod]
+    public void InconclusiveCreateResponse_IsRecordedUnknownAndNeverRetried()
+    {
+        var count = 0;
+        var scenarios = new[]
+        {
+            Definition("standard", () => true, () => { count++; return LiveCreateOutcome.Unknown(); }),
+            Definition("school", () => true, () => { count++; return LiveCreateOutcome.Created(2, "hidden"); })
+        };
+
+        var result = Run(scenarios);
+
+        Assert.IsFalse(result.Succeeded);
+        Assert.AreEqual(1, count);
+        Assert.AreEqual(LiveCreateState.Unknown, result.Results.Last().CreateState);
+        Assert.AreEqual(LiveScenarioState.Failed, result.Results.Last().ScenarioState);
+    }
+
+    [TestMethod]
+    public void PreCreateFailure_IsRecordedNotAttemptedAndNeverRetried()
+    {
+        var count = 0;
+        var scenarios = new[]
+        {
+            Definition("standard", () => true, () => { count++; return LiveCreateOutcome.NotAttempted(); }),
+            Definition("school", () => true, () => { count++; return LiveCreateOutcome.Created(2, "hidden"); })
+        };
+
+        var result = Run(scenarios);
+
+        Assert.IsFalse(result.Succeeded);
+        Assert.AreEqual(1, count);
+        Assert.AreEqual(LiveCreateState.NotAttempted, result.Results.Last().CreateState);
+        Assert.AreEqual(LiveScenarioState.Failed, result.Results.Last().ScenarioState);
+    }
+
+    [TestMethod]
     public void CreatedThenDownstreamFailure_RetainsCreatedStateAndStopsLaterScenarios()
     {
         var count = 0;
@@ -874,6 +984,38 @@ public sealed class LiveDevelopmentGateSafetyTests
         Assert.AreEqual(LiveCreateState.Created, result.Results.Last().CreateState);
         Assert.AreEqual(LiveScenarioState.Failed, result.Results.Last().ScenarioState);
         Assert.AreEqual("post-create", result.Results.Last().FailureClass);
+    }
+
+    [TestMethod]
+    public void ConfirmedCreate_IsPersistedBeforeFinalizationFailure()
+    {
+        using var temporary = new TemporaryManifest();
+        var store = new LiveAttemptStore(temporary.Path);
+        var markerPersistedBeforeCallbackReturned = false;
+        var scenarios = new[]
+        {
+            new LiveScenarioDefinition(
+                "standard",
+                () => true,
+                attempt =>
+                {
+                    var created = store.Transition(attempt, LiveCreateState.Created, LiveScenarioState.Running);
+                    markerPersistedBeforeCallbackReturned =
+                        store.History.Last().CreateState == LiveCreateState.Created &&
+                        File.ReadAllText(temporary.Path).Contains("\"Created\"", StringComparison.Ordinal);
+                    return LiveCreateOutcome.CreatedWithFailedFinalization(1, "private", created);
+                },
+                _ => true)
+        };
+
+        var result = Run(scenarios, store);
+
+        Assert.IsTrue(markerPersistedBeforeCallbackReturned);
+        Assert.IsFalse(result.Succeeded);
+        Assert.AreEqual(LiveCreateState.Created, result.Results.Last().CreateState);
+        Assert.AreEqual(LiveScenarioState.Failed, result.Results.Last().ScenarioState);
+        Assert.AreEqual("finalization-failed", result.Results.Last().FailureClass);
+        store.Dispose();
     }
 
     [TestMethod]

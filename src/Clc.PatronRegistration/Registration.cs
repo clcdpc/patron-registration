@@ -263,7 +263,8 @@ namespace Clc.PatronRegistration
             }
 
             var papiResponse = papi.PatronRegistrationCreate(registrationParams);
-            logger.Trace(papiResponse.Data.ToJson());
+            logger.Trace("Patron registration create returned PAPI error code {0}.",
+                papiResponse?.Data?.PAPIErrorCode);
 
             if (!BypassPapiDupeCheck(registrationParams, papiResponse, papi, out papiResponse))
             {
@@ -664,7 +665,7 @@ namespace Clc.PatronRegistration
 
                     if (_papiResponse.Data?.PAPIErrorCode == -3528)
                     {
-                        logger.Info($"Patron {NameFirst} {NameLast} is a duplicate that cannot be bypassed");
+                        logger.Info("A duplicate patron registration could not be bypassed.");
 
                         return false;
                     }
@@ -684,7 +685,8 @@ namespace Clc.PatronRegistration
                 ZipMismatchRetry = true;
                 return new RegistrationAttempt { Status = RegistrationStatus.ZipMismatchRetry };
             }
-            logger.Error($"Error message: {papiResponse?.Data?.ErrorMessage}\r\nRegistration Data: {JsonConvert.SerializeObject(papiResponse)}");
+            logger.Error("Patron registration create returned PAPI error code {0}.",
+                papiResponse?.Data?.PAPIErrorCode);
 
             return new RegistrationAttempt { Status = RegistrationStatus.Error, Message = $"An error occurred during your registration. If this problem persists, please contact the library.\r\n\r\nError Code: {papiResponse?.Data?.PAPIErrorCode}\r\nError Message:{papiResponse?.Data?.ErrorMessage}" };
         }
@@ -847,7 +849,8 @@ namespace Clc.PatronRegistration
             var response = papi.RecordSetContentAdd(recordSetId, patronId);
             if (response.Data.PAPIErrorCode < 0)
             {
-                logger.Error($"Error adding patron {patronId} to record set {recordSetId}: {response.Data.PAPIErrorCode} - {response.Data.ErrorMessage}");
+                logger.Error("A post-registration record-set update returned PAPI error code {0}.",
+                    response.Data.PAPIErrorCode);
             }
         }
 
