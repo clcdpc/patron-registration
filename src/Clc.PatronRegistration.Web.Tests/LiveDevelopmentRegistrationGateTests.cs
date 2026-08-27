@@ -528,12 +528,99 @@ public sealed class LiveDevelopmentRegistrationGateTests
         Assert.IsTrue(result.Succeeded, result.SafeSummary());
     }
 
+    [TestMethod]
+    public void LiveHarness_ConfirmedCreateIsPersistedBeforeDownstreamFailure()
+    {
+        var manifestPath = System.IO.Path.Combine(
+            System.IO.Path.GetTempPath(), $"patron-registration-live-{Guid.NewGuid():N}.json");
+        try
+        {
+            var configuration = new LiveDevelopmentConfiguration(
+                "https://polaris-development.clcohio.org",
+                "synthetic-access-id",
+                "synthetic-access-key",
+                OrganizationId: 1,
+                LibraryId: 2,
+                BranchId: 3,
+                PatronCodeId: 4,
+                LogonUserId: 5,
+                EcardPatronCodeId: 6,
+                StudentPatronCodeId: 7,
+                TeacherPatronCodeId: 8,
+                School: "Synthetic School",
+                ManifestPath: manifestPath);
+            var realPapi = new Mock<IPapiClient>();
+            const int patronId = 913579;
+            const string barcode = "SYNTHETIC-BARCODE-913579";
+            realPapi.Setup(value => value.PatronRegistrationCreate(It.IsAny<PatronRegistrationParams>()))
+                .Returns(new RestResponse<PatronRegistrationCreateResult>
+                {
+                    Data = new PatronRegistrationCreateResult
+                    {
+                        PAPIErrorCode = 0,
+                        PatronID = patronId,
+                        Barcode = barcode
+                    }
+                });
+
+            using var store = new LiveAttemptStore(manifestPath);
+            using var harness = LiveSubmissionHarness.Create(configuration, realPapi.Object, store);
+            var observedCreatedBeforeFailure = false;
+            harness.db.Setup(value => value.AddRegistrationHistoryEntry(It.IsAny<RegistrationHistoryEntry>()))
+                .Callback<RegistrationHistoryEntry>(_ =>
+                {
+                    var latest = store.History.Last();
+                    var manifest = File.ReadAllText(manifestPath);
+                    observedCreatedBeforeFailure =
+                        latest.CreateState == LiveCreateState.Created &&
+                        latest.ScenarioState == LiveScenarioState.Running &&
+                        manifest.Contains("\"CreateState\": \"Created\"", StringComparison.Ordinal) &&
+                        manifest.Contains("\"ScenarioState\": \"Running\"", StringComparison.Ordinal);
+                    throw new InvalidOperationException("synthetic downstream failure");
+                })
+                .Returns(false);
+
+            var identity = new LiveIdentity("v1.2.3", new string('a', 40), "run", 1, "invocation");
+            var scenario = harness.BuildScenario("standard", identity);
+            var result = LiveDevelopmentGateRunner.Run([scenario], identity, store);
+            var final = result.Results.Last();
+            var manifestAfterFailure = File.ReadAllText(manifestPath);
+
+            Assert.IsTrue(observedCreatedBeforeFailure);
+            Assert.IsFalse(result.Succeeded);
+            Assert.AreEqual(LiveCreateState.Created, final.CreateState);
+            Assert.AreEqual(LiveScenarioState.Failed, final.ScenarioState);
+            Assert.AreEqual("finalization-failed", final.FailureClass);
+            Assert.IsTrue(store.History.Any(value =>
+                value.CreateState == LiveCreateState.Created &&
+                value.ScenarioState == LiveScenarioState.Running));
+            StringAssert.Contains(manifestAfterFailure, "\"CreateState\": \"Created\"");
+            StringAssert.Contains(manifestAfterFailure, "\"ScenarioState\": \"Failed\"");
+            Assert.IsFalse(manifestAfterFailure.Contains(patronId.ToString(), StringComparison.Ordinal));
+            Assert.IsFalse(manifestAfterFailure.Contains(barcode, StringComparison.Ordinal));
+            realPapi.Verify(value => value.PatronRegistrationCreate(It.IsAny<PatronRegistrationParams>()), Times.Once);
+        }
+        finally
+        {
+            if (File.Exists(manifestPath))
+            {
+                File.Delete(manifestPath);
+            }
+
+            var temporaryPath = manifestPath + ".tmp";
+            if (File.Exists(temporaryPath))
+            {
+                File.Delete(temporaryPath);
+            }
+        }
+    }
+
     private sealed class LiveSubmissionHarness : IDisposable
     {
         private readonly ServiceProvider provider;
         private readonly DefaultHttpContext httpContext;
         private readonly ISettingProvider settings;
-        private readonly Mock<IDbHelper> db;
+        internal readonly Mock<IDbHelper> db;
         private readonly Mock<IMelissaRestClient> melissa;
         private readonly Mock<IEmailSender> email;
         private readonly Mock<IPapiClient> forwardingPapi;
@@ -984,38 +1071,6 @@ public sealed class LiveDevelopmentGateSafetyTests
         Assert.AreEqual(LiveCreateState.Created, result.Results.Last().CreateState);
         Assert.AreEqual(LiveScenarioState.Failed, result.Results.Last().ScenarioState);
         Assert.AreEqual("post-create", result.Results.Last().FailureClass);
-    }
-
-    [TestMethod]
-    public void ConfirmedCreate_IsPersistedBeforeFinalizationFailure()
-    {
-        using var temporary = new TemporaryManifest();
-        var store = new LiveAttemptStore(temporary.Path);
-        var markerPersistedBeforeCallbackReturned = false;
-        var scenarios = new[]
-        {
-            new LiveScenarioDefinition(
-                "standard",
-                () => true,
-                attempt =>
-                {
-                    var created = store.Transition(attempt, LiveCreateState.Created, LiveScenarioState.Running);
-                    markerPersistedBeforeCallbackReturned =
-                        store.History.Last().CreateState == LiveCreateState.Created &&
-                        File.ReadAllText(temporary.Path).Contains("\"Created\"", StringComparison.Ordinal);
-                    return LiveCreateOutcome.CreatedWithFailedFinalization(1, "private", created);
-                },
-                _ => true)
-        };
-
-        var result = Run(scenarios, store);
-
-        Assert.IsTrue(markerPersistedBeforeCallbackReturned);
-        Assert.IsFalse(result.Succeeded);
-        Assert.AreEqual(LiveCreateState.Created, result.Results.Last().CreateState);
-        Assert.AreEqual(LiveScenarioState.Failed, result.Results.Last().ScenarioState);
-        Assert.AreEqual("finalization-failed", result.Results.Last().FailureClass);
-        store.Dispose();
     }
 
     [TestMethod]
