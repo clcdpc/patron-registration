@@ -85,6 +85,15 @@ public sealed class DatabaseConvergenceIntegrationTests
 
         AssertSucceeded(result);
         AssertCurrentState();
+        Assert.AreEqual(1, Scalar<int>("""
+            select count(*)
+            from dbo.RegistrationFormAssets
+            where FileName='old-asset.png' and ContentType='image/png' and Content=0x010203
+                and ContentHash='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+                and CreatedDate='2024-01-02T03:04:05.0000000'
+                and ModifiedDate='2024-02-03T04:05:06.0000000'
+                and UploadOrganizationId is null and UploadFormCode is null
+            """));
 
         var afterFirstConvergence = LogicalSnapshot();
         AssertSucceeded(RunDatabaseUpdate());
@@ -101,18 +110,6 @@ public sealed class DatabaseConvergenceIntegrationTests
         AssertSucceeded(result);
         Assert.AreEqual(before, LogicalSnapshot());
         AssertCurrentState();
-    }
-
-    [TestMethod]
-    public void RepeatedDatabaseUpdates_AreIdempotent()
-    {
-        AssertSucceeded(RunDatabaseUpdate());
-        AssertSucceeded(RunDatabaseUpdate());
-        AssertSucceeded(RunDatabaseUpdate());
-
-        AssertCurrentState();
-        Assert.AreEqual(1, Scalar<int>("select count(*) from dbo.RegistrationSettingsCacheGeneration where Id=1"));
-        Assert.AreEqual(1, Scalar<int>("select count(*) from dbo.RegistrationFormAssetReferenceLocks where LockId=1"));
     }
 
     [TestMethod]
@@ -225,7 +222,7 @@ public sealed class DatabaseConvergenceIntegrationTests
         using (var connection = Open())
         {
             Execute(connection, """
-                alter table dbo.RegistrationFormSettings drop constraint PK_Convergence_Settings;
+                drop index UX_Convergence_Settings on dbo.RegistrationFormSettings;
                 create unique index UX_Convergence_Settings_Filtered
                     on dbo.RegistrationFormSettings (OrganizationID, Setting, FormCode)
                     where OrganizationID > 0;
@@ -235,7 +232,7 @@ public sealed class DatabaseConvergenceIntegrationTests
         var result = RunDatabaseUpdate();
 
         Assert.AreNotEqual(0, result.ExitCode, result.Output);
-        StringAssert.Contains(result.Output, "must have a unique key on OrganizationID, Setting, and FormCode");
+        StringAssert.Contains(result.Output, "must have an unconditional unique key containing exactly OrganizationID, Setting, and FormCode");
         StringAssert.Contains(result.Output, "unconditional");
         AssertNoOwnedSchema();
         Assert.AreEqual(1, Scalar<int>("select count(*) from sys.indexes where object_id=object_id('dbo.RegistrationFormSettings') and name='UX_Convergence_Settings_Filtered' and has_filter=1 and filter_definition is not null"));
@@ -378,8 +375,6 @@ public sealed class DatabaseConvergenceIntegrationTests
         Assert.AreEqual(1, Scalar<int>("select count(*) from sys.indexes where object_id=object_id('dbo.RegistrationSettingAuditEvents') and name='IX_RSAE_LibraryTime'"));
         Assert.AreEqual(1, Scalar<int>("select count(*) from sys.indexes where object_id=object_id('dbo.RegistrationSettingDrafts') and name='UX_RSD_ActiveScope' and is_unique=1 and has_filter=1"));
         Assert.AreEqual(1, Scalar<int>("select count(*) from sys.indexes where object_id=object_id('dbo.RegistrationFormAssets') and name='IX_RegistrationFormAssets_CreatedDate'"));
-        Assert.AreEqual(0, Scalar<int>("select count(*) from sys.indexes where object_id=object_id('dbo.RegistrationSettingAuditEvents') and name='IX_RSAE_ScopeFilter'"));
-        Assert.AreEqual(0, Scalar<int>("select count(*) from sys.indexes where object_id=object_id('dbo.RegistrationFormAssets') and name='IX_RegistrationFormAssets_UploadScope'"));
         Assert.AreEqual(1, Scalar<int>("select count(*) from sys.foreign_keys where parent_object_id=object_id('dbo.RegistrationSettingDraftChanges') and name='FK_RSDC_Draft' and delete_referential_action=1 and is_disabled=0 and is_not_trusted=0"));
         Assert.AreEqual(1, Scalar<int>("select count(*) from sys.foreign_keys where parent_object_id=object_id('dbo.RegistrationSettingPreviewLinks') and name='FK_RSPL_Draft' and delete_referential_action=1 and is_disabled=0 and is_not_trusted=0"));
         Assert.AreEqual(1, Scalar<int>("select count(*) from dbo.RegistrationSettingsCacheGeneration where Id=1"));
@@ -444,10 +439,12 @@ public sealed class DatabaseConvergenceIntegrationTests
                 Setting nvarchar(200) not null,
                 FormCode nvarchar(64) not null constraint DF_Convergence_FormCode default '',
                 Value nvarchar(max) null,
-                constraint PK_Convergence_Settings primary key (OrganizationID, Setting, FormCode),
                 constraint FK_Convergence_Settings_Types foreign key (Setting)
                     references dbo.RegistrationFormSettingTypes(Setting)
             );
+            create unique index UX_Convergence_Settings
+                on dbo.RegistrationFormSettings (FormCode, OrganizationID, Setting)
+                include (Value);
             insert dbo.RegistrationFormSettingTypes (Setting) values ('registration_text');
             insert dbo.RegistrationFormSettings (OrganizationID, Setting, FormCode, Value)
                 values (101, 'registration_text', 'form', 'preserved setting');

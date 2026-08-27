@@ -58,45 +58,34 @@ if not exists
 (
 	select 1
 	from sys.indexes unique_index
-	inner join sys.index_columns organization_key
-		on organization_key.object_id = unique_index.object_id
-		and organization_key.index_id = unique_index.index_id
-		and organization_key.key_ordinal = 1
-	inner join sys.columns organization_column
-		on organization_column.object_id = organization_key.object_id
-		and organization_column.column_id = organization_key.column_id
-	inner join sys.index_columns setting_key
-		on setting_key.object_id = unique_index.object_id
-		and setting_key.index_id = unique_index.index_id
-		and setting_key.key_ordinal = 2
-	inner join sys.columns setting_column
-		on setting_column.object_id = setting_key.object_id
-		and setting_column.column_id = setting_key.column_id
-	inner join sys.index_columns form_key
-		on form_key.object_id = unique_index.object_id
-		and form_key.index_id = unique_index.index_id
-		and form_key.key_ordinal = 3
-	inner join sys.columns form_column
-		on form_column.object_id = form_key.object_id
-		and form_column.column_id = form_key.column_id
 	where unique_index.object_id = object_id('dbo.RegistrationFormSettings')
 		and unique_index.is_unique = 1
 		and unique_index.is_disabled = 0
 		and unique_index.is_hypothetical = 0
 		and unique_index.has_filter = 0
 		and unique_index.filter_definition is null
-		and organization_column.name = 'OrganizationID'
-		and setting_column.name = 'Setting'
-		and form_column.name = 'FormCode'
-		and not exists
+		and 3 =
 		(
-			select 1 from sys.index_columns extra_key
-			where extra_key.object_id = unique_index.object_id
-				and extra_key.index_id = unique_index.index_id
-				and extra_key.key_ordinal > 3
+			select count(*)
+			from sys.index_columns key_column
+			inner join sys.columns column_object
+				on column_object.object_id = key_column.object_id
+				and column_object.column_id = key_column.column_id
+			where key_column.object_id = unique_index.object_id
+				and key_column.index_id = unique_index.index_id
+				and key_column.key_ordinal > 0
+				and column_object.name in ('OrganizationID', 'Setting', 'FormCode')
+		)
+		and 3 =
+		(
+			select count(*)
+			from sys.index_columns key_column
+			where key_column.object_id = unique_index.object_id
+				and key_column.index_id = unique_index.index_id
+				and key_column.key_ordinal > 0
 		)
 )
-	raiserror('Shared prerequisite dbo.RegistrationFormSettings must have a unique key on OrganizationID, Setting, and FormCode with unconditional uniqueness (not filtered) and no additional key columns.', 16, 1)
+	raiserror('Shared prerequisite dbo.RegistrationFormSettings must have an unconditional unique key containing exactly OrganizationID, Setting, and FormCode.', 16, 1)
 
 if not exists
 (

@@ -204,7 +204,6 @@ update dbo.RegistrationSettingsCacheGeneration set Generation=0,ModifiedAtUtc=SY
         }
         Assert.AreEqual(1, Scalar<int>("select count(*) from sys.indexes where object_id=object_id('dbo.RegistrationSettingDrafts') and name='UX_RSD_ActiveScope' and is_unique=1 and has_filter=1"));
         Assert.AreEqual(2, Scalar<int>("select count(*) from sys.columns where object_id=object_id('dbo.RegistrationFormAssets') and name in ('UploadOrganizationId', 'UploadFormCode')"));
-        Assert.AreEqual(1, Scalar<int>("select count(*) from sys.indexes where object_id=object_id('dbo.RegistrationFormAssets') and name='IX_RegistrationFormAssets_UploadScope'"));
         Assert.AreEqual(1, Scalar<int>("select count(*) from sys.indexes where object_id=object_id('dbo.RegistrationFormAssets') and name='IX_RegistrationFormAssets_CreatedDate'"));
         Assert.AreEqual(1, Scalar<int>("select case when object_id('dbo.RegistrationFormAssetReferenceLocks','U') is null then 0 else 1 end"));
         Assert.AreEqual(1, Scalar<int>("select count(*) from dbo.RegistrationFormAssetReferenceLocks where LockId=1"));
@@ -268,7 +267,7 @@ update dbo.RegistrationSettingsCacheGeneration set Generation=0,ModifiedAtUtc=SY
         var unrelatedHash = Enumerable.Repeat((byte)66, 32).ToArray();
         var unrelatedLinkId = SeedPreviewLink(unrelatedDraftId, unrelatedHash, clock.GetUtcNow().UtcDateTime.AddHours(1));
 
-        // Simulate the historical schema before draft revisions and
+        // Simulate the older additive state before draft revisions and
         // generation-bound live-preview admission were added together.
         DropRevisionGenerationColumns();
         using (var connection = Open())

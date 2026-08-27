@@ -122,3 +122,21 @@ create table dbo.RegistrationSettingsCacheGeneration
 
 insert dbo.RegistrationSettingsCacheGeneration (Id, Generation, ModifiedAtUtc)
 values (1, 0, sysutcdatetime());
+
+create table dbo.RegistrationFormAssets
+(
+    AssetId int identity(1,1) not null constraint PK_RegistrationFormAssets primary key,
+    FileName nvarchar(255) not null,
+    ContentType varchar(100) not null,
+    Content varbinary(max) not null,
+    ContentHash varchar(64) not null,
+    CreatedDate datetime2(7) not null constraint DF_RegistrationFormAssets_CreatedDate default sysutcdatetime(),
+    ModifiedDate datetime2(7) not null constraint DF_RegistrationFormAssets_ModifiedDate default sysutcdatetime()
+);
+
+insert dbo.RegistrationFormAssets
+    (FileName, ContentType, Content, ContentHash, CreatedDate, ModifiedDate)
+values
+    ('old-asset.png', 'image/png', 0x010203,
+     'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+     '2024-01-02T03:04:05.0000000', '2024-02-03T04:05:06.0000000');
