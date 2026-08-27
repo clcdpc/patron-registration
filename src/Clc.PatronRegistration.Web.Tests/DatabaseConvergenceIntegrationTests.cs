@@ -443,8 +443,7 @@ public sealed class DatabaseConvergenceIntegrationTests
                     references dbo.RegistrationFormSettingTypes(Setting)
             );
             create unique index UX_Convergence_Settings
-                on dbo.RegistrationFormSettings (FormCode, OrganizationID, Setting)
-                include (Value);
+                on dbo.RegistrationFormSettings (FormCode, OrganizationID, Setting);
             insert dbo.RegistrationFormSettingTypes (Setting) values ('registration_text');
             insert dbo.RegistrationFormSettings (OrganizationID, Setting, FormCode, Value)
                 values (101, 'registration_text', 'form', 'preserved setting');
