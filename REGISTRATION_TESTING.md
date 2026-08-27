@@ -147,7 +147,8 @@ and is terminal validation (there is no deployment workflow here). It:
    ancestor, but deliberately does not require it to equal the current master
    tip; and
 5. passes that exact commit to deterministic CI and then, after it succeeds,
-   the serialized live DEVELOPMENT job.
+   the serialized live DEVELOPMENT job, which re-fetches and rechecks the named
+   tag immediately before live mutation.
 
 The live job passes the resolved commit separately as
 `PATRON_REGISTRATION_LIVE_COMMIT_SHA`; this keeps live breadcrumbs and synthetic
