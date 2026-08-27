@@ -187,7 +187,7 @@ public sealed class DatabaseConvergenceIntegrationTests
     }
 
     [TestMethod]
-    public void MissingSharedPrerequisite_FailsWithSpecificErrorAndNoOwnedSchema()
+    public void MissingApplicationSettingsTable_FailsWithSpecificErrorBeforeAdministrationSchemaCreation()
     {
         using (var connection = Open())
         {
@@ -197,12 +197,12 @@ public sealed class DatabaseConvergenceIntegrationTests
         var result = RunDatabaseUpdate();
 
         Assert.AreNotEqual(0, result.ExitCode, result.Output);
-        StringAssert.Contains(result.Output, "dbo.RegistrationFormSettings must exist");
+        StringAssert.Contains(result.Output, "Required application table dbo.RegistrationFormSettings is missing");
         Assert.AreEqual(0, Scalar<int>("select count(*) from sys.tables where name='RegistrationFormCodeMetadata' and schema_id=schema_id('dbo')"));
     }
 
     [TestMethod]
-    public void IncompatibleSharedPrerequisite_FailsWithSpecificErrorAndNoOwnedSchema()
+    public void OwnedSettingsValueDefinition_ConvergesToCurrentState()
     {
         using (var connection = Open())
         {
@@ -211,13 +211,13 @@ public sealed class DatabaseConvergenceIntegrationTests
 
         var result = RunDatabaseUpdate();
 
-        Assert.AreNotEqual(0, result.ExitCode, result.Output);
-        StringAssert.Contains(result.Output, "has an incompatible OrganizationID, Setting, FormCode, or Value definition");
-        Assert.AreEqual(0, Scalar<int>("select count(*) from sys.tables where name='RegistrationFormCodeMetadata' and schema_id=schema_id('dbo')"));
+        AssertSucceeded(result);
+        AssertCurrentState();
+        Assert.AreEqual("preserved setting", ReadSetting(101, "form", "registration_text"));
     }
 
     [TestMethod]
-    public void FilteredSharedSettingsKey_FailsBeforeOwnedSchemaCreation()
+    public void FilteredSettingsKey_FailsBeforeAdministrationSchemaCreation()
     {
         using (var connection = Open())
         {
@@ -232,8 +232,8 @@ public sealed class DatabaseConvergenceIntegrationTests
         var result = RunDatabaseUpdate();
 
         Assert.AreNotEqual(0, result.ExitCode, result.Output);
-        StringAssert.Contains(result.Output, "must have an unconditional unique key containing exactly OrganizationID, Setting, and FormCode");
-        StringAssert.Contains(result.Output, "unconditional");
+        StringAssert.Contains(result.Output, "requires an enabled, unfiltered unique key containing exactly OrganizationID, Setting, and FormCode");
+        StringAssert.Contains(result.Output, "unfiltered");
         AssertNoOwnedSchema();
         Assert.AreEqual(1, Scalar<int>("select count(*) from sys.indexes where object_id=object_id('dbo.RegistrationFormSettings') and name='UX_Convergence_Settings_Filtered' and has_filter=1 and filter_definition is not null"));
     }
@@ -367,6 +367,7 @@ public sealed class DatabaseConvergenceIntegrationTests
             Assert.AreEqual(1, Scalar<int>($"select case when object_id('dbo.{table}','U') is null then 0 else 1 end"), table);
         }
 
+        Assert.AreEqual(1, Scalar<int>("select count(*) from sys.columns where object_id=object_id('dbo.RegistrationFormSettings') and name='Value' and system_type_id=231 and max_length=-1 and is_nullable=0"));
         Assert.AreEqual(1, Scalar<int>("select count(*) from sys.columns where object_id=object_id('dbo.RegistrationSettingDrafts') and name='Revision' and is_nullable=0"));
         Assert.AreEqual(1, Scalar<int>("select count(*) from sys.columns where object_id=object_id('dbo.RegistrationSettingPreviewLinks') and name='OperationalBranchId' and is_nullable=0"));
         Assert.AreEqual(1, Scalar<int>("select count(*) from sys.columns where object_id=object_id('dbo.RegistrationSettingPreviewLinks') and name='LiveSettingsGeneration' and is_nullable=1"));
