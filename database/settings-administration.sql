@@ -21,7 +21,7 @@ if object_id('dbo.RegistrationFormSettingTypes', 'U') is null
 	raiserror('Required shared prerequisite table dbo.RegistrationFormSettingTypes is missing. Restore or create the shared registration setting-type table before rerunning deployment.', 16, 1)
 
 if object_id('dbo.RegistrationFormSettings', 'U') is null
-	raiserror('Required shared prerequisite table dbo.RegistrationFormSettings is missing. Restore or create the shared registration settings table before rerunning deployment.', 16, 1)
+	raiserror('Required application table dbo.RegistrationFormSettings is missing. Restore the patron-registration settings table before rerunning deployment.', 16, 1)
 
 declare @shared_column_requirements table
 (
@@ -47,8 +47,7 @@ values
 	(N'dbo.RegistrationFormSettingTypes', N'Setting', N'nvarchar(200) NOT NULL', 231, 400, 0),
 	(N'dbo.RegistrationFormSettings', N'OrganizationID', N'int NOT NULL', 56, 4, 0),
 	(N'dbo.RegistrationFormSettings', N'Setting', N'nvarchar(200) NOT NULL', 231, 400, 0),
-	(N'dbo.RegistrationFormSettings', N'FormCode', N'nvarchar(64) NOT NULL', 231, 128, 0),
-	(N'dbo.RegistrationFormSettings', N'Value', N'nvarchar(max) NULL', 231, -1, 1)
+	(N'dbo.RegistrationFormSettings', N'FormCode', N'nvarchar(64) NOT NULL', 231, 128, 0)
 
 declare @shared_object sysname
 declare @shared_column sysname
@@ -69,7 +68,10 @@ where not exists
 order by requirement.ObjectName, requirement.ColumnName
 
 if @shared_column is not null
-	raiserror('Required shared prerequisite column %s.%s is missing. Expected %s. Correct the shared registration schema before rerunning deployment.', 16, 1, @shared_object, @shared_column, @expected_shared_definition)
+	raiserror('Required database column %s.%s is missing. Expected %s. Correct the registration schema before rerunning deployment.', 16, 1, @shared_object, @shared_column, @expected_shared_definition)
+
+if col_length('dbo.RegistrationFormSettings', 'Value') is null
+	raiserror('Required application column dbo.RegistrationFormSettings.Value is missing. Expected nvarchar(max) NOT NULL. Restore the column before rerunning deployment.', 16, 1)
 
 declare @actual_shared_definition nvarchar(100)
 
@@ -97,7 +99,32 @@ where actual_column.system_type_id <> requirement.ExpectedSystemTypeId
 order by requirement.ObjectName, requirement.ColumnName
 
 if @actual_shared_definition is not null
-	raiserror('Shared prerequisite column %s.%s has an incompatible definition. Expected %s; found %s. Correct the shared registration schema before rerunning deployment.', 16, 1, @shared_object, @shared_column, @expected_shared_definition, @actual_shared_definition)
+	raiserror('Database column %s.%s has an incompatible definition. Expected %s; found %s. Correct the registration schema before rerunning deployment.', 16, 1, @shared_object, @shared_column, @expected_shared_definition, @actual_shared_definition)
+
+declare @registration_settings_value_definition nvarchar(100)
+select @registration_settings_value_definition = concat
+(
+	type_name(actual_column.system_type_id),
+	case
+		when actual_column.system_type_id in (231, 239) then concat('(', case when actual_column.max_length = -1 then 'max' else convert(varchar(10), actual_column.max_length / 2) end, ')')
+		when actual_column.system_type_id in (165, 167, 173, 175) then concat('(', case when actual_column.max_length = -1 then 'max' else convert(varchar(10), actual_column.max_length) end, ')')
+		else ''
+	end,
+	case when actual_column.is_nullable = 1 then ' NULL' else ' NOT NULL' end
+)
+from sys.columns actual_column
+where actual_column.object_id = object_id('dbo.RegistrationFormSettings')
+	and actual_column.name = 'Value'
+
+if exists
+(
+	select 1
+	from sys.columns
+	where object_id = object_id('dbo.RegistrationFormSettings')
+		and name = 'Value'
+		and system_type_id <> 231
+)
+	raiserror('Application column dbo.RegistrationFormSettings.Value must use the nvarchar data type so it can be converged to nvarchar(max) NOT NULL. Found %s.', 16, 1, @registration_settings_value_definition)
 
 if not exists
 (
@@ -130,7 +157,7 @@ if not exists
 				and key_column.key_ordinal > 0
 		)
 )
-	raiserror('Shared prerequisite dbo.RegistrationFormSettings requires an enabled, unfiltered unique key containing exactly OrganizationID, Setting, and FormCode; column order may vary. No qualifying key was found. Restore that uniqueness guarantee before rerunning deployment.', 16, 1)
+	raiserror('dbo.RegistrationFormSettings requires an enabled, unfiltered unique key containing exactly OrganizationID, Setting, and FormCode; column order may vary. No qualifying key was found. Restore that uniqueness guarantee before rerunning deployment.', 16, 1)
 
 declare @setting_fk_name sysname
 declare @setting_fk_disabled int
@@ -149,10 +176,10 @@ where fk.parent_object_id = object_id('dbo.RegistrationFormSettings')
 order by case when fk.is_disabled = 0 and fk.is_not_trusted = 0 then 0 else 1 end, fk.name
 
 if @setting_fk_name is null
-	raiserror('Shared prerequisite dbo.RegistrationFormSettings.Setting must reference dbo.RegistrationFormSettingTypes.Setting through a foreign key. No matching foreign key was found. Restore the relationship before rerunning deployment.', 16, 1)
+	raiserror('dbo.RegistrationFormSettings.Setting must reference dbo.RegistrationFormSettingTypes.Setting through a foreign key. No matching foreign key was found. Restore the relationship before rerunning deployment.', 16, 1)
 
 if @setting_fk_disabled = 1 or @setting_fk_untrusted = 1
-	raiserror('Shared prerequisite foreign key %s connects dbo.RegistrationFormSettings.Setting to dbo.RegistrationFormSettingTypes.Setting but is not usable: is_disabled=%d, is_not_trusted=%d. Enable and trust the constraint after correcting any invalid data, then rerun deployment.', 16, 1, @setting_fk_name, @setting_fk_disabled, @setting_fk_untrusted)
+	raiserror('Foreign key %s connects dbo.RegistrationFormSettings.Setting to dbo.RegistrationFormSettingTypes.Setting but is not usable: is_disabled=%d, is_not_trusted=%d. Enable and trust the constraint after correcting any invalid data, then rerun deployment.', 16, 1, @setting_fk_name, @setting_fk_disabled, @setting_fk_untrusted)
 
 	/* 2. Deployment lock and transaction */
 	set @deployment_phase = N'acquiring the database convergence lock'
@@ -377,6 +404,43 @@ if @setting_fk_disabled = 1 or @setting_fk_untrusted = 1
 
 	/* 4. Additive and widening upgrades required by the current application */
 	set @deployment_phase = N'applying additive and widening schema upgrades'
+
+	if exists
+	(
+		select 1
+		from sys.columns
+		where object_id = object_id('dbo.RegistrationFormSettings')
+			and name = 'Value'
+			and (max_length <> -1 or is_nullable <> 0)
+	)
+	begin
+		declare @null_setting_value_count int =
+		(
+			select count(*)
+			from dbo.RegistrationFormSettings
+			where Value is null
+		)
+
+		if @null_setting_value_count > 0
+		begin
+			declare @null_setting_value_detail nvarchar(1000)
+			select top (1) @null_setting_value_detail = concat
+			(
+				'OrganizationID=', OrganizationID,
+				', FormCode="', FormCode,
+				'", Setting="', Setting, '"'
+			)
+			from dbo.RegistrationFormSettings
+			where Value is null
+			order by OrganizationID, FormCode, Setting
+
+			raiserror('Cannot converge dbo.RegistrationFormSettings.Value to nvarchar(max) NOT NULL because %d row(s) currently contain NULL. First offending row: %s. Decide whether those rows should be removed or assigned an explicit value, correct the data, and rerun deployment.', 16, 1, @null_setting_value_count, @null_setting_value_detail)
+		end
+
+		alter table dbo.RegistrationFormSettings
+			alter column Value nvarchar(max) not null
+	end
+
 	if col_length('dbo.RegistrationSettingPreviewLinks', 'OperationalBranchId') is null
 	begin
 		update dbo.RegistrationSettingPreviewLinks
@@ -836,6 +900,19 @@ if @setting_fk_disabled = 1 or @setting_fk_untrusted = 1
 
 	/* 6. Focused final application invariants */
 	set @deployment_phase = N'validating final application invariants'
+
+	if not exists
+	(
+		select 1
+		from sys.columns
+		where object_id = object_id('dbo.RegistrationFormSettings')
+			and name = 'Value'
+			and system_type_id = 231
+			and max_length = -1
+			and is_nullable = 0
+	)
+		raiserror('dbo.RegistrationFormSettings.Value must be nvarchar(max) NOT NULL after deployment.', 16, 1)
+
 	declare @cache_generation_row_count int = (select count(*) from dbo.RegistrationSettingsCacheGeneration)
 	if @cache_generation_row_count <> 1
 	begin
