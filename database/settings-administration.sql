@@ -10,49 +10,94 @@ set xact_abort on
 set quoted_identifier on
 
 declare @deployment_transaction_started bit = 0
+declare @deployment_phase nvarchar(200) = N'prerequisite validation'
 
 begin try
 /* 1. Prerequisite validation */
 if @@trancount <> 0
-	raiserror('settings-administration.sql must be executed without an existing transaction.', 16, 1)
+	raiserror('settings-administration.sql must be executed without an existing transaction. Commit or roll back the caller transaction before rerunning deployment.', 16, 1)
 
 if object_id('dbo.RegistrationFormSettingTypes', 'U') is null
-	raiserror('dbo.RegistrationFormSettingTypes must exist before settings administration is installed.', 16, 1)
+	raiserror('Required shared prerequisite table dbo.RegistrationFormSettingTypes is missing. Restore or create the shared registration setting-type table before rerunning deployment.', 16, 1)
 
 if object_id('dbo.RegistrationFormSettings', 'U') is null
-	raiserror('dbo.RegistrationFormSettings must exist before settings administration is installed.', 16, 1)
+	raiserror('Required shared prerequisite table dbo.RegistrationFormSettings is missing. Restore or create the shared registration settings table before rerunning deployment.', 16, 1)
 
-if col_length('dbo.RegistrationFormSettingTypes', 'Setting') is null
-	raiserror('dbo.RegistrationFormSettingTypes.Setting must exist before settings administration is installed.', 16, 1)
-
-if col_length('dbo.RegistrationFormSettings', 'OrganizationID') is null
-	or col_length('dbo.RegistrationFormSettings', 'Setting') is null
-	or col_length('dbo.RegistrationFormSettings', 'FormCode') is null
-	or col_length('dbo.RegistrationFormSettings', 'Value') is null
-	raiserror('dbo.RegistrationFormSettings must contain OrganizationID, Setting, FormCode, and Value.', 16, 1)
-
-if exists
+declare @shared_column_requirements table
 (
-	select 1 from sys.columns
-	where object_id = object_id('dbo.RegistrationFormSettingTypes')
-		and name = 'Setting'
-		and (system_type_id <> 231 or max_length <> 400 or is_nullable <> 0)
+	ObjectName sysname not null,
+	ColumnName sysname not null,
+	ExpectedDefinition nvarchar(100) not null,
+	ExpectedSystemTypeId tinyint not null,
+	ExpectedMaxLength smallint not null,
+	ExpectedNullable bit not null,
+	primary key (ObjectName, ColumnName)
 )
-	raiserror('Shared prerequisite dbo.RegistrationFormSettingTypes.Setting must be nvarchar(200) NOT NULL.', 16, 1)
 
-if exists
+insert into @shared_column_requirements
 (
-	select 1 from sys.columns
-	where object_id = object_id('dbo.RegistrationFormSettings')
-		and
-		(
-			(name = 'OrganizationID' and (system_type_id <> 56 or is_nullable <> 0))
-			or (name = 'Setting' and (system_type_id <> 231 or max_length <> 400 or is_nullable <> 0))
-			or (name = 'FormCode' and (system_type_id <> 231 or max_length <> 128 or is_nullable <> 0))
-			or (name = 'Value' and (system_type_id <> 231 or max_length <> -1 or is_nullable <> 1))
-		)
+	ObjectName,
+	ColumnName,
+	ExpectedDefinition,
+	ExpectedSystemTypeId,
+	ExpectedMaxLength,
+	ExpectedNullable
 )
-	raiserror('Shared prerequisite dbo.RegistrationFormSettings has an incompatible OrganizationID, Setting, FormCode, or Value definition.', 16, 1)
+values
+	(N'dbo.RegistrationFormSettingTypes', N'Setting', N'nvarchar(200) NOT NULL', 231, 400, 0),
+	(N'dbo.RegistrationFormSettings', N'OrganizationID', N'int NOT NULL', 56, 4, 0),
+	(N'dbo.RegistrationFormSettings', N'Setting', N'nvarchar(200) NOT NULL', 231, 400, 0),
+	(N'dbo.RegistrationFormSettings', N'FormCode', N'nvarchar(64) NOT NULL', 231, 128, 0),
+	(N'dbo.RegistrationFormSettings', N'Value', N'nvarchar(max) NULL', 231, -1, 1)
+
+declare @shared_object sysname
+declare @shared_column sysname
+declare @expected_shared_definition nvarchar(100)
+
+select top (1)
+	@shared_object = requirement.ObjectName,
+	@shared_column = requirement.ColumnName,
+	@expected_shared_definition = requirement.ExpectedDefinition
+from @shared_column_requirements requirement
+where not exists
+(
+	select 1
+	from sys.columns actual_column
+	where actual_column.object_id = object_id(requirement.ObjectName, 'U')
+		and actual_column.name = requirement.ColumnName
+)
+order by requirement.ObjectName, requirement.ColumnName
+
+if @shared_column is not null
+	raiserror('Required shared prerequisite column %s.%s is missing. Expected %s. Correct the shared registration schema before rerunning deployment.', 16, 1, @shared_object, @shared_column, @expected_shared_definition)
+
+declare @actual_shared_definition nvarchar(100)
+
+select top (1)
+	@shared_object = requirement.ObjectName,
+	@shared_column = requirement.ColumnName,
+	@expected_shared_definition = requirement.ExpectedDefinition,
+	@actual_shared_definition = concat
+	(
+		type_name(actual_column.system_type_id),
+		case
+			when actual_column.system_type_id in (231, 239) then concat('(', case when actual_column.max_length = -1 then 'max' else convert(varchar(10), actual_column.max_length / 2) end, ')')
+			when actual_column.system_type_id in (165, 167, 173, 175) then concat('(', case when actual_column.max_length = -1 then 'max' else convert(varchar(10), actual_column.max_length) end, ')')
+			else ''
+		end,
+		case when actual_column.is_nullable = 1 then ' NULL' else ' NOT NULL' end
+	)
+from @shared_column_requirements requirement
+inner join sys.columns actual_column
+	on actual_column.object_id = object_id(requirement.ObjectName, 'U')
+	and actual_column.name = requirement.ColumnName
+where actual_column.system_type_id <> requirement.ExpectedSystemTypeId
+	or actual_column.max_length <> requirement.ExpectedMaxLength
+	or actual_column.is_nullable <> requirement.ExpectedNullable
+order by requirement.ObjectName, requirement.ColumnName
+
+if @actual_shared_definition is not null
+	raiserror('Shared prerequisite column %s.%s has an incompatible definition. Expected %s; found %s. Correct the shared registration schema before rerunning deployment.', 16, 1, @shared_object, @shared_column, @expected_shared_definition, @actual_shared_definition)
 
 if not exists
 (
@@ -85,22 +130,32 @@ if not exists
 				and key_column.key_ordinal > 0
 		)
 )
-	raiserror('Shared prerequisite dbo.RegistrationFormSettings must have an unconditional unique key containing exactly OrganizationID, Setting, and FormCode.', 16, 1)
+	raiserror('Shared prerequisite dbo.RegistrationFormSettings requires an enabled, unfiltered unique key containing exactly OrganizationID, Setting, and FormCode; column order may vary. No qualifying key was found. Restore that uniqueness guarantee before rerunning deployment.', 16, 1)
 
-if not exists
-(
-	select 1
-	from sys.foreign_keys fk
-	inner join sys.foreign_key_columns fkc on fkc.constraint_object_id = fk.object_id
-	where fk.parent_object_id = object_id('dbo.RegistrationFormSettings')
-		and fk.referenced_object_id = object_id('dbo.RegistrationFormSettingTypes')
-		and fk.is_disabled = 0 and fk.is_not_trusted = 0
-		and fkc.parent_column_id = columnproperty(object_id('dbo.RegistrationFormSettings'), 'Setting', 'ColumnId')
-		and fkc.referenced_column_id = columnproperty(object_id('dbo.RegistrationFormSettingTypes'), 'Setting', 'ColumnId')
-)
-	raiserror('Shared prerequisite dbo.RegistrationFormSettings.Setting must have a trusted foreign key to dbo.RegistrationFormSettingTypes.Setting.', 16, 1)
+declare @setting_fk_name sysname
+declare @setting_fk_disabled bit
+declare @setting_fk_untrusted bit
+
+select top (1)
+	@setting_fk_name = fk.name,
+	@setting_fk_disabled = fk.is_disabled,
+	@setting_fk_untrusted = fk.is_not_trusted
+from sys.foreign_keys fk
+inner join sys.foreign_key_columns fkc on fkc.constraint_object_id = fk.object_id
+where fk.parent_object_id = object_id('dbo.RegistrationFormSettings')
+	and fk.referenced_object_id = object_id('dbo.RegistrationFormSettingTypes')
+	and fkc.parent_column_id = columnproperty(object_id('dbo.RegistrationFormSettings'), 'Setting', 'ColumnId')
+	and fkc.referenced_column_id = columnproperty(object_id('dbo.RegistrationFormSettingTypes'), 'Setting', 'ColumnId')
+order by case when fk.is_disabled = 0 and fk.is_not_trusted = 0 then 0 else 1 end, fk.name
+
+if @setting_fk_name is null
+	raiserror('Shared prerequisite dbo.RegistrationFormSettings.Setting must reference dbo.RegistrationFormSettingTypes.Setting through a foreign key. No matching foreign key was found. Restore the relationship before rerunning deployment.', 16, 1)
+
+if @setting_fk_disabled = 1 or @setting_fk_untrusted = 1
+	raiserror('Shared prerequisite foreign key %s connects dbo.RegistrationFormSettings.Setting to dbo.RegistrationFormSettingTypes.Setting but is not usable: is_disabled=%d, is_not_trusted=%d. Enable and trust the constraint after correcting any invalid data, then rerun deployment.', 16, 1, @setting_fk_name, @setting_fk_disabled, @setting_fk_untrusted)
 
 	/* 2. Deployment lock and transaction */
+	set @deployment_phase = N'acquiring the database convergence lock'
 	begin transaction
 	set @deployment_transaction_started = 1
 
@@ -113,10 +168,11 @@ if not exists
 		@DbPrincipal = N'public'
 
 	if @application_lock_result < 0
-		raiserror('Could not acquire the patron-registration database convergence application lock (sp_getapplock result %d). No deployment changes were made.', 16, 1, @application_lock_result)
+		raiserror('Could not acquire the patron-registration database convergence application lock. sp_getapplock returned %d. No deployment changes were made; verify that another deployment is not still running and retry.', 16, 1, @application_lock_result)
 
 
 	/* 3. Creation of missing current objects */
+	set @deployment_phase = N'creating missing current database objects'
 	if object_id('dbo.RegistrationFormCodeMetadata', 'U') is null
 	begin
 		create table dbo.RegistrationFormCodeMetadata
@@ -320,6 +376,7 @@ if not exists
 
 
 	/* 4. Additive and widening upgrades required by the current application */
+	set @deployment_phase = N'applying additive and widening schema upgrades'
 	if col_length('dbo.RegistrationSettingPreviewLinks', 'OperationalBranchId') is null
 	begin
 		update dbo.RegistrationSettingPreviewLinks
@@ -406,6 +463,7 @@ if not exists
 
 
 	/* 5. Required data transformations and current singleton state */
+	set @deployment_phase = N'applying required data transformations and singleton state'
 	if not exists
 	(
 		select 1
@@ -777,52 +835,97 @@ if not exists
 		)
 
 	/* 6. Focused final application invariants */
-	if (select count(*) from dbo.RegistrationSettingsCacheGeneration) <> 1
-		raiserror('RegistrationSettingsCacheGeneration must contain exactly one singleton row.', 16, 1)
-
-	if (select count(*) from dbo.RegistrationFormAssetReferenceLocks) <> 1
-		raiserror('RegistrationFormAssetReferenceLocks must contain exactly one singleton row.', 16, 1)
-
-	declare @invalid_version_state bit = 0
-	exec sys.sp_executesql
-		N'select @invalid = case when exists
+	set @deployment_phase = N'validating final application invariants'
+	declare @cache_generation_row_count int = (select count(*) from dbo.RegistrationSettingsCacheGeneration)
+	if @cache_generation_row_count <> 1
+	begin
+		declare @cache_generation_ids nvarchar(1000) = coalesce
 		(
-			select 1 from dbo.RegistrationSettingScopeVersions where Version < 0
-		) or exists
+			(select string_agg(convert(nvarchar(max), Id), N', ') from dbo.RegistrationSettingsCacheGeneration),
+			N'<none>'
+		)
+		raiserror('dbo.RegistrationSettingsCacheGeneration must contain exactly one singleton row with Id=1. Found %d row(s); IDs present: %s.', 16, 1, @cache_generation_row_count, @cache_generation_ids)
+	end
+
+	declare @asset_lock_row_count int = (select count(*) from dbo.RegistrationFormAssetReferenceLocks)
+	if @asset_lock_row_count <> 1
+	begin
+		declare @asset_lock_ids nvarchar(1000) = coalesce
 		(
-			select 1 from dbo.RegistrationSettingDrafts where BaselineVersion < 0 or Revision < 0
-		) then 1 else 0 end',
-		N'@invalid bit output',
-		@invalid = @invalid_version_state output
+			(select string_agg(convert(nvarchar(max), LockId), N', ') from dbo.RegistrationFormAssetReferenceLocks),
+			N'<none>'
+		)
+		raiserror('dbo.RegistrationFormAssetReferenceLocks must contain exactly one singleton row with LockId=1. Found %d row(s); LockId values present: %s.', 16, 1, @asset_lock_row_count, @asset_lock_ids)
+	end
 
-	if @invalid_version_state = 1
-		raiserror('Settings administration versions must be non-negative after deployment.', 16, 1)
-
-	declare @invalid_preview_state bit = 0
+	declare @invalid_version_detail nvarchar(1000)
 	exec sys.sp_executesql
 		N'
-			select @invalid = case when exists
+			select top (1) @detail = problem.Detail
+			from
 			(
-				select 1
-				from dbo.RegistrationSettingPreviewLinks preview_link
-				inner join dbo.RegistrationSettingDrafts draft on draft.DraftId = preview_link.DraftId
-				cross join dbo.RegistrationSettingsCacheGeneration generation
-				where preview_link.AllowLiveSubmission = 1
-					and preview_link.RevokedAtUtc is null
-					and draft.Status = ''Active''
-					and (preview_link.LiveSettingsGeneration is null or preview_link.LiveSettingsGeneration > generation.Generation)
-			) or exists
+				select concat(''RegistrationSettingScopeVersions OrganizationId='', OrganizationId,
+					'', FormCode="'', FormCode, ''", Version='', Version) as Detail, 1 as SortOrder
+				from dbo.RegistrationSettingScopeVersions
+				where Version < 0
+				union all
+				select concat(''RegistrationSettingDrafts DraftId='', DraftId,
+					'', BaselineVersion='', BaselineVersion, '', Revision='', Revision) as Detail, 2 as SortOrder
+				from dbo.RegistrationSettingDrafts
+				where BaselineVersion < 0 or Revision < 0
+			) problem
+			order by problem.SortOrder, problem.Detail',
+		N'@detail nvarchar(1000) output',
+		@detail = @invalid_version_detail output
+
+	if @invalid_version_detail is not null
+		raiserror('Settings administration versions must be non-negative after deployment. First offending row: %s.', 16, 1, @invalid_version_detail)
+
+	declare @invalid_live_preview_detail nvarchar(1000)
+	exec sys.sp_executesql
+		N'
+			select top (1) @detail = concat
 			(
-				select 1 from dbo.RegistrationSettingPreviewLinks
-				where RevokedAtUtc is null and OperationalBranchId = -2147483648
-			) then 1 else 0 end',
-		N'@invalid bit output',
-		@invalid = @invalid_preview_state output
+				''PreviewLinkId='', preview_link.PreviewLinkId,
+				'', DraftId='', preview_link.DraftId,
+				'', LiveSettingsGeneration='', coalesce(convert(nvarchar(30), preview_link.LiveSettingsGeneration), ''<NULL>''),
+				'', current cache Generation='', generation.Generation
+			)
+			from dbo.RegistrationSettingPreviewLinks preview_link
+			inner join dbo.RegistrationSettingDrafts draft on draft.DraftId = preview_link.DraftId
+			cross join dbo.RegistrationSettingsCacheGeneration generation
+			where preview_link.AllowLiveSubmission = 1
+				and preview_link.RevokedAtUtc is null
+				and draft.Status = ''Active''
+				and (preview_link.LiveSettingsGeneration is null or preview_link.LiveSettingsGeneration > generation.Generation)
+			order by preview_link.PreviewLinkId',
+		N'@detail nvarchar(1000) output',
+		@detail = @invalid_live_preview_detail output
 
-	if @invalid_preview_state = 1
-		raiserror('An active live-preview link has an invalid settings generation or an unrevoked link has the unknown operational-branch sentinel after deployment.', 16, 1)
+	if @invalid_live_preview_detail is not null
+		raiserror('An active live-preview link has an invalid settings generation. %s. Revoke or correct the link before rerunning deployment.', 16, 1, @invalid_live_preview_detail)
 
-	if exists
+	declare @invalid_branch_preview_detail nvarchar(1000)
+	exec sys.sp_executesql
+		N'
+			select top (1) @detail = concat
+			(
+				''PreviewLinkId='', PreviewLinkId,
+				'', DraftId='', DraftId,
+				'', OperationalBranchId='', OperationalBranchId
+			)
+			from dbo.RegistrationSettingPreviewLinks
+			where RevokedAtUtc is null and OperationalBranchId = -2147483648
+			order by PreviewLinkId',
+		N'@detail nvarchar(1000) output',
+		@detail = @invalid_branch_preview_detail output
+
+	if @invalid_branch_preview_detail is not null
+		raiserror('An unrevoked preview link still has the unknown operational-branch sentinel. %s. Revoke the link or assign its actual operational branch before rerunning deployment.', 16, 1, @invalid_branch_preview_detail)
+
+	declare @missing_setting_types nvarchar(1800)
+	select @missing_setting_types = string_agg(convert(nvarchar(max), missing.Setting), N', ')
+	from
 	(
 		select required.Setting
 		from @required_setting_types required
@@ -830,31 +933,75 @@ if not exists
 		(
 			select 1 from dbo.RegistrationFormSettingTypes existing where existing.Setting = required.Setting
 		)
-	)
-		raiserror('One or more required registration setting types are missing after deployment.', 16, 1)
+	) missing
 
-	if exists
-	(
-		select 1 from dbo.RegistrationFormSettings
+	if @missing_setting_types is not null
+		raiserror('Required registration setting types are missing after deployment: %s.', 16, 1, @missing_setting_types)
+
+	declare @retired_setting_count int
+	declare @retired_setting_detail nvarchar(1000)
+	select @retired_setting_count = count(*)
+	from dbo.RegistrationFormSettings
+	where Setting = 'header_image_url' or Setting in (select LegacyKey from @setting_map)
+
+	if @retired_setting_count > 0
+	begin
+		select top (1) @retired_setting_detail = concat
+		(
+			'OrganizationID=', OrganizationID,
+			', FormCode="', FormCode,
+			'", Setting="', Setting, '"'
+		)
+		from dbo.RegistrationFormSettings
 		where Setting = 'header_image_url' or Setting in (select LegacyKey from @setting_map)
-	)
-		raiserror('One or more retired settings remain in RegistrationFormSettings after deployment.', 16, 1)
+		order by OrganizationID, FormCode, Setting
 
-	if exists
-	(
-		select 1
+		raiserror('%d retired live setting row(s) remain in dbo.RegistrationFormSettings after deployment. First offending row: %s.', 16, 1, @retired_setting_count, @retired_setting_detail)
+	end
+
+	declare @retired_draft_change_count int
+	declare @retired_draft_change_detail nvarchar(1000)
+	select @retired_draft_change_count = count(*)
+	from dbo.RegistrationSettingDraftChanges draft_change
+	inner join dbo.RegistrationSettingDrafts draft on draft.DraftId = draft_change.DraftId
+	where draft.Status = 'Active'
+		and (draft_change.SettingKey = 'header_image_url' or draft_change.SettingKey in (select LegacyKey from @setting_map))
+
+	if @retired_draft_change_count > 0
+	begin
+		select top (1) @retired_draft_change_detail = concat
+		(
+			'DraftId=', draft_change.DraftId,
+			', SettingKey="', draft_change.SettingKey, '"'
+		)
 		from dbo.RegistrationSettingDraftChanges draft_change
 		inner join dbo.RegistrationSettingDrafts draft on draft.DraftId = draft_change.DraftId
 		where draft.Status = 'Active'
 			and (draft_change.SettingKey = 'header_image_url' or draft_change.SettingKey in (select LegacyKey from @setting_map))
-	)
-		raiserror('One or more active drafts still contain retired settings after deployment.', 16, 1)
+		order by draft_change.DraftId, draft_change.SettingKey
+
+		raiserror('%d retired setting change(s) remain in active drafts after deployment. First offending row: %s.', 16, 1, @retired_draft_change_count, @retired_draft_change_detail)
+	end
 
 	drop table #SettingsAdministrationChangedDrafts
+	set @deployment_phase = N'committing the database convergence transaction'
 	commit transaction
 end try
 begin catch
+	declare @error_number int = error_number()
+	declare @error_line int = error_line()
+	declare @error_message nvarchar(2048) = error_message()
+
 	if @deployment_transaction_started = 1 and xact_state() <> 0
 		rollback transaction;
-	throw
+
+	declare @diagnostic_message nvarchar(2048) = concat
+	(
+		'Database convergence failed during "', @deployment_phase,
+		'". SQL Server error ', @error_number,
+		case when @error_line is null then '' else concat(' at line ', @error_line) end,
+		': ', @error_message
+	)
+
+	;throw 51000, @diagnostic_message, 1
 end catch

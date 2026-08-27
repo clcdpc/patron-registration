@@ -30,6 +30,26 @@ Deployment should:
 Do not require an old database to exactly match a previously released schema
 shape before upgrading it.
 
+## Deployment diagnostics
+
+Simplicity does not justify vague deployment errors.
+
+When deployment rejects a database state or cannot complete a required
+transformation, make the error actionable without requiring the operator to
+manually reverse-engineer the schema or data first.
+
+Where practical, report:
+
+- the specific object, column, row, or invariant that failed;
+- the expected state;
+- the relevant actual state found;
+- identifying values needed to locate the offending data;
+- the deployment phase for unexpected SQL Server errors.
+
+Keep diagnostics focused on the current state and required transformation.
+Do not add historical-state classification or schema fingerprinting merely to
+produce richer errors.
+
 ## Avoid historical-shape machinery
 
 Unless a concrete correctness requirement demands otherwise, do not:
