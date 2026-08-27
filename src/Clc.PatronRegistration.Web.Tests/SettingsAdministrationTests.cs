@@ -1474,11 +1474,7 @@ public class SettingsAdministrationTests
             Assert.IsFalse(expected.Contains(compatibilityOnlyKey, StringComparer.OrdinalIgnoreCase), compatibilityOnlyKey);
         }
         var root = FindRepositoryRoot();
-        foreach (var relativePath in new[]
-        {
-            "database/009-register-setting-catalog-keys.sql",
-            "database/settings-administration.sql"
-        })
+        foreach (var relativePath in new[] { "database/settings-administration.sql" })
         {
             var source = File.ReadAllText(Path.Combine(root, relativePath));
             const string begin = "/* BEGIN SETTING_CATALOG_ALLOWLIST */";

@@ -1,48 +1,122 @@
 /*
-	Patron-registration settings administration convergence script.
+	Patron-registration settings administration desired-state deployment.
 
-	Supersedes migrations 001-012 for deployment purposes.
-
-	Compatible with:
-	- the existing pre-settings-administration database
-	- databases that have run some of migrations 001-012
-	- databases that have run all migrations 001-012
-	- databases that have already run this script
-
-	dbo.RegistrationFormSettings and dbo.RegistrationFormSettingTypes
-	are existing application prerequisites.
-
-	RAISERROR is used instead of THROW so the script is compatible with
-	older SQL tooling/parsers that do not recognize THROW.
+	This is the single authoritative deployment for the settings-administration
+	feature. It updates a supported existing database to the current required
+	schema and data state without reconstructing its deployment history.
 */
+set nocount on
 set xact_abort on
+set quoted_identifier on
+
+declare @deployment_transaction_started bit = 0
 
 begin try
+/* 1. Prerequisite validation */
+if @@trancount <> 0
+	raiserror('settings-administration.sql must be executed without an existing transaction.', 16, 1)
+
+if object_id('dbo.RegistrationFormSettingTypes', 'U') is null
+	raiserror('dbo.RegistrationFormSettingTypes must exist before settings administration is installed.', 16, 1)
+
+if object_id('dbo.RegistrationFormSettings', 'U') is null
+	raiserror('dbo.RegistrationFormSettings must exist before settings administration is installed.', 16, 1)
+
+if col_length('dbo.RegistrationFormSettingTypes', 'Setting') is null
+	raiserror('dbo.RegistrationFormSettingTypes.Setting must exist before settings administration is installed.', 16, 1)
+
+if col_length('dbo.RegistrationFormSettings', 'OrganizationID') is null
+	or col_length('dbo.RegistrationFormSettings', 'Setting') is null
+	or col_length('dbo.RegistrationFormSettings', 'FormCode') is null
+	or col_length('dbo.RegistrationFormSettings', 'Value') is null
+	raiserror('dbo.RegistrationFormSettings must contain OrganizationID, Setting, FormCode, and Value.', 16, 1)
+
+if exists
+(
+	select 1 from sys.columns
+	where object_id = object_id('dbo.RegistrationFormSettingTypes')
+		and name = 'Setting'
+		and (system_type_id <> 231 or max_length <> 400 or is_nullable <> 0)
+)
+	raiserror('Shared prerequisite dbo.RegistrationFormSettingTypes.Setting must be nvarchar(200) NOT NULL.', 16, 1)
+
+if exists
+(
+	select 1 from sys.columns
+	where object_id = object_id('dbo.RegistrationFormSettings')
+		and
+		(
+			(name = 'OrganizationID' and (system_type_id <> 56 or is_nullable <> 0))
+			or (name = 'Setting' and (system_type_id <> 231 or max_length <> 400 or is_nullable <> 0))
+			or (name = 'FormCode' and (system_type_id <> 231 or max_length <> 128 or is_nullable <> 0))
+			or (name = 'Value' and (system_type_id <> 231 or max_length <> -1 or is_nullable <> 1))
+		)
+)
+	raiserror('Shared prerequisite dbo.RegistrationFormSettings has an incompatible OrganizationID, Setting, FormCode, or Value definition.', 16, 1)
+
+if not exists
+(
+	select 1
+	from sys.indexes unique_index
+	where unique_index.object_id = object_id('dbo.RegistrationFormSettings')
+		and unique_index.is_unique = 1
+		and unique_index.is_disabled = 0
+		and unique_index.is_hypothetical = 0
+		and unique_index.has_filter = 0
+		and unique_index.filter_definition is null
+		and 3 =
+		(
+			select count(*)
+			from sys.index_columns key_column
+			inner join sys.columns column_object
+				on column_object.object_id = key_column.object_id
+				and column_object.column_id = key_column.column_id
+			where key_column.object_id = unique_index.object_id
+				and key_column.index_id = unique_index.index_id
+				and key_column.key_ordinal > 0
+				and column_object.name in ('OrganizationID', 'Setting', 'FormCode')
+		)
+		and 3 =
+		(
+			select count(*)
+			from sys.index_columns key_column
+			where key_column.object_id = unique_index.object_id
+				and key_column.index_id = unique_index.index_id
+				and key_column.key_ordinal > 0
+		)
+)
+	raiserror('Shared prerequisite dbo.RegistrationFormSettings must have an unconditional unique key containing exactly OrganizationID, Setting, and FormCode.', 16, 1)
+
+if not exists
+(
+	select 1
+	from sys.foreign_keys fk
+	inner join sys.foreign_key_columns fkc on fkc.constraint_object_id = fk.object_id
+	where fk.parent_object_id = object_id('dbo.RegistrationFormSettings')
+		and fk.referenced_object_id = object_id('dbo.RegistrationFormSettingTypes')
+		and fk.is_disabled = 0 and fk.is_not_trusted = 0
+		and fkc.parent_column_id = columnproperty(object_id('dbo.RegistrationFormSettings'), 'Setting', 'ColumnId')
+		and fkc.referenced_column_id = columnproperty(object_id('dbo.RegistrationFormSettingTypes'), 'Setting', 'ColumnId')
+)
+	raiserror('Shared prerequisite dbo.RegistrationFormSettings.Setting must have a trusted foreign key to dbo.RegistrationFormSettingTypes.Setting.', 16, 1)
+
+	/* 2. Deployment lock and transaction */
 	begin transaction
+	set @deployment_transaction_started = 1
 
-	if object_id('dbo.RegistrationFormSettingTypes', 'U') is null
-	begin
-		raiserror('dbo.RegistrationFormSettingTypes must exist before settings administration is installed.', 16, 1)
-	end
+	declare @application_lock_result int
+	exec @application_lock_result = sys.sp_getapplock
+		@Resource = N'Clc.PatronRegistration.DatabaseConvergence',
+		@LockMode = N'Exclusive',
+		@LockOwner = N'Transaction',
+		@LockTimeout = 600000,
+		@DbPrincipal = N'public'
 
-	if object_id('dbo.RegistrationFormSettings', 'U') is null
-	begin
-		raiserror('dbo.RegistrationFormSettings must exist before settings administration is installed.', 16, 1)
-	end
+	if @application_lock_result < 0
+		raiserror('Could not acquire the patron-registration database convergence application lock (sp_getapplock result %d). No deployment changes were made.', 16, 1, @application_lock_result)
 
-	if col_length('dbo.RegistrationFormSettingTypes', 'Setting') is null
-	begin
-		raiserror('dbo.RegistrationFormSettingTypes.Setting must exist before settings administration is installed.', 16, 1)
-	end
 
-	if col_length('dbo.RegistrationFormSettings', 'OrganizationID') is null
-		or col_length('dbo.RegistrationFormSettings', 'Setting') is null
-		or col_length('dbo.RegistrationFormSettings', 'FormCode') is null
-		or col_length('dbo.RegistrationFormSettings', 'Value') is null
-	begin
-		raiserror('dbo.RegistrationFormSettings must contain OrganizationID, Setting, FormCode, and Value.', 16, 1)
-	end
-
+	/* 3. Creation of missing current objects */
 	if object_id('dbo.RegistrationFormCodeMetadata', 'U') is null
 	begin
 		create table dbo.RegistrationFormCodeMetadata
@@ -154,55 +228,6 @@ begin try
 			constraint UQ_RSPL_Token unique (TokenHash)
 		)
 	end
-	else if col_length('dbo.RegistrationSettingPreviewLinks', 'OperationalBranchId') is null
-	begin
-		update dbo.RegistrationSettingPreviewLinks
-		set RevokedAtUtc = coalesce(RevokedAtUtc, sysutcdatetime()),
-			RevokedBy = coalesce(RevokedBy, 'settings-administration.sql')
-
-		alter table dbo.RegistrationSettingPreviewLinks
-			add OperationalBranchId int null
-
-		exec
-		(
-			'update dbo.RegistrationSettingPreviewLinks
-			set OperationalBranchId = -2147483648
-			where OperationalBranchId is null'
-		)
-
-		alter table dbo.RegistrationSettingPreviewLinks
-			alter column OperationalBranchId int not null
-	end
-	else if exists
-	(
-		select 1
-		from sys.columns
-		where object_id = object_id('dbo.RegistrationSettingPreviewLinks')
-			and name = 'OperationalBranchId'
-			and is_nullable = 1
-	)
-	begin
-		exec
-		(
-			'update dbo.RegistrationSettingPreviewLinks
-			set RevokedAtUtc = coalesce(RevokedAtUtc, sysutcdatetime()),
-				RevokedBy = coalesce(RevokedBy, ''settings-administration.sql'')
-			where OperationalBranchId is null;
-
-			update dbo.RegistrationSettingPreviewLinks
-			set OperationalBranchId = -2147483648
-			where OperationalBranchId is null'
-		)
-
-		alter table dbo.RegistrationSettingPreviewLinks
-			alter column OperationalBranchId int not null
-	end
-
-	if col_length('dbo.RegistrationSettingPreviewLinks', 'LiveSettingsGeneration') is null
-	begin
-		alter table dbo.RegistrationSettingPreviewLinks
-			add LiveSettingsGeneration bigint null
-	end
 
 	if object_id('dbo.RegistrationSettingAuditEvents', 'U') is null
 	begin
@@ -232,31 +257,6 @@ begin try
 		)
 	end
 
-	if exists
-	(
-		select 1
-		from sys.columns
-		where object_id = object_id('dbo.RegistrationSettingAuditEvents')
-			and name = 'PreviousValue'
-			and max_length <> -1
-	)
-	begin
-		alter table dbo.RegistrationSettingAuditEvents
-			alter column PreviousValue nvarchar(max) null
-	end
-
-	if exists
-	(
-		select 1
-		from sys.columns
-		where object_id = object_id('dbo.RegistrationSettingAuditEvents')
-			and name = 'NewValue'
-			and max_length <> -1
-	)
-	begin
-		alter table dbo.RegistrationSettingAuditEvents
-			alter column NewValue nvarchar(max) null
-	end
 
 	if not exists
 	(
@@ -271,24 +271,6 @@ begin try
 		include (EventType, TargetOrganizationId, FormCode)
 	end
 
-	if not exists
-	(
-		select 1
-		from sys.indexes
-		where object_id = object_id('dbo.RegistrationSettingAuditEvents')
-			and name = 'IX_RSAE_ScopeFilter'
-	)
-	begin
-		create index IX_RSAE_ScopeFilter
-		on dbo.RegistrationSettingAuditEvents
-		(
-			TargetOrganizationId,
-			FormCode,
-			EventType,
-			TimestampUtc desc
-		)
-	end
-
 	if object_id('dbo.RegistrationSettingsCacheGeneration', 'U') is null
 	begin
 		create table dbo.RegistrationSettingsCacheGeneration
@@ -298,59 +280,6 @@ begin try
 			ModifiedAtUtc datetime2(7) not null
 		)
 	end
-
-	if not exists
-	(
-		select 1
-		from dbo.RegistrationSettingsCacheGeneration
-		where Id = 1
-	)
-	begin
-		insert into dbo.RegistrationSettingsCacheGeneration
-		(
-			Id,
-			Generation,
-			ModifiedAtUtc
-		)
-		values
-		(
-			1,
-			0,
-			sysutcdatetime()
-		)
-	end
-
-	update p
-	set LiveSettingsGeneration = g.Generation
-	from dbo.RegistrationSettingPreviewLinks p
-	inner join dbo.RegistrationSettingDrafts draft
-	on draft.DraftId = p.DraftId
-	cross join dbo.RegistrationSettingsCacheGeneration g
-	where p.AllowLiveSubmission = 1
-		and p.LiveSettingsGeneration is null
-		and p.RevokedAtUtc is null
-		and draft.Status = 'Active'
-		/* Do not first bind a link that the retired-key cleanup will revoke. */
-		and not exists
-		(
-			select 1
-			from dbo.RegistrationSettingDraftChanges draft_change
-			inner join dbo.RegistrationSettingDrafts draft
-				on draft.DraftId = draft_change.DraftId
-			where draft_change.DraftId = p.DraftId
-				and draft.Status = 'Active'
-				and
-				(
-					draft_change.SettingKey = 'header_image_url'
-					or draft_change.SettingKey in
-					(
-						'legal_name_checkbox_label',
-						'ecard_checkbox_label',
-						'mailing_list_checkbox_label',
-						'require_preferred_pickup_location'
-					)
-				)
-		)
 
 	if object_id('dbo.RegistrationFormAssets', 'U') is null
 	begin
@@ -378,35 +307,82 @@ begin try
 				check (len(ContentHash) = 64)
 		)
 	end
-	else
-	begin
-		if col_length('dbo.RegistrationFormAssets', 'UploadOrganizationId') is null
-		begin
-			alter table dbo.RegistrationFormAssets
-				add UploadOrganizationId int null
-		end
 
-		if col_length('dbo.RegistrationFormAssets', 'UploadFormCode') is null
-		begin
-			alter table dbo.RegistrationFormAssets
-				add UploadFormCode nvarchar(64) null
-		end
+	if object_id('dbo.RegistrationFormAssetReferenceLocks', 'U') is null
+	begin
+		create table dbo.RegistrationFormAssetReferenceLocks
+		(
+			LockId tinyint not null
+				constraint PK_RegistrationFormAssetReferenceLocks primary key,
+			constraint CK_RegistrationFormAssetReferenceLocks_Singleton check (LockId = 1)
+		)
 	end
 
-	if not exists
+
+	/* 4. Additive and widening upgrades required by the current application */
+	if col_length('dbo.RegistrationSettingPreviewLinks', 'OperationalBranchId') is null
+	begin
+		update dbo.RegistrationSettingPreviewLinks
+		set RevokedAtUtc = coalesce(RevokedAtUtc, sysutcdatetime()),
+			RevokedBy = coalesce(RevokedBy, 'settings-administration.sql')
+
+		alter table dbo.RegistrationSettingPreviewLinks
+			add OperationalBranchId int null
+
+		exec
+		(
+			'update dbo.RegistrationSettingPreviewLinks
+			set OperationalBranchId = -2147483648
+			where OperationalBranchId is null'
+		)
+
+		alter table dbo.RegistrationSettingPreviewLinks
+			alter column OperationalBranchId int not null
+	end
+	if col_length('dbo.RegistrationSettingPreviewLinks', 'LiveSettingsGeneration') is null
+	begin
+		alter table dbo.RegistrationSettingPreviewLinks
+			add LiveSettingsGeneration bigint null
+	end
+
+
+
+	if exists
 	(
 		select 1
-		from sys.indexes
-		where object_id = object_id('dbo.RegistrationFormAssets')
-			and name = 'IX_RegistrationFormAssets_UploadScope'
+		from sys.columns
+		where object_id = object_id('dbo.RegistrationSettingAuditEvents')
+			and name = 'PreviousValue'
+			and max_length <> -1
 	)
 	begin
-		create index IX_RegistrationFormAssets_UploadScope
-		on dbo.RegistrationFormAssets
-		(
-			UploadOrganizationId,
-			UploadFormCode
-		)
+		alter table dbo.RegistrationSettingAuditEvents
+			alter column PreviousValue nvarchar(max) null
+	end
+
+	if exists
+	(
+		select 1
+		from sys.columns
+		where object_id = object_id('dbo.RegistrationSettingAuditEvents')
+			and name = 'NewValue'
+			and max_length <> -1
+	)
+	begin
+		alter table dbo.RegistrationSettingAuditEvents
+			alter column NewValue nvarchar(max) null
+	end
+
+	if col_length('dbo.RegistrationFormAssets', 'UploadOrganizationId') is null
+	begin
+		alter table dbo.RegistrationFormAssets
+			add UploadOrganizationId int null
+	end
+
+	if col_length('dbo.RegistrationFormAssets', 'UploadFormCode') is null
+	begin
+		alter table dbo.RegistrationFormAssets
+			add UploadFormCode nvarchar(64) null
 	end
 
 	if col_length('dbo.RegistrationSettingDrafts', 'Revision') is null
@@ -427,15 +403,59 @@ begin try
 		on dbo.RegistrationFormAssets (CreatedDate)
 	end
 
-	if object_id('dbo.RegistrationFormAssetReferenceLocks', 'U') is null
+
+
+	/* 5. Required data transformations and current singleton state */
+	if not exists
+	(
+		select 1
+		from dbo.RegistrationSettingsCacheGeneration
+		where Id = 1
+	)
 	begin
-		create table dbo.RegistrationFormAssetReferenceLocks
+		insert into dbo.RegistrationSettingsCacheGeneration
 		(
-			LockId tinyint not null
-				constraint PK_RegistrationFormAssetReferenceLocks primary key,
-			constraint CK_RegistrationFormAssetReferenceLocks_Singleton check (LockId = 1)
+			Id,
+			Generation,
+			ModifiedAtUtc
+		)
+		values
+		(
+			1,
+			0,
+			sysutcdatetime()
 		)
 	end
+
+	/*
+	   A NULL LiveSettingsGeneration has no durable evidence of the generation
+	   under which an old live bearer token was issued. Revoke those links while
+	   they are attached to an active draft; links for inactive drafts remain
+	   existing records, and safe-preview links are not affected by the live
+	   generation contract. A generation-bound link is never rewritten here.
+	*/
+	/*
+	   LiveSettingsGeneration may be introduced earlier in this same batch.
+	   Execute this statement dynamically so SQL Server resolves the upgraded
+	   column after the ALTER TABLE has committed to the transaction.
+	*/
+	exec
+	(
+		N'update preview_link
+		set RevokedAtUtc = sysutcdatetime(),
+			RevokedBy = coalesce(RevokedBy, ''settings-administration.sql''),
+			ModifiedAtUtc = sysutcdatetime(),
+			ModifiedBy = ''settings-administration.sql''
+		from dbo.RegistrationSettingPreviewLinks preview_link
+		inner join dbo.RegistrationSettingDrafts draft
+			on draft.DraftId = preview_link.DraftId
+		where preview_link.AllowLiveSubmission = 1
+			and preview_link.LiveSettingsGeneration is null
+			and preview_link.RevokedAtUtc is null
+			and draft.Status = ''Active'''
+	)
+
+
 
 	if not exists
 	(
@@ -729,12 +749,16 @@ begin try
 	on changed_draft.DraftId = preview_link.DraftId
 	where preview_link.RevokedAtUtc is null
 
-	update draft
-	set Revision = draft.Revision + 1
-	from dbo.RegistrationSettingDrafts draft
-	inner join #SettingsAdministrationChangedDrafts changed_draft
-	on changed_draft.DraftId = draft.DraftId
-	where draft.Status = 'Active'
+	/* Revision may have been added earlier in this batch. */
+	exec
+	(
+		N'update draft
+		set Revision = draft.Revision + 1
+		from dbo.RegistrationSettingDrafts draft
+		inner join #SettingsAdministrationChangedDrafts changed_draft
+			on changed_draft.DraftId = draft.DraftId
+		where draft.Status = ''Active'''
+	)
 
 	delete from dbo.RegistrationFormSettings
 	where Setting = 'header_image_url'
@@ -752,180 +776,85 @@ begin try
 			from @setting_map
 		)
 
-	if object_id('dbo.RegistrationFormCodeMetadata', 'U') is null
-		or object_id('dbo.RegistrationSettingScopeVersions', 'U') is null
-		or object_id('dbo.RegistrationSettingDrafts', 'U') is null
-		or object_id('dbo.RegistrationSettingDraftChanges', 'U') is null
-		or object_id('dbo.RegistrationSettingPreviewLinks', 'U') is null
-		or object_id('dbo.RegistrationSettingAuditEvents', 'U') is null
-		or object_id('dbo.RegistrationSettingsCacheGeneration', 'U') is null
-		or object_id('dbo.RegistrationFormAssets', 'U') is null
-		or object_id('dbo.RegistrationFormAssetReferenceLocks', 'U') is null
-	begin
-		raiserror('Settings administration deployment did not produce all required tables.', 16, 1)
-	end
+	/* 6. Focused final application invariants */
+	if (select count(*) from dbo.RegistrationSettingsCacheGeneration) <> 1
+		raiserror('RegistrationSettingsCacheGeneration must contain exactly one singleton row.', 16, 1)
 
-	if not exists
-	(
-		select 1
-		from sys.columns
-		where object_id = object_id('dbo.RegistrationSettingPreviewLinks')
-			and name = 'OperationalBranchId'
-			and is_nullable = 0
-	)
-	begin
-		raiserror('RegistrationSettingPreviewLinks.OperationalBranchId is missing or nullable after deployment.', 16, 1)
-	end
+	if (select count(*) from dbo.RegistrationFormAssetReferenceLocks) <> 1
+		raiserror('RegistrationFormAssetReferenceLocks must contain exactly one singleton row.', 16, 1)
 
-	if not exists
-	(
-		select 1
-		from sys.columns
-		where object_id = object_id('dbo.RegistrationSettingAuditEvents')
-			and name = 'PreviousValue'
-			and max_length = -1
-			and is_nullable = 1
-	)
-	begin
-		raiserror('RegistrationSettingAuditEvents.PreviousValue is not nvarchar(max) NULL after deployment.', 16, 1)
-	end
+	declare @invalid_version_state bit = 0
+	exec sys.sp_executesql
+		N'select @invalid = case when exists
+		(
+			select 1 from dbo.RegistrationSettingScopeVersions where Version < 0
+		) or exists
+		(
+			select 1 from dbo.RegistrationSettingDrafts where BaselineVersion < 0 or Revision < 0
+		) then 1 else 0 end',
+		N'@invalid bit output',
+		@invalid = @invalid_version_state output
 
-	if not exists
-	(
-		select 1
-		from sys.columns
-		where object_id = object_id('dbo.RegistrationSettingAuditEvents')
-			and name = 'NewValue'
-			and max_length = -1
-			and is_nullable = 1
-	)
-	begin
-		raiserror('RegistrationSettingAuditEvents.NewValue is not nvarchar(max) NULL after deployment.', 16, 1)
-	end
+	if @invalid_version_state = 1
+		raiserror('Settings administration versions must be non-negative after deployment.', 16, 1)
 
-	if col_length('dbo.RegistrationFormAssets', 'UploadOrganizationId') is null
-		or col_length('dbo.RegistrationFormAssets', 'UploadFormCode') is null
-	begin
-		raiserror('RegistrationFormAssets is missing its upload-scope columns after deployment.', 16, 1)
-	end
+	declare @invalid_preview_state bit = 0
+	exec sys.sp_executesql
+		N'
+			select @invalid = case when exists
+			(
+				select 1
+				from dbo.RegistrationSettingPreviewLinks preview_link
+				inner join dbo.RegistrationSettingDrafts draft on draft.DraftId = preview_link.DraftId
+				cross join dbo.RegistrationSettingsCacheGeneration generation
+				where preview_link.AllowLiveSubmission = 1
+					and preview_link.RevokedAtUtc is null
+					and draft.Status = ''Active''
+					and (preview_link.LiveSettingsGeneration is null or preview_link.LiveSettingsGeneration > generation.Generation)
+			) or exists
+			(
+				select 1 from dbo.RegistrationSettingPreviewLinks
+				where RevokedAtUtc is null and OperationalBranchId = -2147483648
+			) then 1 else 0 end',
+		N'@invalid bit output',
+		@invalid = @invalid_preview_state output
 
-	if not exists
-	(
-		select 1
-		from sys.indexes
-		where object_id = object_id('dbo.RegistrationFormAssets')
-			and name = 'IX_RegistrationFormAssets_UploadScope'
-	)
-	begin
-		raiserror('RegistrationFormAssets upload-scope index is missing after deployment.', 16, 1)
-	end
-
-	if not exists
-	(
-		select 1
-		from sys.indexes
-		where object_id = object_id('dbo.RegistrationFormAssets')
-			and name = 'IX_RegistrationFormAssets_CreatedDate'
-	)
-	begin
-		raiserror('RegistrationFormAssets created-date index is missing after deployment.', 16, 1)
-	end
-
-	if not exists
-	(
-		select 1
-		from dbo.RegistrationFormAssetReferenceLocks
-		where LockId = 1
-	)
-	begin
-		raiserror('RegistrationFormAssetReferenceLocks row 1 is missing after deployment.', 16, 1)
-	end
+	if @invalid_preview_state = 1
+		raiserror('An active live-preview link has an invalid settings generation or an unrevoked link has the unknown operational-branch sentinel after deployment.', 16, 1)
 
 	if exists
 	(
 		select required.Setting
-		from @required_setting_types as required
+		from @required_setting_types required
 		where not exists
 		(
-			select 1
-			from dbo.RegistrationFormSettingTypes as existing
-			where existing.Setting = required.Setting
+			select 1 from dbo.RegistrationFormSettingTypes existing where existing.Setting = required.Setting
 		)
 	)
-	begin
 		raiserror('One or more required registration setting types are missing after deployment.', 16, 1)
-	end
 
 	if exists
 	(
-		select 1
-		from dbo.RegistrationFormSettings
-		where Setting = 'header_image_url'
-			or Setting in
-			(
-				select LegacyKey
-				from @setting_map
-			)
+		select 1 from dbo.RegistrationFormSettings
+		where Setting = 'header_image_url' or Setting in (select LegacyKey from @setting_map)
 	)
-	begin
 		raiserror('One or more retired settings remain in RegistrationFormSettings after deployment.', 16, 1)
-	end
 
 	if exists
 	(
 		select 1
-		from dbo.RegistrationFormSettingTypes
-		where Setting = 'header_image_url'
-			or Setting in
-			(
-				select LegacyKey
-				from @setting_map
-			)
-	)
-	begin
-		raiserror('One or more retired settings remain in RegistrationFormSettingTypes after deployment.', 16, 1)
-	end
-
-	if exists
-	(
-		select 1
-		from dbo.RegistrationSettingDraftChanges as draft_change
-		inner join dbo.RegistrationSettingDrafts as draft
-		on draft.DraftId = draft_change.DraftId
+		from dbo.RegistrationSettingDraftChanges draft_change
+		inner join dbo.RegistrationSettingDrafts draft on draft.DraftId = draft_change.DraftId
 		where draft.Status = 'Active'
-			and
-			(
-				draft_change.SettingKey = 'header_image_url'
-				or draft_change.SettingKey in
-				(
-					select LegacyKey
-					from @setting_map
-				)
-			)
+			and (draft_change.SettingKey = 'header_image_url' or draft_change.SettingKey in (select LegacyKey from @setting_map))
 	)
-	begin
 		raiserror('One or more active drafts still contain retired settings after deployment.', 16, 1)
-	end
-
-	if not exists
-	(
-		select 1
-		from dbo.RegistrationSettingsCacheGeneration
-		where Id = 1
-	)
-	begin
-		raiserror('RegistrationSettingsCacheGeneration row 1 is missing after deployment.', 16, 1)
-	end
 
 	drop table #SettingsAdministrationChangedDrafts
-
 	commit transaction
 end try
 begin catch
-	declare @error_message nvarchar(4000) = error_message()
-
-	if @@trancount > 0
-		rollback transaction
-
-	raiserror('%s', 16, 1, @error_message)
+	if @deployment_transaction_started = 1 and xact_state() <> 0
+		rollback transaction;
+	throw
 end catch

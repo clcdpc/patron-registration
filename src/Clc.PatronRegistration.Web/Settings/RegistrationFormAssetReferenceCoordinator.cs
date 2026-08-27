@@ -40,7 +40,7 @@ internal static class RegistrationFormAssetReferenceCoordinator
         if (lockId != 1)
         {
             throw new InvalidOperationException(
-                "The registration-form asset reference lock row is missing. Apply the asset-reference cleanup migration before saving settings.");
+                "The registration-form asset reference lock row is missing. Apply the database convergence update before saving settings.");
         }
 
         AfterAcquireForTesting?.Invoke(operation);

@@ -58,11 +58,10 @@ public sealed class SettingsAdministrationRepositoryIntegrationTests
     private static readonly IReadOnlyDictionary<string, SettingDefinition> Catalog =
         new[] { First, Second, Html, Secret }.ToDictionary(item => item.Key, StringComparer.OrdinalIgnoreCase);
 
-    // Represents the setting-type rows from the old database state before the
-    // header-image migrations. This is an intentionally explicit fixture
-    // contract, not a projection of SettingCatalog: migration 007 must remove
-    // header_image_url, and the compatibility test below must detect a newly
-    // administrable ordinary key omitted from the database allowlist.
+    // Represents setting-type rows from an older shared clcdb state. This is
+    // an intentionally explicit fixture contract, not a projection of
+    // SettingCatalog: retired compatibility rows must remain supported while
+    // current catalog keys are converged.
     private static readonly string[] ExistingSettingTypeKeys =
     [
         "header_image_url", "css_file", "warning_text", "custom_form_footer_html", "registration_text", "registration_form_header",
@@ -129,18 +128,7 @@ public sealed class SettingsAdministrationRepositoryIntegrationTests
             using var database = new SqlConnection(candidateConnectionString);
             database.Open();
             DeployExistingRegistrationSettingsSchema(database);
-            foreach (var file in new[] { "001-settings-administration.sql", "002-preview-operational-branch.sql", "003-expand-audit-setting-values.sql", "004-registration-form-assets.sql", "005-registration-form-asset-scope.sql", "006-register-header-image-asset-setting.sql", "007-remove-legacy-header-image-url.sql", "008-migrate-legacy-registration-field-settings.sql", "009-register-setting-catalog-keys.sql", "010-registration-form-asset-cleanup.sql", "011-registration-form-asset-reference-lock.sql", "012-draft-revision-and-preview-generation.sql" })
-            {
-                Execute(database, File.ReadAllText(Path.Combine(RepositoryRoot(), "database", file)), 30);
-            }
-            // Exercise the incremental migrations' repeatability during fixture deployment.
-            Execute(database, File.ReadAllText(Path.Combine(RepositoryRoot(), "database", "006-register-header-image-asset-setting.sql")), 30);
-            Execute(database, File.ReadAllText(Path.Combine(RepositoryRoot(), "database", "007-remove-legacy-header-image-url.sql")), 30);
-            Execute(database, File.ReadAllText(Path.Combine(RepositoryRoot(), "database", "008-migrate-legacy-registration-field-settings.sql")), 30);
-            Execute(database, File.ReadAllText(Path.Combine(RepositoryRoot(), "database", "009-register-setting-catalog-keys.sql")), 30);
-            Execute(database, File.ReadAllText(Path.Combine(RepositoryRoot(), "database", "010-registration-form-asset-cleanup.sql")), 30);
-            Execute(database, File.ReadAllText(Path.Combine(RepositoryRoot(), "database", "011-registration-form-asset-reference-lock.sql")), 30);
-            Execute(database, File.ReadAllText(Path.Combine(RepositoryRoot(), "database", "012-draft-revision-and-preview-generation.sql")), 30);
+            Execute(database, File.ReadAllText(Path.Combine(RepositoryRoot(), "database", "settings-administration.sql")), 60);
             databaseConnectionString = candidateConnectionString;
             schemaReady = true;
         }
@@ -216,7 +204,6 @@ update dbo.RegistrationSettingsCacheGeneration set Generation=0,ModifiedAtUtc=SY
         }
         Assert.AreEqual(1, Scalar<int>("select count(*) from sys.indexes where object_id=object_id('dbo.RegistrationSettingDrafts') and name='UX_RSD_ActiveScope' and is_unique=1 and has_filter=1"));
         Assert.AreEqual(2, Scalar<int>("select count(*) from sys.columns where object_id=object_id('dbo.RegistrationFormAssets') and name in ('UploadOrganizationId', 'UploadFormCode')"));
-        Assert.AreEqual(1, Scalar<int>("select count(*) from sys.indexes where object_id=object_id('dbo.RegistrationFormAssets') and name='IX_RegistrationFormAssets_UploadScope'"));
         Assert.AreEqual(1, Scalar<int>("select count(*) from sys.indexes where object_id=object_id('dbo.RegistrationFormAssets') and name='IX_RegistrationFormAssets_CreatedDate'"));
         Assert.AreEqual(1, Scalar<int>("select case when object_id('dbo.RegistrationFormAssetReferenceLocks','U') is null then 0 else 1 end"));
         Assert.AreEqual(1, Scalar<int>("select count(*) from dbo.RegistrationFormAssetReferenceLocks where LockId=1"));
@@ -280,9 +267,9 @@ update dbo.RegistrationSettingsCacheGeneration set Generation=0,ModifiedAtUtc=SY
         var unrelatedHash = Enumerable.Repeat((byte)66, 32).ToArray();
         var unrelatedLinkId = SeedPreviewLink(unrelatedDraftId, unrelatedHash, clock.GetUtcNow().UtcDateTime.AddHours(1));
 
-        // Simulate a database that has the draft/link tables from the earlier
-        // migrations but has not installed the Revision column from 012 yet.
-        DropDraftRevisionColumn();
+        // Simulate the older additive state before draft revisions and
+        // generation-bound live-preview admission were added together.
+        DropRevisionGenerationColumns();
         using (var connection = Open())
         {
             Execute(connection, convergence, 30);
@@ -301,7 +288,7 @@ update dbo.RegistrationSettingsCacheGeneration set Generation=0,ModifiedAtUtc=SY
     }
 
     [TestMethod]
-    public void BackendOnlySchoolInfoFormatValue_SurvivesCatalogMigrationsUnchanged()
+    public void BackendOnlySchoolInfoFormatValue_SurvivesConvergenceUnchanged()
     {
         const string originalValue = "uapl-backend-value";
         using (var connection = Open())
@@ -311,8 +298,6 @@ update dbo.RegistrationSettingsCacheGeneration set Generation=0,ModifiedAtUtc=SY
                 "insert dbo.RegistrationFormSettings(OrganizationID, Setting, FormCode, Value) values(101, 'school_info_format', 'form', @value);",
                 parameters: command => command.Parameters.AddWithValue("@value", originalValue));
 
-            Execute(connection, File.ReadAllText(Path.Combine(RepositoryRoot(), "database", "009-register-setting-catalog-keys.sql")), 30);
-            Execute(connection, File.ReadAllText(Path.Combine(RepositoryRoot(), "database", "009-register-setting-catalog-keys.sql")), 30);
             Execute(connection, File.ReadAllText(Path.Combine(RepositoryRoot(), "database", "settings-administration.sql")), 30);
             Execute(connection, File.ReadAllText(Path.Combine(RepositoryRoot(), "database", "settings-administration.sql")), 30);
         }
@@ -321,7 +306,7 @@ update dbo.RegistrationSettingsCacheGeneration set Generation=0,ModifiedAtUtc=SY
     }
 
     [TestMethod]
-    public void BackendOnlyKioskRegistrationHeaderValueAndTypeSurviveCatalogMigrationsUnchanged()
+    public void BackendOnlyKioskRegistrationHeaderValueAndTypeSurviveConvergenceUnchanged()
     {
         const string originalValue = "legacy kiosk header";
         using (var connection = Open())
@@ -331,18 +316,9 @@ update dbo.RegistrationSettingsCacheGeneration set Generation=0,ModifiedAtUtc=SY
                 "insert dbo.RegistrationFormSettings(OrganizationID, Setting, FormCode, Value) values(101, 'kiosk_registration_header', 'form', @value);",
                 parameters: command => command.Parameters.AddWithValue("@value", originalValue));
 
-            foreach (var file in new[]
-            {
-                "007-remove-legacy-header-image-url.sql",
-                "008-migrate-legacy-registration-field-settings.sql",
-                "009-register-setting-catalog-keys.sql",
-                "settings-administration.sql"
-            })
-            {
-                var script = File.ReadAllText(Path.Combine(RepositoryRoot(), "database", file));
-                Execute(connection, script, 30);
-                Execute(connection, script, 30);
-            }
+            var script = File.ReadAllText(Path.Combine(RepositoryRoot(), "database", "settings-administration.sql"));
+            Execute(connection, script, 30);
+            Execute(connection, script, 30);
         }
 
         Assert.AreEqual(1, Scalar<int>("select count(*) from dbo.RegistrationFormSettingTypes where Setting='kiosk_registration_header'"));
@@ -350,26 +326,26 @@ update dbo.RegistrationSettingsCacheGeneration set Generation=0,ModifiedAtUtc=SY
     }
 
     [TestMethod]
-    public void Migration006_IsIdempotentAndRegistersExactlyOneHeaderImageSettingType()
+    public void Convergence_IsIdempotentAndRegistersExactlyOneHeaderImageSettingType()
     {
-        var migration = File.ReadAllText(Path.Combine(RepositoryRoot(), "database", "006-register-header-image-asset-setting.sql"));
+        var convergence = ConvergenceScript();
         using (var connection = Open())
         {
-            Execute(connection, migration, 30);
+            Execute(connection, convergence, 30);
         }
 
         Assert.AreEqual(1, Scalar<int>("select count(*) from dbo.RegistrationFormSettingTypes where Setting='header_image_asset_id'"));
     }
 
     [TestMethod]
-    public void Migration007_RemovesLegacyHeaderImageUrlRowsAndIsIdempotent()
+    public void Convergence_RemovesLegacyHeaderImageUrlRowsAndIsIdempotent()
     {
-        var migration = File.ReadAllText(Path.Combine(RepositoryRoot(), "database", "007-remove-legacy-header-image-url.sql"));
+        var convergence = ConvergenceScript();
         using (var connection = Open())
         {
             SeedLegacyHeaderImageSetting(connection);
-            Execute(connection, migration, 30);
-            Execute(connection, migration, 30);
+            Execute(connection, convergence, 30);
+            Execute(connection, convergence, 30);
         }
 
         Assert.AreEqual(0, Scalar<int>("select count(*) from dbo.RegistrationFormSettingTypes where Setting='header_image_url'"));
@@ -379,13 +355,13 @@ update dbo.RegistrationSettingsCacheGeneration set Generation=0,ModifiedAtUtc=SY
     }
 
     [TestMethod]
-    public void Migration007_RevokesSafeAndLiveLinksOnlyForChangedActiveDraftsAndAdvancesRevisionOnce()
+    public void Convergence_RevokesLinksOnlyForChangedActiveDraftsAndAdvancesRevisionOnce()
     {
-        var migration = File.ReadAllText(Path.Combine(RepositoryRoot(), "database", "007-remove-legacy-header-image-url.sql"));
+        var convergence = ConvergenceScript();
         using (var connection = Open())
             SeedLegacyHeaderImageSetting(connection);
 
-        var activeDraftId = SeedDraftAtScope(101, "migration-007", "Active");
+        var activeDraftId = SeedDraftAtScope(101, "convergence-links", "Active");
         SeedRawDraftMutation(activeDraftId, "header_image_url", "Upsert", "https://example.test/draft.png");
         var safeHash = Enumerable.Repeat((byte)57, 32).ToArray();
         var liveHash = Enumerable.Repeat((byte)58, 32).ToArray();
@@ -393,14 +369,14 @@ update dbo.RegistrationSettingsCacheGeneration set Generation=0,ModifiedAtUtc=SY
         var liveLinkId = SeedPreviewLink(activeDraftId, liveHash, clock.GetUtcNow().UtcDateTime.AddHours(1),
             allowLiveSubmission: true, liveSettingsGeneration: 0);
 
-        var unrelatedDraftId = SeedDraftAtScope(202, "migration-007-unrelated", "Active");
+        var unrelatedDraftId = SeedDraftAtScope(202, "convergence-unrelated", "Active");
         SeedRawDraftMutation(unrelatedDraftId, "registration_text", "Upsert", "unrelated");
         var unrelatedHash = Enumerable.Repeat((byte)59, 32).ToArray();
         var unrelatedLinkId = SeedPreviewLink(unrelatedDraftId, unrelatedHash, clock.GetUtcNow().UtcDateTime.AddHours(1));
 
         using (var connection = Open())
         {
-            Execute(connection, migration, 30);
+            Execute(connection, convergence, 30);
             Assert.AreEqual(1L, Scalar<long>("select Revision from dbo.RegistrationSettingDrafts where DraftId=" + activeDraftId));
             Assert.IsNotNull(repository.GetPreviewLink(safeLinkId)!.RevokedAtUtc);
             Assert.IsNotNull(repository.GetPreviewLink(liveLinkId)!.RevokedAtUtc);
@@ -409,16 +385,16 @@ update dbo.RegistrationSettingsCacheGeneration set Generation=0,ModifiedAtUtc=SY
             Assert.IsNull(repository.GetPreviewLink(unrelatedLinkId)!.RevokedAtUtc);
             Assert.AreEqual(0L, Scalar<long>("select Revision from dbo.RegistrationSettingDrafts where DraftId=" + unrelatedDraftId));
 
-            Execute(connection, migration, 30);
+            Execute(connection, convergence, 30);
             Assert.AreEqual(1L, Scalar<long>("select Revision from dbo.RegistrationSettingDrafts where DraftId=" + activeDraftId));
             Assert.IsNull(repository.GetPreviewLink(unrelatedLinkId)!.RevokedAtUtc);
         }
     }
 
     [TestMethod]
-    public void Migration007_RemovesRetiredKeyFromActiveDraftButPreservesValidAndHistoricalChanges()
+    public void Convergence_RemovesRetiredKeyFromActiveDraftButPreservesValidAndHistoricalChanges()
     {
-        var migration = File.ReadAllText(Path.Combine(RepositoryRoot(), "database", "007-remove-legacy-header-image-url.sql"));
+        var convergence = ConvergenceScript();
         var catalog = new SettingCatalog().All.ToDictionary(setting => setting.Key, StringComparer.OrdinalIgnoreCase);
         var ordinary = catalog["registration_text"];
 
@@ -435,9 +411,9 @@ update dbo.RegistrationSettingsCacheGeneration set Generation=0,ModifiedAtUtc=SY
 
         using (var connection = Open())
         {
-            Execute(connection, migration, 30);
+            Execute(connection, convergence, 30);
             Assert.AreEqual(activeDraft.DraftRevision + 1, Scalar<long>("select Revision from dbo.RegistrationSettingDrafts where DraftId=" + activeDraft.DraftId));
-            Execute(connection, migration, 30);
+            Execute(connection, convergence, 30);
             Assert.AreEqual(activeDraft.DraftRevision + 1, Scalar<long>("select Revision from dbo.RegistrationSettingDrafts where DraftId=" + activeDraft.DraftId));
         }
 
@@ -460,9 +436,9 @@ update dbo.RegistrationSettingsCacheGeneration set Generation=0,ModifiedAtUtc=SY
     }
 
     [TestMethod]
-    public void Migration007_RemovesOnlyRetiredKeyFromHeaderOnlyActiveDraftAndEmptyDraftCanCommit()
+    public void Convergence_RemovesOnlyRetiredKeyFromHeaderOnlyActiveDraftAndEmptyDraftCanCommit()
     {
-        var migration = File.ReadAllText(Path.Combine(RepositoryRoot(), "database", "007-remove-legacy-header-image-url.sql"));
+        var convergence = ConvergenceScript();
         var catalog = new SettingCatalog().All.ToDictionary(setting => setting.Key, StringComparer.OrdinalIgnoreCase);
 
         using (var connection = Open())
@@ -472,9 +448,9 @@ update dbo.RegistrationSettingsCacheGeneration set Generation=0,ModifiedAtUtc=SY
 
         using (var connection = Open())
         {
-            Execute(connection, migration, 30);
+            Execute(connection, convergence, 30);
             Assert.AreEqual(1L, Scalar<long>("select Revision from dbo.RegistrationSettingDrafts where DraftId=" + activeDraft));
-            Execute(connection, migration, 30);
+            Execute(connection, convergence, 30);
             Assert.AreEqual(1L, Scalar<long>("select Revision from dbo.RegistrationSettingDrafts where DraftId=" + activeDraft));
         }
 
@@ -492,9 +468,9 @@ update dbo.RegistrationSettingsCacheGeneration set Generation=0,ModifiedAtUtc=SY
     }
 
     [TestMethod]
-    public void Migration008_MigratesOwnedRowsDraftsAndSettingTypesIdempotently()
+    public void Convergence_TransformsOwnedRowsDraftsAndSettingTypesIdempotently()
     {
-        var migration = File.ReadAllText(Path.Combine(RepositoryRoot(), "database", "008-migrate-legacy-registration-field-settings.sql"));
+        var convergence = ConvergenceScript();
         using (var connection = Open())
         {
             SeedLegacyRegistrationFieldSetting(connection, 3, "legal_name_checkbox_label", "branch-form", "Branch legal name");
@@ -530,7 +506,7 @@ update dbo.RegistrationSettingsCacheGeneration set Generation=0,ModifiedAtUtc=SY
 
         using (var connection = Open())
         {
-            Execute(connection, migration, 30);
+            Execute(connection, convergence, 30);
             Assert.AreEqual(1L, Scalar<long>("select Revision from dbo.RegistrationSettingDrafts where DraftId=" + activeDraftId));
             Assert.IsNotNull(repository.GetPreviewLink(safeLinkId)!.RevokedAtUtc);
             Assert.IsNotNull(repository.GetPreviewLink(liveLinkId)!.RevokedAtUtc);
@@ -538,7 +514,7 @@ update dbo.RegistrationSettingsCacheGeneration set Generation=0,ModifiedAtUtc=SY
             Assert.IsNull(repository.ResolvePreviewContext(liveHash));
             Assert.IsNull(repository.GetPreviewLink(unrelatedLinkId)!.RevokedAtUtc);
             Assert.AreEqual(0L, Scalar<long>("select Revision from dbo.RegistrationSettingDrafts where DraftId=" + unrelatedDraftId));
-            Execute(connection, migration, 30);
+            Execute(connection, convergence, 30);
             Assert.AreEqual(1L, Scalar<long>("select Revision from dbo.RegistrationSettingDrafts where DraftId=" + activeDraftId));
         }
 
@@ -588,11 +564,11 @@ update dbo.RegistrationSettingsCacheGeneration set Generation=0,ModifiedAtUtc=SY
     }
 
     [DataTestMethod]
-    [DataRow("007-remove-legacy-header-image-url.sql", "header_image_url", "migration-007-no-revision")]
-    [DataRow("008-migrate-legacy-registration-field-settings.sql", "legal_name_checkbox_label", "migration-008-no-revision")]
-    public void LegacyDraftMigrations_DoNotRequireRevisionColumn(string migrationFile, string legacyKey, string formCode)
+    [DataRow("header_image_url", "convergence-no-revision-header")]
+    [DataRow("legal_name_checkbox_label", "convergence-no-revision-legacy-key")]
+    public void LegacyDraftState_ConvergesWhenRevisionAndGenerationColumnsAreMissing(string legacyKey, string formCode)
     {
-        var migration = File.ReadAllText(Path.Combine(RepositoryRoot(), "database", migrationFile));
+        var convergence = ConvergenceScript();
         using (var connection = Open())
         {
             if (legacyKey == "header_image_url")
@@ -609,28 +585,32 @@ update dbo.RegistrationSettingsCacheGeneration set Generation=0,ModifiedAtUtc=SY
 
         try
         {
-            DropDraftRevisionColumn();
+            DropRevisionGenerationColumns();
             using var connection = Open();
-            Execute(connection, migration, 30);
+            Execute(connection, convergence, 30);
             Assert.AreEqual(1, Scalar<int>("select count(*) from dbo.RegistrationSettingPreviewLinks where PreviewLinkId=" + linkId + " and RevokedAtUtc is not null"));
-            Assert.AreEqual(0, Scalar<int>("select count(*) from sys.columns where object_id=object_id('dbo.RegistrationSettingDrafts') and name='Revision'"));
+            Assert.AreEqual(1, Scalar<int>("select count(*) from sys.columns where object_id=object_id('dbo.RegistrationSettingDrafts') and name='Revision' and is_nullable=0"));
         }
         finally
         {
-            RestoreDraftRevisionColumn();
+            RestoreRevisionGenerationColumns();
         }
     }
 
     [TestMethod]
-    public void Migration012_RevokesLegacyLiveLinksInsteadOfBackfillingGeneration()
+    public void Convergence_RevokesLegacyLiveLinksAndPreservesHistoricalLinks()
     {
-        var migration = File.ReadAllText(Path.Combine(RepositoryRoot(), "database", "012-draft-revision-and-preview-generation.sql"));
+        var convergence = ConvergenceScript();
         var draftId = SeedActiveDraft(0, First, "draft");
+        var currentGeneration = repository.GetCacheGeneration();
         var liveHash = Enumerable.Repeat((byte)69, 32).ToArray();
         var safeHash = Enumerable.Repeat((byte)70, 32).ToArray();
+        var currentHash = Enumerable.Repeat((byte)72, 32).ToArray();
         var liveLinkId = SeedPreviewLink(draftId, liveHash, clock.GetUtcNow().UtcDateTime.AddHours(1),
             allowLiveSubmission: true, liveSettingsGeneration: null);
         var safeLinkId = SeedPreviewLink(draftId, safeHash, clock.GetUtcNow().UtcDateTime.AddHours(1));
+        var currentLinkId = SeedPreviewLink(draftId, currentHash, clock.GetUtcNow().UtcDateTime.AddHours(1),
+            allowLiveSubmission: true, liveSettingsGeneration: currentGeneration);
         var historicalDraftId = SeedDraft(0, "Committed", First, "historical");
         var historicalHash = Enumerable.Repeat((byte)71, 32).ToArray();
         var historicalLinkId = SeedPreviewLink(historicalDraftId, historicalHash, clock.GetUtcNow().UtcDateTime.AddHours(1),
@@ -638,18 +618,45 @@ update dbo.RegistrationSettingsCacheGeneration set Generation=0,ModifiedAtUtc=SY
 
         using (var connection = Open())
         {
-            Execute(connection, migration, 30);
-            Assert.IsNotNull(repository.GetPreviewLink(liveLinkId)!.RevokedAtUtc);
-            Assert.IsNull(repository.GetPreviewLink(liveLinkId)!.LiveSettingsGeneration);
+            Execute(connection, convergence, 30);
+            var legacyLiveLink = repository.GetPreviewLink(liveLinkId)!;
+            Assert.IsNotNull(legacyLiveLink.RevokedAtUtc);
+            Assert.IsNull(legacyLiveLink.LiveSettingsGeneration);
             Assert.IsNull(repository.ResolvePreviewContext(liveHash));
-            Assert.IsNull(repository.GetPreviewLink(safeLinkId)!.RevokedAtUtc);
-            Assert.IsNotNull(repository.ResolvePreviewContext(safeHash));
-            Assert.IsNull(repository.GetPreviewLink(historicalLinkId)!.RevokedAtUtc);
-            Assert.IsNull(repository.GetPreviewLink(historicalLinkId)!.LiveSettingsGeneration);
+            Assert.IsNull(repository.TryAdmitLivePreviewSubmission(liveLinkId, currentGeneration));
+            Assert.IsFalse(repository.IsLivePreviewCurrent(liveLinkId, currentGeneration));
 
-            Execute(connection, migration, 30);
-            Assert.IsNotNull(repository.GetPreviewLink(liveLinkId)!.RevokedAtUtc);
-            Assert.IsNull(repository.GetPreviewLink(liveLinkId)!.LiveSettingsGeneration);
+            var safeLink = repository.GetPreviewLink(safeLinkId)!;
+            Assert.IsNull(safeLink.RevokedAtUtc);
+            Assert.IsNull(safeLink.LiveSettingsGeneration);
+            Assert.IsNotNull(repository.ResolvePreviewContext(safeHash));
+            Assert.AreEqual(currentGeneration, repository.ResolvePreviewContext(safeHash)!.CacheGeneration);
+
+            var currentLiveLink = repository.GetPreviewLink(currentLinkId)!;
+            Assert.IsNull(currentLiveLink.RevokedAtUtc);
+            Assert.AreEqual(currentGeneration, currentLiveLink.LiveSettingsGeneration);
+            Assert.IsNotNull(repository.ResolvePreviewContext(currentHash));
+            using (var admission = repository.TryAdmitLivePreviewSubmission(currentLinkId, currentGeneration))
+                Assert.IsNotNull(admission);
+
+            var historicalLink = repository.GetPreviewLink(historicalLinkId)!;
+            Assert.IsNull(historicalLink.RevokedAtUtc);
+            Assert.IsNull(historicalLink.LiveSettingsGeneration);
+            Assert.AreEqual(1, ReadChanges(historicalDraftId).Count);
+
+            var afterFirstConvergence = LogicalSnapshot();
+            var currentLinkAfterFirstConvergence = repository.GetPreviewLink(currentLinkId)!;
+
+            Execute(connection, convergence, 30);
+            Assert.AreEqual(afterFirstConvergence, LogicalSnapshot());
+
+            var currentLinkAfterRepeat = repository.GetPreviewLink(currentLinkId)!;
+            Assert.AreEqual(currentLinkAfterFirstConvergence.LiveSettingsGeneration, currentLinkAfterRepeat.LiveSettingsGeneration);
+            Assert.AreEqual(currentLinkAfterFirstConvergence.RevokedAtUtc, currentLinkAfterRepeat.RevokedAtUtc);
+            CollectionAssert.AreEqual(currentLinkAfterFirstConvergence.TokenHash, currentLinkAfterRepeat.TokenHash);
+            Assert.IsNotNull(repository.ResolvePreviewContext(currentHash));
+            using (var admission = repository.TryAdmitLivePreviewSubmission(currentLinkId, currentGeneration))
+                Assert.IsNotNull(admission);
             Assert.IsNull(repository.GetPreviewLink(historicalLinkId)!.RevokedAtUtc);
         }
     }
@@ -2519,7 +2526,7 @@ values(@organizationId,@settingKey,@formCode,@value);", parameters: command =>
     {
         using var connection = Open();
         Execute(connection, @"insert dbo.RegistrationSettingDraftChanges(DraftId,SettingKey,Operation,Value,ModifiedBy)
-values(@draftId,@settingKey,@operation,@value,'migration-test')", parameters: command =>
+values(@draftId,@settingKey,@operation,@value,'convergence-test')", parameters: command =>
         {
             command.Parameters.AddWithValue("@draftId", draftId);
             command.Parameters.AddWithValue("@settingKey", settingKey);
@@ -2576,7 +2583,7 @@ output inserted.PreviewLinkId values(@draftId,@hash,@allowLiveSubmission,101,@li
         return (long)command.ExecuteScalar()!;
     }
 
-    private void DropDraftRevisionColumn()
+    private void DropRevisionGenerationColumns()
     {
         using var connection = Open();
         Execute(connection, @"
@@ -2591,16 +2598,20 @@ begin
     )
         alter table dbo.RegistrationSettingDrafts drop constraint DF_RSD_Revision;
     alter table dbo.RegistrationSettingDrafts drop column Revision;
-end");
+end;
+if col_length('dbo.RegistrationSettingPreviewLinks', 'LiveSettingsGeneration') is not null
+    alter table dbo.RegistrationSettingPreviewLinks drop column LiveSettingsGeneration;");
     }
 
-    private void RestoreDraftRevisionColumn()
+    private void RestoreRevisionGenerationColumns()
     {
         using var connection = Open();
         Execute(connection, @"
 if col_length('dbo.RegistrationSettingDrafts', 'Revision') is null
     alter table dbo.RegistrationSettingDrafts
-        add Revision bigint not null constraint DF_RSD_Revision default 0 with values;");
+        add Revision bigint not null constraint DF_RSD_Revision default 0 with values;
+if col_length('dbo.RegistrationSettingPreviewLinks', 'LiveSettingsGeneration') is null
+    alter table dbo.RegistrationSettingPreviewLinks add LiveSettingsGeneration bigint null;");
     }
 
     private long CreatePreviewLinkAtCurrentRevision(long draftId, byte[] tokenHash, bool allowLiveSubmission,
@@ -2689,6 +2700,29 @@ values(101,@formCode,@displayName,'seed',@modifiedAtUtc,'seed',@modifiedAtUtc,'s
     private DateTime ReadPreviewExpiration(long previewLinkId) => QuerySingle("select ExpiresAtUtc from dbo.RegistrationSettingPreviewLinks where PreviewLinkId=@id",
         command => command.Parameters.AddWithValue("@id", previewLinkId), reader => reader.GetDateTime(0));
     private void AssertAuditCount(string eventType, int expected) => Assert.AreEqual(expected, ReadAudits().Count(row => row.EventType == eventType));
+    private string LogicalSnapshot()
+    {
+        var rows = new List<string>
+        {
+            Scalar<int>("select count(*) from dbo.RegistrationFormCodeMetadata").ToString(),
+            Scalar<int>("select count(*) from dbo.RegistrationSettingScopeVersions").ToString(),
+            Scalar<int>("select count(*) from dbo.RegistrationSettingDrafts").ToString(),
+            Scalar<int>("select count(*) from dbo.RegistrationSettingDraftChanges").ToString(),
+            Scalar<int>("select count(*) from dbo.RegistrationSettingPreviewLinks").ToString(),
+            Scalar<int>("select count(*) from dbo.RegistrationSettingAuditEvents").ToString(),
+            Scalar<int>("select count(*) from dbo.RegistrationFormAssets").ToString(),
+            Scalar<long>("select Generation from dbo.RegistrationSettingsCacheGeneration where Id=1").ToString()
+        };
+        rows.AddRange(Query("select Setting from dbo.RegistrationFormSettingTypes order by Setting", null, reader => reader.GetString(0)));
+        rows.AddRange(Query("select concat(OrganizationID,'|',Setting,'|',FormCode,'|',coalesce(Value,'<null>')) from dbo.RegistrationFormSettings order by OrganizationID,Setting,FormCode", null, reader => reader.GetString(0)));
+        rows.AddRange(Query("select DraftId,SettingKey,Operation,coalesce(Value,'<null>') from dbo.RegistrationSettingDraftChanges order by DraftId,SettingKey", null, reader =>
+            $"{reader.GetInt64(0)}|{reader.GetString(1)}|{reader.GetString(2)}|{reader.GetString(3)}"));
+        rows.AddRange(Query("select DraftId,Revision,Status from dbo.RegistrationSettingDrafts order by DraftId", null, reader =>
+            $"{reader.GetInt64(0)}|{reader.GetInt64(1)}|{reader.GetString(2)}"));
+        rows.AddRange(Query("select PreviewLinkId,AllowLiveSubmission,coalesce(LiveSettingsGeneration,-1),case when RevokedAtUtc is null then 0 else 1 end from dbo.RegistrationSettingPreviewLinks order by PreviewLinkId", null, reader =>
+            $"{reader.GetInt64(0)}|{reader.GetBoolean(1)}|{reader.GetInt64(2)}|{reader.GetInt32(3)}"));
+        return string.Join("\n", rows);
+    }
     private void AssertNoDraftChangesOrSuccessAudits()
     {
         Assert.AreEqual(0, CountActiveDrafts());
@@ -2702,7 +2736,7 @@ values(101,@formCode,@displayName,'seed',@modifiedAtUtc,'seed',@modifiedAtUtc,'s
     private static void DeployExistingRegistrationSettingsSchema(SqlConnection connection)
     {
         // These tables belong to the pre-existing clcdb schema. The test fixture
-        // creates the smallest faithful version so the migration and repository
+        // creates the smallest faithful version so the convergence script and repository
         // exercise the production FK rather than a mocked write path.
         Execute(connection, @"
 if object_id('dbo.RegistrationFormSettingTypes','U') is null
@@ -2772,6 +2806,8 @@ end;");
         command.ExecuteNonQuery();
     }
     private static string RepositoryRoot() => Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../../"));
+    private static string ConvergenceScript() => File.ReadAllText(
+        Path.Combine(RepositoryRoot(), "database", "settings-administration.sql"));
     private static void DropDatabaseCore(string configured)
     {
         if (databaseName is null) return;
