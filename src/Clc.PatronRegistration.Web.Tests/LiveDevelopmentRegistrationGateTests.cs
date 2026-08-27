@@ -16,6 +16,7 @@ using Clc.Polaris.Api.Models;
 using Clc.Rest;
 using Clc.Rest.Models;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Controllers;
 using Microsoft.AspNetCore.Mvc.Infrastructure;
@@ -416,9 +417,23 @@ public sealed record LiveDevelopmentConfiguration(
             "polaris-dev.clcohio.org"
         };
 
-    public static LiveDevelopmentConfiguration FromEnvironment()
+    public static LiveDevelopmentConfiguration FromEnvironment(
+        IReadOnlyCollection<string>? selectedScenarios = null,
+        IReadOnlyDictionary<string, string?>? environment = null)
     {
-        var enabled = Environment.GetEnvironmentVariable("PATRON_REGISTRATION_LIVE_TESTS");
+        string? Get(string name) => environment is null
+            ? Environment.GetEnvironmentVariable(name)
+            : environment.TryGetValue(name, out var value) ? value : null;
+
+        string Required(string name) => string.IsNullOrWhiteSpace(Get(name))
+            ? throw new InvalidOperationException($"Missing required live configuration {name}; no patron mutation was attempted.")
+            : Get(name)!;
+
+        int Positive(string name) => int.TryParse(Required(name), out var parsed) && parsed > 0
+            ? parsed
+            : throw new InvalidOperationException($"Live configuration {name} must be positive; no patron mutation was attempted.");
+
+        var enabled = Get("PATRON_REGISTRATION_LIVE_TESTS");
         if (!string.Equals(enabled, "true", StringComparison.OrdinalIgnoreCase))
         {
             throw new InvalidOperationException(
@@ -432,12 +447,17 @@ public sealed record LiveDevelopmentConfiguration(
                 "The configured Polaris endpoint is not the committed DEVELOPMENT allowlist; no patron mutation was attempted.");
         }
 
-        var runAttempt = Environment.GetEnvironmentVariable("GITHUB_RUN_ATTEMPT");
+        var runAttempt = Get("GITHUB_RUN_ATTEMPT");
         if (int.TryParse(runAttempt, out var attempt) && attempt > 1)
         {
             throw new InvalidOperationException(
                 "A workflow rerun is fail-closed because an earlier attempt may have created patrons; inspect the public manifest before recovery.");
         }
+
+        var selected = (selectedScenarios ?? LiveDevelopmentScenarioSelector.AllScenarioNames)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var requiresStandardPatronCode = selected.Contains("standard") || selected.Contains("school");
+        var requiresEcardPatronCode = selected.Contains("ecard");
 
         return new LiveDevelopmentConfiguration(
             host,
@@ -446,13 +466,18 @@ public sealed record LiveDevelopmentConfiguration(
             Positive("PATRON_REGISTRATION_PAPI_ORGANIZATION_ID"),
             Positive("PATRON_REGISTRATION_PAPI_LIBRARY_ID"),
             Positive("PATRON_REGISTRATION_PAPI_BRANCH_ID"),
-            Positive("PATRON_REGISTRATION_PAPI_PATRON_CODE_ID"),
+            requiresStandardPatronCode ? Positive("PATRON_REGISTRATION_PAPI_PATRON_CODE_ID") : 0,
             Positive("PATRON_REGISTRATION_PAPI_LOGON_USER_ID"),
-            Positive("PATRON_REGISTRATION_PAPI_ECARD_PATRON_CODE_ID"),
-            Positive("PATRON_REGISTRATION_PAPI_STUDENT_PATRON_CODE_ID"),
-            Positive("PATRON_REGISTRATION_PAPI_TEACHER_PATRON_CODE_ID"),
-            Required("PATRON_REGISTRATION_PAPI_SCHOOL"),
-            Environment.GetEnvironmentVariable("PATRON_REGISTRATION_LIVE_MANIFEST") ?? "live-development-results.json");
+            requiresEcardPatronCode ? Positive("PATRON_REGISTRATION_PAPI_ECARD_PATRON_CODE_ID") : 0,
+            // The selected live matrix deliberately submits neither a student nor a
+            // teacher. Their patron-code settings are therefore not operational
+            // requirements for this gate.
+            0,
+            0,
+            string.IsNullOrWhiteSpace(Get("PATRON_REGISTRATION_PAPI_SCHOOL"))
+                ? "School"
+                : Get("PATRON_REGISTRATION_PAPI_SCHOOL")!,
+            Get("PATRON_REGISTRATION_LIVE_MANIFEST") ?? "live-development-results.json");
     }
 
     public static bool IsApprovedDevelopmentHost(string value)
@@ -470,19 +495,6 @@ public sealed record LiveDevelopmentConfiguration(
 
         return ApprovedDevelopmentHosts.Contains(uri.Host);
     }
-
-    private static string Required(string name) =>
-        string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(name))
-            ? throw new InvalidOperationException($"Missing required live configuration {name}; no patron mutation was attempted.")
-            : Environment.GetEnvironmentVariable(name)!;
-
-    private static int Positive(string name)
-    {
-        var value = Required(name);
-        return int.TryParse(value, out var parsed) && parsed > 0
-            ? parsed
-            : throw new InvalidOperationException($"Live configuration {name} must be positive; no patron mutation was attempted.");
-    }
 }
 
 [TestClass]
@@ -493,9 +505,9 @@ public sealed class LiveDevelopmentRegistrationGateTests
     [TestCategory("LiveDevelopment")]
     public void SelectedScenarios_AreAcceptedByDevelopmentPolaris()
     {
-        var configuration = LiveDevelopmentConfiguration.FromEnvironment();
         var selectedNames = LiveDevelopmentScenarioSelector.Select(
             Environment.GetEnvironmentVariable("PATRON_REGISTRATION_LIVE_SCENARIOS"));
+        var configuration = LiveDevelopmentConfiguration.FromEnvironment(selectedNames);
         var identity = LiveIdentityFactory.FromEnvironment();
         var realPapi = new PapiClient(new PapiSettings
         {
@@ -526,6 +538,135 @@ public sealed class LiveDevelopmentRegistrationGateTests
         var definitions = selectedNames.Select(name => harness.BuildScenario(name, identity)).ToArray();
         var result = LiveDevelopmentGateRunner.Run(definitions, identity, store);
         Assert.IsTrue(result.Succeeded, result.SafeSummary());
+    }
+
+    [TestMethod]
+    public void LiveSettings_AreScenarioSpecific()
+    {
+        var configuration = SyntheticConfiguration();
+        using var store = new LiveAttemptStore();
+        var papi = new Mock<IPapiClient>();
+        using var harness = LiveSubmissionHarness.Create(configuration, papi.Object, store);
+
+        Assert.IsTrue(string.IsNullOrWhiteSpace(harness.SettingsFor("standard").SchoolInfoFormat));
+        Assert.AreEqual("uapl", harness.SettingsFor("school").SchoolInfoFormat);
+        Assert.AreEqual("uapl", harness.SettingsFor("ecard").SchoolInfoFormat);
+        Assert.AreNotEqual(
+            harness.SettingsFor("standard").SchoolInfoFormat,
+            harness.SettingsFor("school").SchoolInfoFormat);
+    }
+
+    [TestMethod]
+    public void SchoolScenario_EmptyUser1PassesCompletePreflightWithoutCreate()
+    {
+        var configuration = SyntheticConfiguration();
+        var papi = new Mock<IPapiClient>();
+        using var store = new LiveAttemptStore();
+        using var harness = LiveSubmissionHarness.Create(configuration, papi.Object, store);
+        var identity = new LiveIdentity("v1.2.3", new string('a', 40), "run", 1, "invocation");
+        var scenario = harness.BuildScenario("school", identity);
+
+        var preflightPassed = scenario.Preflight();
+        papi.Verify(value => value.PatronRegistrationCreate(It.IsAny<PatronRegistrationParams>()), Times.Never);
+        Assert.IsTrue(preflightPassed);
+    }
+
+    [TestMethod]
+    public void EcardScenario_UsesUaplAndClearsUser1DuringExecution()
+    {
+        var configuration = SyntheticConfiguration();
+        var papi = new Mock<IPapiClient>();
+        papi.Setup(value => value.PatronRegistrationCreate(It.IsAny<PatronRegistrationParams>()))
+            .Returns((PatronRegistrationParams parameters) => new RestResponse<PatronRegistrationCreateResult>
+            {
+                Data = new PatronRegistrationCreateResult
+                {
+                    PAPIErrorCode = 0,
+                    PatronID = 123,
+                    Barcode = parameters.Barcode
+                }
+            });
+        using var store = new LiveAttemptStore();
+        using var harness = LiveSubmissionHarness.Create(configuration, papi.Object, store);
+        var identity = new LiveIdentity("v1.2.3", new string('a', 40), "run", 1, "invocation");
+        var scenario = harness.BuildScenario("ecard", identity);
+
+        var result = LiveDevelopmentGateRunner.Run([scenario], identity, store);
+
+        Assert.IsTrue(result.Succeeded, result.SafeSummary());
+        Assert.IsNotNull(harness.LastParameters);
+        Assert.AreEqual(string.Empty, harness.LastParameters!.User1);
+        papi.Verify(value => value.PatronRegistrationCreate(It.IsAny<PatronRegistrationParams>()), Times.Once);
+    }
+
+    [TestMethod]
+    public void LaterBindingFailure_PreventsEveryLiveCreate()
+    {
+        var configuration = SyntheticConfiguration();
+        var papi = new Mock<IPapiClient>();
+        using var store = new LiveAttemptStore();
+        using var harness = LiveSubmissionHarness.Create(
+            configuration,
+            papi.Object,
+            store,
+            (name, token) =>
+            {
+                var values = SyntheticFormValues(configuration.BranchId, name, token);
+                if (name == "school")
+                {
+                    values[nameof(Registration.DeliveryOptionId)] = "not-a-number";
+                }
+                return values;
+            });
+        var identity = new LiveIdentity("v1.2.3", new string('a', 40), "run", 1, "invocation");
+        LiveScenarioDefinition[] scenarios = [
+            harness.BuildScenario("standard", identity),
+            harness.BuildScenario("school", identity),
+            harness.BuildScenario("ecard", identity)];
+
+        Assert.IsFalse(scenarios[1].Preflight(),
+            string.Join(" | ", harness.ModelStateFor("school").SelectMany(entry =>
+                entry.Value.Errors.Select(error => $"{entry.Key}={error.ErrorMessage}"))));
+        var result = LiveDevelopmentGateRunner.Run(scenarios, identity, store);
+
+        Assert.IsFalse(result.Succeeded);
+        Assert.AreEqual(0, result.Results.Count);
+        papi.Verify(value => value.PatronRegistrationCreate(It.IsAny<PatronRegistrationParams>()), Times.Never);
+    }
+
+    [TestMethod]
+    public void LaterSelectedBranchValidationFailure_PreventsEveryLiveCreate()
+    {
+        var configuration = SyntheticConfiguration();
+        var papi = new Mock<IPapiClient>();
+        using var store = new LiveAttemptStore();
+        using var harness = LiveSubmissionHarness.Create(
+            configuration,
+            papi.Object,
+            store,
+            configureSettings: (name, settings) =>
+            {
+                if (name == "school")
+                {
+                    settings.SetupGet(value => value.DisplayResponsiblePersonField).Returns(true);
+                    settings.Setup(value => value.GetFieldRequired(nameof(Registration.User5))).Returns(true);
+                }
+            });
+        Assert.IsTrue(harness.SettingsFor("school").GetFieldRequired(nameof(Registration.User5)));
+        var identity = new LiveIdentity("v1.2.3", new string('a', 40), "run", 1, "invocation");
+        LiveScenarioDefinition[] scenarios = [
+            harness.BuildScenario("standard", identity),
+            harness.BuildScenario("school", identity),
+            harness.BuildScenario("ecard", identity)];
+
+        Assert.IsFalse(scenarios[1].Preflight(),
+            string.Join(" | ", harness.ModelStateFor("school").SelectMany(entry =>
+                entry.Value.Errors.Select(error => $"{entry.Key}={error.ErrorMessage}"))));
+        var result = LiveDevelopmentGateRunner.Run(scenarios, identity, store);
+
+        Assert.IsFalse(result.Succeeded);
+        Assert.AreEqual(0, result.Results.Count);
+        papi.Verify(value => value.PatronRegistrationCreate(It.IsAny<PatronRegistrationParams>()), Times.Never);
     }
 
     [TestMethod]
@@ -615,51 +756,103 @@ public sealed class LiveDevelopmentRegistrationGateTests
         }
     }
 
+    private static LiveDevelopmentConfiguration SyntheticConfiguration() =>
+        new(
+            "https://polaris-development.clcohio.org",
+            "synthetic-access-id",
+            "synthetic-access-key",
+            OrganizationId: 1,
+            LibraryId: 2,
+            BranchId: 3,
+            PatronCodeId: 4,
+            LogonUserId: 5,
+            EcardPatronCodeId: 6,
+            StudentPatronCodeId: 0,
+            TeacherPatronCodeId: 0,
+            School: "Synthetic School",
+            ManifestPath: "");
+
+    private static Dictionary<string, string> SyntheticFormValues(int branchId, string scenario, string token) =>
+        new(StringComparer.OrdinalIgnoreCase)
+        {
+            [nameof(Registration.PatronBranchID)] = branchId.ToString(),
+            [nameof(Registration.NameFirst)] = "CI",
+            [nameof(Registration.NameLast)] = $"{token}{scenario.ToUpperInvariant()}",
+            [nameof(Registration.Birthdate)] = "1990-01-01",
+            [nameof(Registration.DeliveryOptionId)] = "1",
+            [nameof(Registration.StreetOne)] = "1 Main St",
+            [nameof(Registration.City)] = "Columbus",
+            [nameof(Registration.State)] = "OH",
+            [nameof(Registration.PostalCode)] = "43215",
+            [nameof(Registration.EmailAddress)] = $"{token.ToLowerInvariant()}@example.com",
+            [nameof(Registration.Password)] = "Synthetic123",
+            [nameof(Registration.Password2)] = "Synthetic123",
+            [nameof(Registration.IsStudent)] = bool.FalseString,
+            [nameof(Registration.IsTeacher)] = bool.FalseString,
+            [nameof(Registration.IsECard)] = (scenario == "ecard").ToString(),
+            [nameof(Registration.User1)] = scenario == "ecard" ? "Synthetic School" : string.Empty
+        };
+
     private sealed class LiveSubmissionHarness : IDisposable
     {
         private readonly ServiceProvider provider;
         private readonly DefaultHttpContext httpContext;
-        private readonly ISettingProvider settings;
         internal readonly Mock<IDbHelper> db;
-        private readonly Mock<IMelissaRestClient> melissa;
-        private readonly Mock<IEmailSender> email;
+        private readonly Mock<IMelissaClientFactory> melissaFactory;
+        private readonly Mock<IEmailSenderFactory> emailFactory;
         private readonly Mock<IPapiClient> forwardingPapi;
         private readonly LiveDevelopmentConfiguration configuration;
         private readonly LiveAttemptStore attemptStore;
+        private readonly Func<string, string, Dictionary<string, string>>? formValuesFactory;
+        private readonly Action<string, Mock<ISettingProvider>>? configureSettings;
+        private readonly Dictionary<string, ScenarioContext> scenarioContexts = new(StringComparer.Ordinal);
         private PatronRegistrationParams? lastParameters;
         private IRestResponse<PatronRegistrationCreateResult>? lastResponse;
         private LivePublicResult? currentAttempt;
         private LivePublicResult? confirmedCreateRecord;
         private bool createInvoked;
 
+        private sealed record ScenarioContext(
+            ISettingProvider Settings,
+            RegistrationController Controller);
+
+        private sealed record PreparedScenario(
+            ScenarioContext Context,
+            Registration Registration,
+            string Token);
+
         private LiveSubmissionHarness(
             ServiceProvider provider,
             DefaultHttpContext httpContext,
-            ISettingProvider settings,
             Mock<IDbHelper> db,
-            Mock<IMelissaRestClient> melissa,
-            Mock<IEmailSender> email,
+            Mock<IMelissaClientFactory> melissaFactory,
+            Mock<IEmailSenderFactory> emailFactory,
             Mock<IPapiClient> forwardingPapi,
             LiveDevelopmentConfiguration configuration,
-            LiveAttemptStore attemptStore)
+            LiveAttemptStore attemptStore,
+            Func<string, string, Dictionary<string, string>>? formValuesFactory,
+            Action<string, Mock<ISettingProvider>>? configureSettings)
         {
             this.provider = provider;
             this.httpContext = httpContext;
-            this.settings = settings;
             this.db = db;
-            this.melissa = melissa;
-            this.email = email;
+            this.melissaFactory = melissaFactory;
+            this.emailFactory = emailFactory;
             this.forwardingPapi = forwardingPapi;
             this.configuration = configuration;
             this.attemptStore = attemptStore;
+            this.formValuesFactory = formValuesFactory;
+            this.configureSettings = configureSettings;
         }
 
         public static LiveSubmissionHarness Create(
             LiveDevelopmentConfiguration configuration,
             IPapiClient realPapi,
-            LiveAttemptStore attemptStore)
+            LiveAttemptStore attemptStore,
+            Func<string, string, Dictionary<string, string>>? formValuesFactory = null,
+            Action<string, Mock<ISettingProvider>>? configureSettings = null)
         {
-            var settings = LiveSettings(configuration).Object;
+            var settings = LiveSettings(configuration, "standard").Object;
             var db = new Mock<IDbHelper>();
             db.Setup(value => value.CheckPatronIsDuplicate(
                 It.IsAny<int>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<DateTime>()))
@@ -689,27 +882,9 @@ public sealed class LiveDevelopmentRegistrationGateTests
             var httpContext = new DefaultHttpContext { RequestServices = provider };
             provider.GetRequiredService<IHttpContextAccessor>().HttpContext = httpContext;
 
-            var scopeResolver = new Mock<IRegistrationScopeResolver>();
-            scopeResolver.Setup(value => value.ResolveForSubmission(
-                    It.IsAny<HttpContext>(), settings, It.IsAny<int>()))
-                .Returns(new RegistrationScopeResolution(true, settings));
-
-            var controller = new RegistrationController(
-                forwardingPapi.Object,
-                db.Object,
-                settings,
-                emailFactory.Object,
-                melissaFactory.Object,
-                provider.GetRequiredService<IObjectModelValidator>(),
-                scopeResolver.Object)
-            {
-                ControllerContext = new ControllerContext { HttpContext = httpContext }
-            };
-
-            var harness = new LiveSubmissionHarness(provider, httpContext, settings, db, melissa, email, forwardingPapi, configuration, attemptStore)
-            {
-                Controller = controller
-            };
+            var harness = new LiveSubmissionHarness(
+                provider, httpContext, db, melissaFactory, emailFactory, forwardingPapi,
+                configuration, attemptStore, formValuesFactory, configureSettings);
             forwardingPapi.Setup(value => value.PatronRegistrationCreate(It.IsAny<PatronRegistrationParams>()))
                 .Returns((PatronRegistrationParams parameters) =>
                 {
@@ -736,58 +911,49 @@ public sealed class LiveDevelopmentRegistrationGateTests
             return harness;
         }
 
-        private RegistrationController Controller { get; init; } = null!;
+        internal ISettingProvider SettingsFor(string name) => GetScenarioContext(name).Settings;
+
+        internal PatronRegistrationParams? LastParameters => lastParameters;
+
+        internal ModelStateDictionary ModelStateFor(string name) => GetScenarioContext(name).Controller.ModelState;
 
         public LiveScenarioDefinition BuildScenario(string name, LiveIdentity identity)
         {
             var token = LiveIdentityFactory.SyntheticToken(identity, name);
+            var context = GetScenarioContext(name);
+            PreparedScenario? prepared = null;
             return new LiveScenarioDefinition(
                 name,
-                () => ScenarioPreflight(name, token),
-                marker => Submit(name, marker),
+                () => (prepared = PrepareScenario(context, name, token)) is not null,
+                marker => Submit(name, marker, prepared),
                 outcome => outcome.PatronId > 0 && !string.IsNullOrWhiteSpace(outcome.Barcode) &&
                     outcome.FinalizationSucceeded &&
                     lastParameters?.NameLast.StartsWith(token, StringComparison.Ordinal) == true);
         }
 
-        private bool ScenarioPreflight(string name, string token)
+        private PreparedScenario? PrepareScenario(ScenarioContext context, string name, string token)
         {
             if (!Regex.IsMatch(token, "^[A-F0-9]{12}$", RegexOptions.CultureInvariant) || token.Length + name.Length > 30)
             {
-                return false;
+                return null;
             }
 
-            var values = BuildFormValues(name, token);
-            var required = new[]
+            if (!ScenarioSettingsAreValid(name, context.Settings))
             {
-                nameof(Registration.PatronBranchID), nameof(Registration.NameFirst),
-                nameof(Registration.NameLast), nameof(Registration.Birthdate),
-                nameof(Registration.DeliveryOptionId), nameof(Registration.StreetOne),
-                nameof(Registration.City), nameof(Registration.State),
-                nameof(Registration.PostalCode), nameof(Registration.EmailAddress),
-                nameof(Registration.Password), nameof(Registration.Password2)
-            };
-            if (required.Any(key => !values.TryGetValue(key, out var value) || string.IsNullOrWhiteSpace(value)))
-            {
-                return false;
+                return null;
             }
 
-            return name switch
+            var registration = Bind(context, BuildFormValues(name, token));
+            if (registration is null || !ScenarioInputIsValid(name, registration) ||
+                context.Controller.PrepareSubmission(registration) is not null)
             {
-                "standard" => settings.PatronCodeId > 0 && settings.RegistrationLogonUserId > 0 &&
-                    values[nameof(Registration.IsStudent)] == bool.FalseString &&
-                    values[nameof(Registration.IsTeacher)] == bool.FalseString,
-                "school" => settings.StudentPatronCodeId > 0 && !string.IsNullOrWhiteSpace(settings.SchoolInfoFormat) &&
-                    values[nameof(Registration.IsStudent)] == bool.FalseString &&
-                    values[nameof(Registration.IsTeacher)] == bool.FalseString &&
-                    string.IsNullOrWhiteSpace(values[nameof(Registration.User1)]),
-                "ecard" => settings.EcardPatronCodeId > 0 && !string.IsNullOrWhiteSpace(settings.EcardBarcodePrefix) &&
-                    values[nameof(Registration.IsECard)] == bool.TrueString,
-                _ => false
-            };
+                return null;
+            }
+
+            return new PreparedScenario(context, registration, token);
         }
 
-        private LiveCreateOutcome Submit(string scenario, LivePublicResult marker)
+        private LiveCreateOutcome Submit(string scenario, LivePublicResult marker, PreparedScenario? prepared)
         {
             // A successful previous scenario must never be reused if this scenario
             // exits before invoking PAPI.
@@ -796,56 +962,16 @@ public sealed class LiveDevelopmentRegistrationGateTests
             currentAttempt = null;
             confirmedCreateRecord = null;
             createInvoked = false;
-            var token = marker.SyntheticToken;
-            var values = BuildFormValues(scenario, token);
-            var body = string.Join("&", values.Select(pair =>
-                $"{Uri.EscapeDataString(pair.Key)}={Uri.EscapeDataString(pair.Value)}"));
-            var bytes = Encoding.UTF8.GetBytes(body);
-            httpContext.Request.Method = HttpMethods.Post;
-            httpContext.Request.ContentType = "application/x-www-form-urlencoded";
-            httpContext.Request.ContentLength = bytes.Length;
-            httpContext.Request.Body = new MemoryStream(bytes);
-
-            var actionDescriptor = provider.GetRequiredService<IActionDescriptorCollectionProvider>()
-                .ActionDescriptors.Items.OfType<ControllerActionDescriptor>()
-                .Single(descriptor => descriptor.ControllerTypeInfo == typeof(RegistrationController).GetTypeInfo() &&
-                    descriptor.ActionName == nameof(RegistrationController.Submit));
-            var parameter = actionDescriptor.Parameters.OfType<ControllerParameterDescriptor>().Single();
-            var actionContext = new ActionContext(
-                httpContext,
-                new Microsoft.AspNetCore.Routing.RouteData(),
-                actionDescriptor,
-                new ModelStateDictionary());
-            Controller.ControllerContext = new ControllerContext(actionContext);
-            var metadataProvider = provider.GetRequiredService<IModelMetadataProvider>();
-            var metadata = ((DefaultModelMetadataProvider)metadataProvider).GetMetadataForParameter(parameter.ParameterInfo);
-            var binder = provider.GetRequiredService<IModelBinderFactory>().CreateBinder(new ModelBinderFactoryContext
-            {
-                BindingInfo = parameter.BindingInfo,
-                Metadata = metadata,
-                CacheToken = parameter
-            });
-            var valueProvider = CompositeValueProvider.CreateAsync(
-                actionContext,
-                provider.GetRequiredService<IOptions<MvcOptions>>().Value.ValueProviderFactories).GetAwaiter().GetResult();
-            var bindingResult = provider.GetRequiredService<ParameterBinder>().BindModelAsync(
-                actionContext,
-                binder,
-                valueProvider,
-                parameter,
-                metadata,
-                null).GetAwaiter().GetResult();
-            if (!bindingResult.IsModelSet || !Controller.ModelState.IsValid)
+            if (prepared is null || !string.Equals(prepared.Token, marker.SyntheticToken, StringComparison.Ordinal))
             {
                 return LiveCreateOutcome.NotAttempted();
             }
 
-            var registration = (Registration)bindingResult.Model!;
             currentAttempt = marker;
             RegistrationAttempt attempt;
             try
             {
-                attempt = Controller.Submit(registration);
+                attempt = prepared.Context.Controller.ExecutePreparedSubmission(prepared.Registration);
             }
             catch
             {
@@ -859,6 +985,112 @@ public sealed class LiveDevelopmentRegistrationGateTests
 
             return ClassifyCreateResponse();
         }
+
+        private ScenarioContext GetScenarioContext(string name)
+        {
+            if (scenarioContexts.TryGetValue(name, out var existing))
+            {
+                return existing;
+            }
+
+            var settings = LiveSettings(configuration, name);
+            configureSettings?.Invoke(name, settings);
+            var scopeResolver = new Mock<IRegistrationScopeResolver>();
+            scopeResolver.Setup(value => value.ResolveForSubmission(
+                    It.IsAny<HttpContext>(), settings.Object, It.IsAny<int>()))
+                .Returns(new RegistrationScopeResolution(true, settings.Object));
+
+            var controller = new RegistrationController(
+                forwardingPapi.Object,
+                db.Object,
+                settings.Object,
+                emailFactory.Object,
+                melissaFactory.Object,
+                provider.GetRequiredService<IObjectModelValidator>(),
+                scopeResolver.Object)
+            {
+                ControllerContext = new ControllerContext { HttpContext = httpContext }
+            };
+
+            // Each scenario gets its own effective settings and resolver while
+            // sharing the harness's non-mutating MVC infrastructure.
+            var scenario = new ScenarioContext(settings.Object, controller);
+            scenarioContexts.Add(name, scenario);
+            return scenario;
+        }
+
+        private Registration? Bind(
+            ScenarioContext context,
+            IReadOnlyDictionary<string, string> values)
+        {
+            var body = string.Join("&", values.Select(pair =>
+                $"{Uri.EscapeDataString(pair.Key)}={Uri.EscapeDataString(pair.Value)}"));
+            var bytes = Encoding.UTF8.GetBytes(body);
+            httpContext.Request.Method = HttpMethods.Post;
+            httpContext.Request.ContentType = "application/x-www-form-urlencoded";
+            httpContext.Request.ContentLength = bytes.Length;
+            httpContext.Request.Body = new MemoryStream(bytes);
+            httpContext.Features.Set<IFormFeature>(new FormFeature(httpContext.Request));
+
+            var actionDescriptor = provider.GetRequiredService<IActionDescriptorCollectionProvider>()
+                .ActionDescriptors.Items.OfType<ControllerActionDescriptor>()
+                .Single(descriptor => descriptor.ControllerTypeInfo == typeof(RegistrationController).GetTypeInfo() &&
+                    descriptor.ActionName == nameof(RegistrationController.Submit));
+            var parameter = actionDescriptor.Parameters.OfType<ControllerParameterDescriptor>().Single();
+            var actionContext = new ActionContext(
+                httpContext,
+                new Microsoft.AspNetCore.Routing.RouteData(),
+                actionDescriptor,
+                new ModelStateDictionary());
+            context.Controller.ControllerContext = new ControllerContext(actionContext);
+            var metadataProvider = provider.GetRequiredService<IModelMetadataProvider>();
+            var metadata = ((DefaultModelMetadataProvider)metadataProvider)
+                .GetMetadataForParameter(parameter.ParameterInfo);
+            var binder = provider.GetRequiredService<IModelBinderFactory>().CreateBinder(new ModelBinderFactoryContext
+            {
+                BindingInfo = parameter.BindingInfo,
+                Metadata = metadata,
+                CacheToken = parameter
+            });
+            var valueProvider = CompositeValueProvider.CreateAsync(
+                actionContext,
+                provider.GetRequiredService<IOptions<MvcOptions>>().Value.ValueProviderFactories)
+                .GetAwaiter().GetResult();
+            var bindingResult = provider.GetRequiredService<ParameterBinder>().BindModelAsync(
+                actionContext,
+                binder,
+                valueProvider,
+                parameter,
+                metadata,
+                null).GetAwaiter().GetResult();
+
+            return bindingResult.IsModelSet &&
+                bindingResult.Model is Registration registration &&
+                context.Controller.ModelState.IsValid
+                    ? registration
+                    : null;
+        }
+
+        private static bool ScenarioSettingsAreValid(string name, ISettingProvider settings) => name switch
+        {
+            "standard" => string.IsNullOrWhiteSpace(settings.SchoolInfoFormat) &&
+                settings.PatronCodeId > 0 && settings.RegistrationLogonUserId > 0,
+            "school" => string.Equals(settings.SchoolInfoFormat, "uapl", StringComparison.OrdinalIgnoreCase) &&
+                settings.PatronCodeId > 0 && settings.RegistrationLogonUserId > 0,
+            "ecard" => string.Equals(settings.SchoolInfoFormat, "uapl", StringComparison.OrdinalIgnoreCase) &&
+                settings.EcardPatronCodeId > 0 && !string.IsNullOrWhiteSpace(settings.EcardBarcodePrefix) &&
+                settings.RegistrationLogonUserId > 0,
+            _ => false
+        };
+
+        private static bool ScenarioInputIsValid(string name, Registration registration) => name switch
+        {
+            "standard" => !registration.IsStudent && !registration.IsTeacher && !registration.IsECard,
+            "school" => !registration.IsStudent && !registration.IsTeacher && !registration.IsECard &&
+                string.IsNullOrWhiteSpace(registration.User1),
+            "ecard" => registration.IsECard && !string.IsNullOrWhiteSpace(registration.User1),
+            _ => false
+        };
 
         private bool HasConfirmedCreateResponse =>
             lastResponse?.Data is not null &&
@@ -902,6 +1134,7 @@ public sealed class LiveDevelopmentRegistrationGateTests
         }
 
         private Dictionary<string, string> BuildFormValues(string scenario, string token) =>
+            formValuesFactory?.Invoke(scenario, token) ??
             new(StringComparer.OrdinalIgnoreCase)
             {
                 [nameof(Registration.PatronBranchID)] = configuration.BranchId.ToString(),
@@ -919,10 +1152,12 @@ public sealed class LiveDevelopmentRegistrationGateTests
                 [nameof(Registration.IsStudent)] = bool.FalseString,
                 [nameof(Registration.IsTeacher)] = bool.FalseString,
                 [nameof(Registration.IsECard)] = (scenario == "ecard").ToString(),
-                [nameof(Registration.User1)] = string.Empty
+                [nameof(Registration.User1)] = scenario == "ecard" ? "Synthetic School" : string.Empty
             };
 
-        private static Mock<ISettingProvider> LiveSettings(LiveDevelopmentConfiguration configuration)
+        private static Mock<ISettingProvider> LiveSettings(
+            LiveDevelopmentConfiguration configuration,
+            string scenario)
         {
             var settings = new Mock<ISettingProvider>();
             settings.SetupGet(value => value.OrganizationId).Returns(configuration.OrganizationId);
@@ -932,7 +1167,8 @@ public sealed class LiveDevelopmentRegistrationGateTests
             settings.SetupGet(value => value.EcardPatronCodeId).Returns(configuration.EcardPatronCodeId);
             settings.SetupGet(value => value.StudentPatronCodeId).Returns(configuration.StudentPatronCodeId);
             settings.SetupGet(value => value.TeacherPatronCodeId).Returns(configuration.TeacherPatronCodeId);
-            settings.SetupGet(value => value.SchoolInfoFormat).Returns("uapl");
+            settings.SetupGet(value => value.SchoolInfoFormat)
+                .Returns(scenario is "school" or "ecard" ? "uapl" : string.Empty);
             settings.SetupGet(value => value.EcardBarcodePrefix).Returns("CI-");
             settings.SetupGet(value => value.PhoneNumberFormat).Returns("($1) $2-$3");
             settings.SetupGet(value => value.FormCode).Returns(string.Empty);
@@ -970,6 +1206,53 @@ public sealed class LiveDevelopmentRegistrationGateTests
 [TestClass]
 public sealed class LiveDevelopmentGateSafetyTests
 {
+    [TestMethod]
+    public void ConfigurationRequirements_FollowSelectedScenarios()
+    {
+        var standardEnvironment = BaseEnvironment();
+        var standard = LiveDevelopmentConfiguration.FromEnvironment(
+            ["standard"], standardEnvironment);
+
+        Assert.AreEqual(0, standard.EcardPatronCodeId);
+        Assert.AreEqual(0, standard.StudentPatronCodeId);
+        Assert.AreEqual(0, standard.TeacherPatronCodeId);
+        Assert.AreEqual("School", standard.School);
+
+        var school = LiveDevelopmentConfiguration.FromEnvironment(
+            ["school"], standardEnvironment);
+        Assert.AreEqual(0, school.StudentPatronCodeId);
+        Assert.AreEqual(0, school.TeacherPatronCodeId);
+
+        Assert.ThrowsException<InvalidOperationException>(() =>
+            LiveDevelopmentConfiguration.FromEnvironment(["ecard"], standardEnvironment));
+
+        standardEnvironment["PATRON_REGISTRATION_PAPI_ECARD_PATRON_CODE_ID"] = "22";
+        var ecard = LiveDevelopmentConfiguration.FromEnvironment(
+            ["ecard"], standardEnvironment);
+        Assert.AreEqual(0, ecard.PatronCodeId);
+        Assert.AreEqual(22, ecard.EcardPatronCodeId);
+    }
+
+    [TestMethod]
+    public void SelectedSpecializedIdentifierMissing_FailsBeforeHarnessCanCreate()
+    {
+        var environment = BaseEnvironment();
+        environment.Remove("PATRON_REGISTRATION_PAPI_PATRON_CODE_ID");
+
+        Assert.ThrowsException<InvalidOperationException>(() =>
+            LiveDevelopmentConfiguration.FromEnvironment(["standard"], environment));
+    }
+
+    [TestMethod]
+    public void Configuration_RerunGuardRemainsFailClosed()
+    {
+        var environment = BaseEnvironment();
+        environment["GITHUB_RUN_ATTEMPT"] = "2";
+
+        Assert.ThrowsException<InvalidOperationException>(() =>
+            LiveDevelopmentConfiguration.FromEnvironment(["standard"], environment));
+    }
+
     [TestMethod]
     public void FailedPreflight_PreventsEveryCreate()
     {
@@ -1161,6 +1444,19 @@ public sealed class LiveDevelopmentGateSafetyTests
         Assert.IsTrue(observed);
         store.Dispose();
     }
+
+    private static Dictionary<string, string?> BaseEnvironment() => new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["PATRON_REGISTRATION_LIVE_TESTS"] = "true",
+        ["PATRON_REGISTRATION_PAPI_HOST"] = "https://polaris-development.clcohio.org",
+        ["PATRON_REGISTRATION_PAPI_ACCESS_ID"] = "access-id",
+        ["PATRON_REGISTRATION_PAPI_ACCESS_KEY"] = "access-key",
+        ["PATRON_REGISTRATION_PAPI_ORGANIZATION_ID"] = "1",
+        ["PATRON_REGISTRATION_PAPI_LIBRARY_ID"] = "2",
+        ["PATRON_REGISTRATION_PAPI_BRANCH_ID"] = "3",
+        ["PATRON_REGISTRATION_PAPI_PATRON_CODE_ID"] = "4",
+        ["PATRON_REGISTRATION_PAPI_LOGON_USER_ID"] = "5"
+    };
 
     private static LiveScenarioDefinition Definition(
         string name,

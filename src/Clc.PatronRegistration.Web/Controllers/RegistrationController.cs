@@ -230,6 +230,16 @@ namespace Clc.PatronRegistration.Web.Controllers
         [HttpPost]
         public RegistrationAttempt Submit([ValidateNever] Registration p)
         {
+            var preparationFailure = PrepareSubmission(p);
+            return preparationFailure ?? ExecutePreparedSubmission(p);
+        }
+
+        // Keep binding/selected-branch validation separate from the mutating
+        // registration workflow.  The live release harness uses this same
+        // preparation path for every selected scenario before it allows the
+        // first create call.
+        internal RegistrationAttempt? PrepareSubmission(Registration p)
+        {
             var resolution = registrationScopeResolver.ResolveForSubmission(
                 HttpContext, settings, p.PatronBranchID);
             if (!resolution.IsValid)
@@ -273,9 +283,15 @@ namespace Clc.PatronRegistration.Web.Controllers
                 };
             }
 
-            var melissa = RegistrationClientProvider.CreateMelissa(resolution.Settings, melissaClientFactory);
-            var emailSender = RegistrationClientProvider.CreateEmail(resolution.Settings, emailSenderFactory);
-            return p.CreateRegistration(Request.GetTrueClientIP(), ModelState, resolution.Settings, db, papi, melissa, emailSender);
+            return null;
+        }
+
+        internal RegistrationAttempt ExecutePreparedSubmission(Registration p)
+        {
+            var effectiveSettings = p.Settings;
+            var melissa = RegistrationClientProvider.CreateMelissa(effectiveSettings, melissaClientFactory);
+            var emailSender = RegistrationClientProvider.CreateEmail(effectiveSettings, emailSenderFactory);
+            return p.CreateRegistration(Request.GetTrueClientIP(), ModelState, effectiveSettings, db, papi, melissa, emailSender);
         }
 
         [HttpPost]

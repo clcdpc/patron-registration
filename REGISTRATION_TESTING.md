@@ -42,10 +42,17 @@ subset. The fixed allowlist is `standard,school,ecard`. An absent selector runs
 all three in that order. Names are trimmed and case-folded, duplicates are
 deduplicated, and empty or unknown names fail before any create.
 
-The live test also requires all live configuration variables, positive
-DEVELOPMENT operational IDs, credentials, and `PATRON_REGISTRATION_LIVE_TESTS=true`.
-The endpoint must be HTTPS and match the committed exact host allowlist in
-`LiveDevelopmentConfiguration`; a hostname containing “dev” is not sufficient.
+The live test requires the common live configuration variables, credentials,
+and `PATRON_REGISTRATION_LIVE_TESTS=true`. Operational requirements are aware
+of the selected scenario set: `standard` requires the normal patron code,
+`school` uses that same normal code and does not require student/teacher IDs
+for its non-student/non-teacher contract, and `ecard` requires only the e-card
+patron code for its specialized path. An ordinary `standard`-only diagnostic
+therefore does not fail because school or e-card settings are absent. The
+default matrix still validates the union of the settings used by all three
+selected scenarios. The endpoint must be HTTPS and match the committed exact
+host allowlist in `LiveDevelopmentConfiguration`; a hostname containing “dev”
+is not sufficient.
 The test performs the read-only `ApiKeyValidate` call before constructing an
 attempt or calling `PatronRegistrationCreate`. It never falls back to a
 production endpoint. Read-only setup has no automatic retry today; if a retry is
@@ -59,10 +66,10 @@ test double, but selected-branch revalidation is production MVC behavior. The
 mock PAPI response is successful and captures the exact final payload; the
 tests verify one create call and stable final fields. Coverage includes:
 
-* a normalized/standard registration;
+* a normalized/standard registration with school functionality disabled;
 * school-enabled UAPL with empty `User1` for a non-student/non-teacher (the
   historical nullable-property regression);
-* UAPL e-card `User1` clearing;
+* UAPL e-card `User1` clearing from the specialized e-card form;
 * school student and teacher patron-code selection and school preservation; and
 * a general e-card code, expiration, and generated barcode.
 
@@ -79,10 +86,22 @@ for older tests/API consumers; new successful-path tests use the injected mock.
 ## Live orchestration and mutation safety
 
 There is one `[TestCategory("LiveDevelopment")]`, `[DoNotParallelize]`
-orchestration test. It constructs every selected scenario and runs every
-preflight before the first marker or create. A failed preflight means zero
-creates. After preflight, scenarios run serially and the first rejected,
-ambiguous, or downstream-failed scenario stops the remaining matrix.
+orchestration test. It constructs every selected scenario with its own
+settings shape: `standard` is a true non-school baseline (`SchoolInfoFormat`
+empty), `school` is the UAPL empty-`User1` regression contract, and `ecard` is
+the specialized UAPL e-card shape that supplies a school value which the real
+transformation clears. Configuration is checked against the selected scenario
+set before the harness starts.
+
+For every selected scenario, preflight builds the actual form body, runs the
+real MVC action-descriptor/parameter-metadata model binder and form value
+provider, then invokes the controller's real selected-branch scope resolution
+and MVC object revalidation. The successfully bound/prepared registration is
+retained for execution, so the mutating phase does not rebuild a different
+model. A binding, selected-branch validation, or other preflight failure means
+zero creates across the whole selected set. Only after every preflight passes
+do scenarios run serially; the first rejected, ambiguous, or downstream-failed
+scenario stops the remaining matrix.
 
 The live boundary is intentionally narrow:
 
@@ -90,10 +109,11 @@ The live boundary is intentionally narrow:
   payload construction, and the real `PatronRegistrationCreate` request;
 * substituted: Melissa, email/Postmark, duplicate/history persistence, and
   unrelated post-create collaborators; and
-* settings: explicit positive IDs and school value are supplied by the
-  environment, while the test fixes the UAPL format and safe no-side-effect
-  options. The forwarding `IPapiClient` exists only in test code, delegates the
-  request unchanged to `PapiClient`, and captures the real response immediately.
+* settings: explicit common and scenario-required positive IDs are supplied by
+  the environment, while the test applies each scenario's format and safe
+  no-side-effect options. The forwarding `IPapiClient` exists only in test
+  code, delegates the request unchanged to `PapiClient`, and captures the real
+  response immediately.
 
 The create call is made exactly once. There is no `Task.Run`/abandoned-request
 timeout and no retry after a timeout, connection interruption, cancellation,
@@ -150,7 +170,11 @@ and is terminal validation (there is no deployment workflow here). It:
    the serialized live DEVELOPMENT job, which re-fetches and rechecks the named
    tag immediately before live mutation.
 
-The live job passes the resolved commit separately as
+Before the live job, a GitHub-hosted `live-rerun-guard` checks
+`github.run_attempt` with no live Environment, secrets, or internal runner.
+`live-development` depends on that guard as well as deterministic validation,
+so an ordinary rerun is rejected before the self-hosted live trust boundary is
+entered. The live job passes the resolved commit separately as
 `PATRON_REGISTRATION_LIVE_COMMIT_SHA`; this keeps live breadcrumbs and synthetic
 identity tied to the peeled release commit even when the pushed tag is annotated.
 
@@ -162,11 +186,14 @@ validation for different tags may run concurrently. The manifest upload is
 best-effort with `if: always()` and cannot hide the test result. The workflow
 checkout disables persisted credentials.
 
-An ordinary GitHub rerun has `GITHUB_RUN_ATTEMPT > 1` and fails closed before
-live setup/mutation. Operators must inspect the prior public-safe manifest and
-breadcrumbs, locate any patron by synthetic token, and use the normal approved
-DEVELOPMENT cleanup process. There is no automatic recovery mode and a rerun is
-not an acknowledgement to repeat a non-idempotent create.
+An ordinary GitHub rerun has `GITHUB_RUN_ATTEMPT > 1` and fails closed in the
+GitHub-hosted prerequisite before live setup/mutation. The in-test
+`GITHUB_RUN_ATTEMPT > 1` guard remains as defense in depth for local/manual
+execution and future workflow changes. Operators must inspect the prior
+public-safe manifest and breadcrumbs, locate any patron by synthetic token, and
+use the normal approved DEVELOPMENT cleanup process. There is no automatic
+recovery mode and a rerun is not an acknowledgement to repeat a non-idempotent
+create.
 
 ## Required external controls
 

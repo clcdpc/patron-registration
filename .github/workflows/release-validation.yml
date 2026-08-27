@@ -64,9 +64,27 @@ jobs:
     with:
       commit_sha: ${{ needs.resolve_release.outputs.commit_sha }}
 
+  live-rerun-guard:
+    name: Reject ordinary release reruns before live setup
+    needs: resolve_release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Reject non-idempotent live rerun
+        shell: bash
+        env:
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          if [[ "$RUN_ATTEMPT" -gt 1 ]]; then
+            echo "This is an ordinary GitHub Actions Re-run jobs attempt. DEVELOPMENT registration is non-idempotent and cannot be repeated; inspect the prior public-safe manifest and use the documented manual recovery process."
+            exit 1
+          fi
+
   live-development:
     name: DEVELOPMENT Polaris live gate
-    needs: [resolve_release, deterministic]
+    needs: [resolve_release, deterministic, live-rerun-guard]
     runs-on: [self-hosted, patron-registration-live-development]
     timeout-minutes: 30
     concurrency:
@@ -101,17 +119,6 @@ jobs:
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 8.x
-
-      - name: Stop ordinary workflow reruns before any live setup
-        shell: bash
-        env:
-          RUN_ATTEMPT: ${{ github.run_attempt }}
-        run: |
-          set -euo pipefail
-          if [[ "$RUN_ATTEMPT" -gt 1 ]]; then
-            echo "This is a workflow rerun. Inspect the prior public-safe manifest and use the documented manual recovery process."
-            exit 1
-          fi
 
       - name: Revalidate release tag immediately before live mutation
         shell: bash
