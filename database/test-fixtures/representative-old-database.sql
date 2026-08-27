@@ -1,8 +1,4 @@
-/*
-   Immutable fixture for migrations 001-005 and 010: assets, upload scope,
-   and the asset cleanup access path exist; the revision/generation and
-   durable asset-reference-lock releases have not yet run.
-*/
+/* A representative supported old database before later additive upgrades. */
 create table dbo.RegistrationFormCodeMetadata
 (
     OrganizationId int not null,
@@ -74,7 +70,6 @@ create table dbo.RegistrationSettingPreviewLinks
     PreviewLinkId bigint identity(1,1) not null constraint PK_RegistrationSettingPreviewLinks primary key,
     DraftId bigint not null,
     TokenHash binary(32) not null,
-    OperationalBranchId int not null,
     AllowLiveSubmission bit not null constraint DF_RSPL_Live default 0,
     CreatedAtUtc datetime2(7) not null constraint DF_RSPL_Created default sysutcdatetime(),
     CreatedBy nvarchar(256) not null,
@@ -101,8 +96,8 @@ create table dbo.RegistrationSettingAuditEvents
     TargetLibraryId int null,
     FormCode nvarchar(64) not null constraint DF_RSAE_Code default '',
     SettingKey nvarchar(200) null,
-    PreviousValue nvarchar(max) null,
-    NewValue nvarchar(max) null,
+    PreviousValue nvarchar(1000) null,
+    NewValue nvarchar(1000) null,
     IsSensitive bit not null constraint DF_RSAE_Secret default 0,
     DraftId bigint null,
     PreviewLinkId bigint null,
@@ -118,10 +113,6 @@ create index IX_RSAE_LibraryTime
     on dbo.RegistrationSettingAuditEvents (TargetLibraryId, TimestampUtc desc)
     include (EventType, TargetOrganizationId, FormCode);
 
-create index IX_RSAE_ScopeFilter
-    on dbo.RegistrationSettingAuditEvents
-    (TargetOrganizationId, FormCode, EventType, TimestampUtc desc);
-
 create table dbo.RegistrationSettingsCacheGeneration
 (
     Id tinyint not null constraint PK_RegistrationSettingsCacheGeneration primary key,
@@ -131,33 +122,3 @@ create table dbo.RegistrationSettingsCacheGeneration
 
 insert dbo.RegistrationSettingsCacheGeneration (Id, Generation, ModifiedAtUtc)
 values (1, 0, sysutcdatetime());
-
-create table dbo.RegistrationFormAssets
-(
-    AssetId int identity(1,1) not null
-        constraint PK_RegistrationFormAssets primary key,
-    FileName nvarchar(255) not null,
-    ContentType varchar(100) not null,
-    Content varbinary(max) not null,
-    ContentHash varchar(64) not null,
-    CreatedDate datetime2(7) not null
-        constraint DF_RegistrationFormAssets_CreatedDate default sysutcdatetime(),
-    ModifiedDate datetime2(7) not null
-        constraint DF_RegistrationFormAssets_ModifiedDate default sysutcdatetime(),
-    UploadOrganizationId int null,
-    UploadFormCode nvarchar(64) null,
-    constraint CK_RegistrationFormAssets_FileName_NotBlank
-        check (len(ltrim(rtrim(FileName))) > 0),
-    constraint CK_RegistrationFormAssets_ContentType_NotBlank
-        check (len(ltrim(rtrim(ContentType))) > 0),
-    constraint CK_RegistrationFormAssets_Content_NotEmpty
-        check (datalength(Content) > 0),
-    constraint CK_RegistrationFormAssets_ContentHash_Sha256
-        check (len(ContentHash) = 64)
-);
-
-create index IX_RegistrationFormAssets_UploadScope
-    on dbo.RegistrationFormAssets (UploadOrganizationId, UploadFormCode);
-
-create index IX_RegistrationFormAssets_CreatedDate
-    on dbo.RegistrationFormAssets (CreatedDate);

@@ -2,12 +2,12 @@
 	Patron-registration settings administration desired-state deployment.
 
 	This is the single authoritative deployment for the settings-administration
-	feature. Supported inputs are the pre-feature prerequisite database, schema
-	states produced by historical repository deployments, and the current state.
-	Unexpected owned schema shapes fail instead of being guessed or repaired.
+	feature. It updates a supported existing database to the current required
+	schema and data state without reconstructing its deployment history.
 */
 set nocount on
 set xact_abort on
+set quoted_identifier on
 
 declare @deployment_transaction_started bit = 0
 
@@ -126,816 +126,6 @@ if not exists
 	if @application_lock_result < 0
 		raiserror('Could not acquire the patron-registration database convergence application lock (sp_getapplock result %d). No deployment changes were made.', 16, 1, @application_lock_result)
 
-	declare @core_table_count int =
-	(
-		select count(*)
-		from (values
-			('RegistrationFormCodeMetadata'), ('RegistrationSettingScopeVersions'),
-			('RegistrationSettingDrafts'), ('RegistrationSettingDraftChanges'),
-			('RegistrationSettingPreviewLinks'), ('RegistrationSettingAuditEvents'),
-			('RegistrationSettingsCacheGeneration')
-		) owned(TableName)
-		where object_id('dbo.' + owned.TableName, 'U') is not null
-	)
-
-	if @core_table_count not in (0, 7)
-		raiserror('The settings-administration core tables are only partially present. Restore a complete historical deployment or remove the uninstalled partial schema before rerunning.', 16, 1)
-
-	if @core_table_count = 0 and
-		(object_id('dbo.RegistrationFormAssets', 'U') is not null
-			or object_id('dbo.RegistrationFormAssetReferenceLocks', 'U') is not null)
-		raiserror('Asset-owned tables exist without the settings-administration core schema. Restore a compatible historical deployment before rerunning.', 16, 1)
-
-	if object_id('dbo.RegistrationFormAssetReferenceLocks', 'U') is not null
-		and object_id('dbo.RegistrationFormAssets', 'U') is null
-		raiserror('dbo.RegistrationFormAssetReferenceLocks exists without dbo.RegistrationFormAssets. Restore a compatible historical deployment before rerunning.', 16, 1)
-
-	declare @owned_columns table
-	(
-		TableName sysname not null,
-		ColumnName sysname not null,
-		SystemTypeId tinyint not null,
-		MaxLength smallint not null,
-		IsNullable bit not null,
-		IsIdentity bit not null,
-		IsHistoricalOptional bit not null,
-		HistoricalMaxLength smallint null,
-		primary key (TableName, ColumnName)
-	)
-
-	insert @owned_columns values
-		('RegistrationFormCodeMetadata','OrganizationId',56,4,0,0,0,null),
-		('RegistrationFormCodeMetadata','FormCode',231,128,0,0,0,null),
-		('RegistrationFormCodeMetadata','DisplayName',231,400,0,0,0,null),
-		('RegistrationFormCodeMetadata','Description',231,4000,1,0,0,null),
-		('RegistrationFormCodeMetadata','CreatedAtUtc',42,8,0,0,0,null),
-		('RegistrationFormCodeMetadata','CreatedBy',231,512,0,0,0,null),
-		('RegistrationFormCodeMetadata','ModifiedAtUtc',42,8,0,0,0,null),
-		('RegistrationFormCodeMetadata','ModifiedBy',231,512,0,0,0,null),
-		('RegistrationSettingScopeVersions','OrganizationId',56,4,0,0,0,null),
-		('RegistrationSettingScopeVersions','FormCode',231,128,0,0,0,null),
-		('RegistrationSettingScopeVersions','Version',127,8,0,0,0,null),
-		('RegistrationSettingScopeVersions','ModifiedAtUtc',42,8,0,0,0,null),
-		('RegistrationSettingDrafts','DraftId',127,8,0,1,0,null),
-		('RegistrationSettingDrafts','OrganizationId',56,4,0,0,0,null),
-		('RegistrationSettingDrafts','FormCode',231,128,0,0,0,null),
-		('RegistrationSettingDrafts','BaselineVersion',127,8,0,0,0,null),
-		('RegistrationSettingDrafts','Revision',127,8,0,0,1,null),
-		('RegistrationSettingDrafts','Status',167,16,0,0,0,null),
-		('RegistrationSettingDrafts','CreatedAtUtc',42,8,0,0,0,null),
-		('RegistrationSettingDrafts','CreatedBy',231,512,0,0,0,null),
-		('RegistrationSettingDrafts','ModifiedAtUtc',42,8,0,0,0,null),
-		('RegistrationSettingDrafts','ModifiedBy',231,512,0,0,0,null),
-		('RegistrationSettingDrafts','CommittedAtUtc',42,8,1,0,0,null),
-		('RegistrationSettingDrafts','CommittedBy',231,512,1,0,0,null),
-		('RegistrationSettingDrafts','DiscardedAtUtc',42,8,1,0,0,null),
-		('RegistrationSettingDrafts','DiscardedBy',231,512,1,0,0,null),
-		('RegistrationSettingDraftChanges','DraftChangeId',127,8,0,1,0,null),
-		('RegistrationSettingDraftChanges','DraftId',127,8,0,0,0,null),
-		('RegistrationSettingDraftChanges','SettingKey',231,400,0,0,0,null),
-		('RegistrationSettingDraftChanges','Operation',167,20,0,0,0,null),
-		('RegistrationSettingDraftChanges','Value',231,-1,1,0,0,null),
-		('RegistrationSettingDraftChanges','ModifiedAtUtc',42,8,0,0,0,null),
-		('RegistrationSettingDraftChanges','ModifiedBy',231,512,0,0,0,null),
-		('RegistrationSettingPreviewLinks','PreviewLinkId',127,8,0,1,0,null),
-		('RegistrationSettingPreviewLinks','DraftId',127,8,0,0,0,null),
-		('RegistrationSettingPreviewLinks','TokenHash',173,32,0,0,0,null),
-		('RegistrationSettingPreviewLinks','OperationalBranchId',56,4,0,0,1,null),
-		('RegistrationSettingPreviewLinks','AllowLiveSubmission',104,1,0,0,0,null),
-		('RegistrationSettingPreviewLinks','LiveSettingsGeneration',127,8,1,0,1,null),
-		('RegistrationSettingPreviewLinks','CreatedAtUtc',42,8,0,0,0,null),
-		('RegistrationSettingPreviewLinks','CreatedBy',231,512,0,0,0,null),
-		('RegistrationSettingPreviewLinks','ModifiedAtUtc',42,8,0,0,0,null),
-		('RegistrationSettingPreviewLinks','ModifiedBy',231,512,0,0,0,null),
-		('RegistrationSettingPreviewLinks','RevokedAtUtc',42,8,1,0,0,null),
-		('RegistrationSettingPreviewLinks','RevokedBy',231,512,1,0,0,null),
-		('RegistrationSettingPreviewLinks','ExpiresAtUtc',42,8,1,0,0,null),
-		('RegistrationSettingAuditEvents','AuditEventId',127,8,0,1,0,null),
-		('RegistrationSettingAuditEvents','TimestampUtc',42,8,0,0,0,null),
-		('RegistrationSettingAuditEvents','EventType',231,160,0,0,0,null),
-		('RegistrationSettingAuditEvents','ActorId',231,256,1,0,0,null),
-		('RegistrationSettingAuditEvents','ActorName',231,512,1,0,0,null),
-		('RegistrationSettingAuditEvents','ActorOrganizationId',56,4,1,0,0,null),
-		('RegistrationSettingAuditEvents','TargetOrganizationId',56,4,0,0,0,null),
-		('RegistrationSettingAuditEvents','TargetLibraryId',56,4,1,0,0,null),
-		('RegistrationSettingAuditEvents','FormCode',231,128,0,0,0,null),
-		('RegistrationSettingAuditEvents','SettingKey',231,400,1,0,0,null),
-		('RegistrationSettingAuditEvents','PreviousValue',231,-1,1,0,0,2000),
-		('RegistrationSettingAuditEvents','NewValue',231,-1,1,0,0,2000),
-		('RegistrationSettingAuditEvents','IsSensitive',104,1,0,0,0,null),
-		('RegistrationSettingAuditEvents','DraftId',127,8,1,0,0,null),
-		('RegistrationSettingAuditEvents','PreviewLinkId',127,8,1,0,0,null),
-		('RegistrationSettingAuditEvents','CorrelationId',231,256,1,0,0,null),
-		('RegistrationSettingAuditEvents','IpAddress',231,128,1,0,0,null),
-		('RegistrationSettingAuditEvents','Succeeded',104,1,0,0,0,null),
-		('RegistrationSettingAuditEvents','FailureReason',231,2000,1,0,0,null),
-		('RegistrationSettingAuditEvents','MetadataJson',231,-1,1,0,0,null),
-		('RegistrationSettingsCacheGeneration','Id',48,1,0,0,0,null),
-		('RegistrationSettingsCacheGeneration','Generation',127,8,0,0,0,null),
-		('RegistrationSettingsCacheGeneration','ModifiedAtUtc',42,8,0,0,0,null),
-		('RegistrationFormAssets','AssetId',56,4,0,1,0,null),
-		('RegistrationFormAssets','FileName',231,510,0,0,0,null),
-		('RegistrationFormAssets','ContentType',167,100,0,0,0,null),
-		('RegistrationFormAssets','Content',165,-1,0,0,0,null),
-		('RegistrationFormAssets','ContentHash',167,64,0,0,0,null),
-		('RegistrationFormAssets','CreatedDate',42,8,0,0,0,null),
-		('RegistrationFormAssets','ModifiedDate',42,8,0,0,0,null),
-		('RegistrationFormAssets','UploadOrganizationId',56,4,1,0,1,null),
-		('RegistrationFormAssets','UploadFormCode',231,128,1,0,1,null),
-		('RegistrationFormAssetReferenceLocks','LockId',48,1,0,0,0,null)
-
-	declare @incompatible_owned_object nvarchar(300)
-
-	select top (1) @incompatible_owned_object = 'dbo.' + expected.TableName + '.' + expected.ColumnName
-	from @owned_columns expected
-	inner join sys.tables owned_table
-		on owned_table.schema_id = schema_id('dbo')
-		and owned_table.name collate database_default = expected.TableName
-	left join sys.columns actual
-		on actual.object_id = owned_table.object_id
-		and actual.name collate database_default = expected.ColumnName
-	where (actual.column_id is null and expected.IsHistoricalOptional = 0)
-		or
-		(
-			actual.column_id is not null and
-			(
-				actual.system_type_id <> expected.SystemTypeId
-				or actual.max_length not in (expected.MaxLength, coalesce(expected.HistoricalMaxLength, expected.MaxLength))
-				or actual.is_nullable <> expected.IsNullable
-				or actual.is_identity <> expected.IsIdentity
-			)
-		)
-
-	if @incompatible_owned_object is not null
-		raiserror('Owned schema column %s does not match a supported historical definition. Restore the schema from a repository deployment before rerunning.', 16, 1, @incompatible_owned_object)
-
-	set @incompatible_owned_object = null
-
-	select top (1) @incompatible_owned_object = 'dbo.' + owned_table.name + '.' + actual.name
-	from sys.tables owned_table
-	inner join sys.columns actual on actual.object_id = owned_table.object_id
-	left join @owned_columns expected
-		on expected.TableName = owned_table.name collate database_default
-		and expected.ColumnName = actual.name collate database_default
-	where owned_table.schema_id = schema_id('dbo')
-		and owned_table.name in
-		(
-			'RegistrationFormCodeMetadata','RegistrationSettingScopeVersions',
-			'RegistrationSettingDrafts','RegistrationSettingDraftChanges',
-			'RegistrationSettingPreviewLinks','RegistrationSettingAuditEvents',
-			'RegistrationSettingsCacheGeneration','RegistrationFormAssets',
-			'RegistrationFormAssetReferenceLocks'
-		)
-		and expected.ColumnName is null
-
-	if @incompatible_owned_object is not null
-		raiserror('Owned schema column %s was not produced by a supported historical deployment. Restore the repository schema before rerunning.', 16, 1, @incompatible_owned_object)
-
-	if (col_length('dbo.RegistrationSettingDrafts', 'Revision') is null
-			and col_length('dbo.RegistrationSettingPreviewLinks', 'LiveSettingsGeneration') is not null)
-		or (col_length('dbo.RegistrationSettingDrafts', 'Revision') is not null
-			and col_length('dbo.RegistrationSettingPreviewLinks', 'LiveSettingsGeneration') is null)
-		raiserror('Revision and LiveSettingsGeneration must both be absent in the known legacy schema or both be present. Restore a supported historical shape before rerunning.', 16, 1)
-
-	if object_id('dbo.RegistrationFormAssets', 'U') is not null
-		and
-		(
-			(col_length('dbo.RegistrationFormAssets', 'UploadOrganizationId') is null
-				and col_length('dbo.RegistrationFormAssets', 'UploadFormCode') is not null)
-			or (col_length('dbo.RegistrationFormAssets', 'UploadOrganizationId') is not null
-				and col_length('dbo.RegistrationFormAssets', 'UploadFormCode') is null)
-		)
-		raiserror('The RegistrationFormAssets upload-scope columns must both be present or both be absent. Restore a supported historical shape before rerunning.', 16, 1)
-
-	if object_id('dbo.RegistrationSettingAuditEvents', 'U') is not null
-		and columnproperty(object_id('dbo.RegistrationSettingAuditEvents'), 'PreviousValue', 'ColumnId') is not null
-		and
-		(
-			select max_length from sys.columns
-			where object_id = object_id('dbo.RegistrationSettingAuditEvents') and name = 'PreviousValue'
-		) <>
-		(
-			select max_length from sys.columns
-			where object_id = object_id('dbo.RegistrationSettingAuditEvents') and name = 'NewValue'
-		)
-		raiserror('PreviousValue and NewValue must both have the original audit width or both be nvarchar(max). Restore a supported historical shape before rerunning.', 16, 1)
-
-	if object_id('dbo.RegistrationFormAssets', 'U') is not null
-		and
-		(
-			col_length('dbo.RegistrationSettingPreviewLinks', 'OperationalBranchId') is null
-			or exists
-			(
-				select 1 from sys.columns
-				where object_id = object_id('dbo.RegistrationSettingAuditEvents')
-					and name in ('PreviousValue', 'NewValue') and max_length <> -1
-			)
-		)
-		raiserror('dbo.RegistrationFormAssets requires the earlier operational-branch and expanded-audit releases. Restore a supported historical shape before rerunning.', 16, 1)
-
-	if object_id('dbo.RegistrationFormAssetReferenceLocks', 'U') is not null
-		and not exists
-		(
-			select 1 from sys.indexes
-			where object_id = object_id('dbo.RegistrationFormAssets')
-				and name = 'IX_RegistrationFormAssets_CreatedDate'
-		)
-		raiserror('dbo.RegistrationFormAssetReferenceLocks requires the earlier asset-cleanup index release. Restore a supported historical shape before rerunning.', 16, 1)
-
-	if col_length('dbo.RegistrationSettingDrafts', 'Revision') is not null
-		and object_id('dbo.RegistrationFormAssetReferenceLocks', 'U') is null
-		raiserror('The revision/generation release requires dbo.RegistrationFormAssetReferenceLocks from the preceding historical release.', 16, 1)
-
-	declare @expected_constraints table
-	(
-		TableName sysname not null,
-		ConstraintName sysname not null,
-		ConstraintType char(2) not null,
-		IsHistoricalOptional bit not null,
-		primary key (TableName, ConstraintName)
-	)
-
-	insert @expected_constraints values
-		('RegistrationFormCodeMetadata','PK_RegistrationFormCodeMetadata','PK',0),
-		('RegistrationFormCodeMetadata','CK_RFCode_NotBlank','C',0),
-		('RegistrationFormCodeMetadata','DF_RFCode_Created','D',0),
-		('RegistrationFormCodeMetadata','DF_RFCode_Modified','D',0),
-		('RegistrationSettingScopeVersions','PK_RegistrationSettingScopeVersions','PK',0),
-		('RegistrationSettingScopeVersions','DF_RSSV_Code','D',0),
-		('RegistrationSettingScopeVersions','DF_RSSV_Version','D',0),
-		('RegistrationSettingScopeVersions','DF_RSSV_Modified','D',0),
-		('RegistrationSettingDrafts','PK_RegistrationSettingDrafts','PK',0),
-		('RegistrationSettingDrafts','CK_RSD_Status','C',0),
-		('RegistrationSettingDrafts','DF_RSD_Code','D',0),
-		('RegistrationSettingDrafts','DF_RSD_Revision','D',1),
-		('RegistrationSettingDrafts','DF_RSD_Created','D',0),
-		('RegistrationSettingDrafts','DF_RSD_Modified','D',0),
-		('RegistrationSettingDraftChanges','PK_RegistrationSettingDraftChanges','PK',0),
-		('RegistrationSettingDraftChanges','FK_RSDC_Draft','F',0),
-		('RegistrationSettingDraftChanges','UQ_RSDC_Key','UQ',0),
-		('RegistrationSettingDraftChanges','CK_RSDC_Operation','C',0),
-		('RegistrationSettingDraftChanges','CK_RSDC_Value','C',0),
-		('RegistrationSettingDraftChanges','DF_RSDC_Modified','D',0),
-		('RegistrationSettingPreviewLinks','PK_RegistrationSettingPreviewLinks','PK',0),
-		('RegistrationSettingPreviewLinks','FK_RSPL_Draft','F',0),
-		('RegistrationSettingPreviewLinks','UQ_RSPL_Token','UQ',0),
-		('RegistrationSettingPreviewLinks','DF_RSPL_Live','D',0),
-		('RegistrationSettingPreviewLinks','DF_RSPL_Created','D',0),
-		('RegistrationSettingPreviewLinks','DF_RSPL_Modified','D',0),
-		('RegistrationSettingAuditEvents','PK_RegistrationSettingAuditEvents','PK',0),
-		('RegistrationSettingAuditEvents','CK_RSAE_Json','C',0),
-		('RegistrationSettingAuditEvents','DF_RSAE_Time','D',0),
-		('RegistrationSettingAuditEvents','DF_RSAE_Code','D',0),
-		('RegistrationSettingAuditEvents','DF_RSAE_Secret','D',0),
-		('RegistrationSettingsCacheGeneration','PK_RegistrationSettingsCacheGeneration','PK',0),
-		('RegistrationFormAssets','PK_RegistrationFormAssets','PK',0),
-		('RegistrationFormAssets','CK_RegistrationFormAssets_FileName_NotBlank','C',0),
-		('RegistrationFormAssets','CK_RegistrationFormAssets_ContentType_NotBlank','C',0),
-		('RegistrationFormAssets','CK_RegistrationFormAssets_Content_NotEmpty','C',0),
-		('RegistrationFormAssets','CK_RegistrationFormAssets_ContentHash_Sha256','C',0),
-		('RegistrationFormAssets','DF_RegistrationFormAssets_CreatedDate','D',0),
-		('RegistrationFormAssets','DF_RegistrationFormAssets_ModifiedDate','D',0),
-		('RegistrationFormAssetReferenceLocks','PK_RegistrationFormAssetReferenceLocks','PK',0),
-		('RegistrationFormAssetReferenceLocks','CK_RegistrationFormAssetReferenceLocks_Singleton','C',0)
-
-	set @incompatible_owned_object = null
-
-	select top (1) @incompatible_owned_object = 'dbo.' + expected.TableName + '.' + expected.ConstraintName
-	from @expected_constraints expected
-	where object_id('dbo.' + expected.TableName, 'U') is not null
-		and not (expected.IsHistoricalOptional = 1
-			and col_length('dbo.RegistrationSettingDrafts', 'Revision') is null)
-		and not exists
-		(
-			select 1 from sys.objects actual
-			where actual.parent_object_id = object_id('dbo.' + expected.TableName)
-				and actual.name collate database_default = expected.ConstraintName
-				and actual.type collate database_default = expected.ConstraintType
-		)
-
-	if @incompatible_owned_object is not null
-		raiserror('Owned constraint %s is missing or incompatible. This is not a supported historical state; restore it before rerunning.', 16, 1, @incompatible_owned_object)
-
-	/*
-	   Expected constraints are an allowlist as well as a required set. The
-	   table above deliberately models the only historical exception (the
-	   revision default before the revision release); every other trusted or
-	   untrusted key, check, default, or foreign-key constraint on an owned
-	   table is outside the supported repository states.
-	*/
-	set @incompatible_owned_object = null
-
-	select top (1) @incompatible_owned_object = 'dbo.' + owned_table.name + '.' + actual.name
-	from sys.objects actual
-	inner join sys.tables owned_table
-		on owned_table.object_id = actual.parent_object_id
-	left join @expected_constraints expected
-		on expected.TableName collate database_default = owned_table.name collate database_default
-		and expected.ConstraintName collate database_default = actual.name collate database_default
-		and expected.ConstraintType collate Latin1_General_100_BIN2 = actual.type collate Latin1_General_100_BIN2
-	where owned_table.schema_id = schema_id('dbo')
-		and owned_table.name in
-		(
-			'RegistrationFormCodeMetadata','RegistrationSettingScopeVersions',
-			'RegistrationSettingDrafts','RegistrationSettingDraftChanges',
-			'RegistrationSettingPreviewLinks','RegistrationSettingAuditEvents',
-			'RegistrationSettingsCacheGeneration','RegistrationFormAssets',
-			'RegistrationFormAssetReferenceLocks'
-		)
-		and actual.type in ('C', 'D', 'F', 'PK', 'UQ')
-		and expected.ConstraintName is null
-
-	if @incompatible_owned_object is not null
-		raiserror('Owned constraint %s is not part of a supported current or historical schema state. Remove it or restore the repository schema before rerunning.', 16, 1, @incompatible_owned_object)
-
-	/*
-	   sys.check_constraints.definition is SQL Server's rendered expression,
-	   rather than the source text used by CREATE TABLE. Normalize the stable
-	   rendering differences (case, brackets, whitespace, and one redundant
-	   outer parenthesis pair) but compare the complete expression.
-	   This keeps a same-name constraint with a weaker invariant outside the
-	   supported state space.
-	*/
-	declare @expected_check_constraints table
-	(
-		TableName sysname not null,
-		ConstraintName sysname not null,
-		CanonicalDefinition nvarchar(1000) not null,
-		IsHistoricalOptional bit not null,
-		primary key (TableName, ConstraintName)
-	)
-
-	insert @expected_check_constraints values
-		('RegistrationFormCodeMetadata','CK_RFCode_NotBlank','len(formcode)>(0)',0),
-		('RegistrationSettingDrafts','CK_RSD_Status','status=''Invalidated''orstatus=''Discarded''orstatus=''Committed''orstatus=''Active''',0),
-		('RegistrationSettingDraftChanges','CK_RSDC_Operation','operation=''RemoveOverride''oroperation=''Upsert''',0),
-		('RegistrationSettingDraftChanges','CK_RSDC_Value','operation=''Upsert''andvalueisnotnulloroperation=''RemoveOverride''andvalueisnull',0),
-		('RegistrationSettingAuditEvents','CK_RSAE_Json','metadatajsonisnullorisjson(metadatajson)=(1)',0),
-		('RegistrationFormAssets','CK_RegistrationFormAssets_FileName_NotBlank','len(ltrim(rtrim(filename)))>(0)',0),
-		('RegistrationFormAssets','CK_RegistrationFormAssets_ContentType_NotBlank','len(ltrim(rtrim(contenttype)))>(0)',0),
-		('RegistrationFormAssets','CK_RegistrationFormAssets_Content_NotEmpty','datalength(content)>(0)',0),
-		('RegistrationFormAssets','CK_RegistrationFormAssets_ContentHash_Sha256','len(contenthash)=(64)',0),
-		('RegistrationFormAssetReferenceLocks','CK_RegistrationFormAssetReferenceLocks_Singleton','lockid=(1)',0)
-
-	/*
-	   Canonicalize only SQL text outside single-quoted literals. Removing
-	   whitespace or brackets from a literal would allow a materially different
-	   same-name constraint, such as Status = 'Act ive', to pass validation.
-	   The character-position CTE preserves literal contents while accepting
-	   SQL Server's case, bracket, whitespace, and one outer-parenthesis
-	   rendering differences.
-	*/
-	declare @canonical_owned_definitions table
-	(
-		DefinitionKey nvarchar(100) not null primary key,
-		CanonicalDefinition nvarchar(max) null
-	)
-	declare @max_definition_length int
-	select @max_definition_length = isnull(max(DefinitionLength), 0)
-	from
-	(
-		select len(check_constraint.definition) DefinitionLength
-		from sys.check_constraints check_constraint
-		where check_constraint.parent_object_id in
-		(
-			object_id('dbo.RegistrationFormCodeMetadata'), object_id('dbo.RegistrationSettingDrafts'),
-			object_id('dbo.RegistrationSettingDraftChanges'), object_id('dbo.RegistrationSettingAuditEvents'),
-			object_id('dbo.RegistrationFormAssets'), object_id('dbo.RegistrationFormAssetReferenceLocks')
-		)
-		union all
-		select len(default_constraint.definition) DefinitionLength
-		from sys.default_constraints default_constraint
-		where default_constraint.parent_object_id in
-		(
-			object_id('dbo.RegistrationFormCodeMetadata'), object_id('dbo.RegistrationSettingScopeVersions'),
-			object_id('dbo.RegistrationSettingDrafts'), object_id('dbo.RegistrationSettingDraftChanges'),
-			object_id('dbo.RegistrationSettingPreviewLinks'), object_id('dbo.RegistrationSettingAuditEvents'),
-			object_id('dbo.RegistrationFormAssets')
-		)
-		union all
-		select len(index_object.filter_definition) DefinitionLength
-		from sys.indexes index_object
-		where index_object.object_id in
-		(
-			object_id('dbo.RegistrationFormCodeMetadata'), object_id('dbo.RegistrationSettingScopeVersions'),
-			object_id('dbo.RegistrationSettingDrafts'), object_id('dbo.RegistrationSettingDraftChanges'),
-			object_id('dbo.RegistrationSettingPreviewLinks'), object_id('dbo.RegistrationSettingAuditEvents'),
-			object_id('dbo.RegistrationSettingsCacheGeneration'), object_id('dbo.RegistrationFormAssets'),
-			object_id('dbo.RegistrationFormAssetReferenceLocks')
-		)
-			and index_object.has_filter = 1
-			and index_object.filter_definition is not null
-	) lengths
-
-	;with OwnedDefinitions as
-	(
-		select convert(nvarchar(100), N'C:' + convert(nvarchar(20), check_constraint.object_id)) DefinitionKey,
-			check_constraint.definition DefinitionText
-		from sys.check_constraints check_constraint
-		where check_constraint.parent_object_id in
-		(
-			object_id('dbo.RegistrationFormCodeMetadata'), object_id('dbo.RegistrationSettingDrafts'),
-			object_id('dbo.RegistrationSettingDraftChanges'), object_id('dbo.RegistrationSettingAuditEvents'),
-			object_id('dbo.RegistrationFormAssets'), object_id('dbo.RegistrationFormAssetReferenceLocks')
-		)
-		union all
-		select convert(nvarchar(100), N'D:' + convert(nvarchar(20), default_constraint.object_id)) DefinitionKey,
-			default_constraint.definition DefinitionText
-		from sys.default_constraints default_constraint
-		where default_constraint.parent_object_id in
-		(
-			object_id('dbo.RegistrationFormCodeMetadata'), object_id('dbo.RegistrationSettingScopeVersions'),
-			object_id('dbo.RegistrationSettingDrafts'), object_id('dbo.RegistrationSettingDraftChanges'),
-			object_id('dbo.RegistrationSettingPreviewLinks'), object_id('dbo.RegistrationSettingAuditEvents'),
-			object_id('dbo.RegistrationFormAssets')
-		)
-		union all
-		select convert(nvarchar(100), N'I:' + convert(nvarchar(20), index_object.object_id) + N':' + convert(nvarchar(20), index_object.index_id)) DefinitionKey,
-			index_object.filter_definition DefinitionText
-		from sys.indexes index_object
-		where index_object.object_id in
-		(
-			object_id('dbo.RegistrationFormCodeMetadata'), object_id('dbo.RegistrationSettingScopeVersions'),
-			object_id('dbo.RegistrationSettingDrafts'), object_id('dbo.RegistrationSettingDraftChanges'),
-			object_id('dbo.RegistrationSettingPreviewLinks'), object_id('dbo.RegistrationSettingAuditEvents'),
-			object_id('dbo.RegistrationSettingsCacheGeneration'), object_id('dbo.RegistrationFormAssets'),
-			object_id('dbo.RegistrationFormAssetReferenceLocks')
-		)
-			and index_object.has_filter = 1
-			and index_object.filter_definition is not null
-	),
-	Numbers as
-	(
-		select 1 Number
-		union all
-		select Number + 1
-		from Numbers
-		where Number < @max_definition_length
-	),
-	CanonicalDefinitions as
-	(
-		select source.DefinitionKey,
-			(
-				select case
-					when substring(source.DefinitionText, Number, 1) = NCHAR(39)
-						then substring(source.DefinitionText, Number, 1)
-					when
-						(
-							len(left(source.DefinitionText, Number - 1))
-							- len(replace(left(source.DefinitionText, Number - 1), NCHAR(39), N''))
-						) % 2 = 1
-						then substring(source.DefinitionText, Number, 1)
-					when substring(source.DefinitionText, Number, 1) not in
-						(N'[', N']', N' ', NCHAR(9), NCHAR(10), NCHAR(12), NCHAR(13), NCHAR(160))
-						then lower(substring(source.DefinitionText, Number, 1))
-					else N''
-				end
-				from Numbers
-				where Number <= len(source.DefinitionText)
-				order by Number
-				for xml path(''), type
-			).value('.', 'nvarchar(max)') RawCanonicalDefinition
-		from OwnedDefinitions source
-	)
-	insert @canonical_owned_definitions (DefinitionKey, CanonicalDefinition)
-	select DefinitionKey,
-		case
-			when left(RawCanonicalDefinition, 1) = N'('
-				and right(RawCanonicalDefinition, 1) = N')'
-			then substring(RawCanonicalDefinition, 2, len(RawCanonicalDefinition) - 2)
-			else RawCanonicalDefinition
-		end
-	from CanonicalDefinitions
-	option (maxrecursion 0)
-
-	set @incompatible_owned_object = null
-
-	select top (1) @incompatible_owned_object = 'dbo.' + expected.TableName + '.' + expected.ConstraintName
-	from @expected_check_constraints expected
-	where object_id('dbo.' + expected.TableName, 'U') is not null
-		and not (expected.IsHistoricalOptional = 1
-			and col_length('dbo.RegistrationSettingDrafts', 'Revision') is null)
-		and not exists
-		(
-			select 1
-			from sys.check_constraints actual
-			inner join @canonical_owned_definitions canonical
-				on canonical.DefinitionKey = N'C:' + convert(nvarchar(20), actual.object_id)
-			where actual.parent_object_id = object_id('dbo.' + expected.TableName)
-				and actual.name collate database_default = expected.ConstraintName
-				and actual.is_disabled = 0
-				and actual.is_not_trusted = 0
-				and canonical.CanonicalDefinition collate Latin1_General_100_BIN2 = expected.CanonicalDefinition collate Latin1_General_100_BIN2
-		)
-
-	if @incompatible_owned_object is not null
-		raiserror('Owned check constraint %s is missing, untrusted, or has an unsupported definition. Restore it before rerunning.', 16, 1, @incompatible_owned_object)
-
-	declare @expected_foreign_keys table
-	(
-		TableName sysname not null,
-		ConstraintName sysname not null,
-		ReferencedTableName sysname not null,
-		ParentColumnName sysname not null,
-		ReferencedColumnName sysname not null,
-		DeleteReferentialAction tinyint not null,
-		UpdateReferentialAction tinyint not null,
-		IsHistoricalOptional bit not null,
-		primary key (TableName, ConstraintName)
-	)
-
-	insert @expected_foreign_keys values
-		('RegistrationSettingDraftChanges','FK_RSDC_Draft','RegistrationSettingDrafts','DraftId','DraftId',1,0,0),
-		('RegistrationSettingPreviewLinks','FK_RSPL_Draft','RegistrationSettingDrafts','DraftId','DraftId',1,0,0)
-
-	set @incompatible_owned_object = null
-
-	select top (1) @incompatible_owned_object = 'dbo.' + expected.TableName + '.' + expected.ConstraintName
-	from @expected_foreign_keys expected
-	where object_id('dbo.' + expected.TableName, 'U') is not null
-		and not (expected.IsHistoricalOptional = 1
-			and col_length('dbo.RegistrationSettingDrafts', 'Revision') is null)
-		and not exists
-		(
-			select 1
-			from sys.foreign_keys actual
-			where actual.parent_object_id = object_id('dbo.' + expected.TableName)
-				and actual.name collate database_default = expected.ConstraintName
-				and actual.referenced_object_id = object_id('dbo.' + expected.ReferencedTableName)
-				and actual.delete_referential_action = expected.DeleteReferentialAction
-				and actual.update_referential_action = expected.UpdateReferentialAction
-				and actual.is_disabled = 0
-				and actual.is_not_trusted = 0
-				and actual.is_not_for_replication = 0
-				and
-				(
-					select count(*)
-					from sys.foreign_key_columns actual_column
-					where actual_column.constraint_object_id = actual.object_id
-				) = 1
-				and exists
-				(
-					select 1
-					from sys.foreign_key_columns actual_column
-					inner join sys.columns parent_column
-						on parent_column.object_id = actual.parent_object_id
-						and parent_column.column_id = actual_column.parent_column_id
-					inner join sys.columns referenced_column
-						on referenced_column.object_id = actual.referenced_object_id
-						and referenced_column.column_id = actual_column.referenced_column_id
-					where actual_column.constraint_object_id = actual.object_id
-						and actual_column.constraint_column_id = 1
-						and parent_column.name collate database_default = expected.ParentColumnName
-						and referenced_column.name collate database_default = expected.ReferencedColumnName
-				)
-			)
-
-	if @incompatible_owned_object is not null
-		raiserror('Owned foreign key %s is missing, untrusted, disabled, or has an unsupported relationship definition. Restore it before rerunning.', 16, 1, @incompatible_owned_object)
-
-	/* Defaults are part of the repository schema contract, not arbitrary app data. */
-	declare @expected_defaults table
-	(
-		TableName sysname not null,
-		ConstraintName sysname not null,
-		ColumnName sysname not null,
-		CanonicalDefinition nvarchar(200) not null,
-		IsHistoricalOptional bit not null,
-		primary key (TableName, ConstraintName)
-	)
-
-	insert @expected_defaults values
-		('RegistrationFormCodeMetadata','DF_RFCode_Created','CreatedAtUtc','sysutcdatetime()',0),
-		('RegistrationFormCodeMetadata','DF_RFCode_Modified','ModifiedAtUtc','sysutcdatetime()',0),
-		('RegistrationSettingScopeVersions','DF_RSSV_Code','FormCode','''''',0),
-		('RegistrationSettingScopeVersions','DF_RSSV_Version','Version','(0)',0),
-		('RegistrationSettingScopeVersions','DF_RSSV_Modified','ModifiedAtUtc','sysutcdatetime()',0),
-		('RegistrationSettingDrafts','DF_RSD_Code','FormCode','''''',0),
-		('RegistrationSettingDrafts','DF_RSD_Revision','Revision','(0)',1),
-		('RegistrationSettingDrafts','DF_RSD_Created','CreatedAtUtc','sysutcdatetime()',0),
-		('RegistrationSettingDrafts','DF_RSD_Modified','ModifiedAtUtc','sysutcdatetime()',0),
-		('RegistrationSettingDraftChanges','DF_RSDC_Modified','ModifiedAtUtc','sysutcdatetime()',0),
-		('RegistrationSettingPreviewLinks','DF_RSPL_Live','AllowLiveSubmission','(0)',0),
-		('RegistrationSettingPreviewLinks','DF_RSPL_Created','CreatedAtUtc','sysutcdatetime()',0),
-		('RegistrationSettingPreviewLinks','DF_RSPL_Modified','ModifiedAtUtc','sysutcdatetime()',0),
-		('RegistrationSettingAuditEvents','DF_RSAE_Time','TimestampUtc','sysutcdatetime()',0),
-		('RegistrationSettingAuditEvents','DF_RSAE_Code','FormCode','''''',0),
-		('RegistrationSettingAuditEvents','DF_RSAE_Secret','IsSensitive','(0)',0),
-		('RegistrationFormAssets','DF_RegistrationFormAssets_CreatedDate','CreatedDate','sysutcdatetime()',0),
-		('RegistrationFormAssets','DF_RegistrationFormAssets_ModifiedDate','ModifiedDate','sysutcdatetime()',0)
-
-	set @incompatible_owned_object = null
-
-	select top (1) @incompatible_owned_object = 'dbo.' + expected.TableName + '.' + expected.ConstraintName
-	from @expected_defaults expected
-	where object_id('dbo.' + expected.TableName, 'U') is not null
-		and not (expected.IsHistoricalOptional = 1
-			and col_length('dbo.RegistrationSettingDrafts', 'Revision') is null)
-		and not exists
-		(
-			select 1
-			from sys.default_constraints actual
-			inner join @canonical_owned_definitions canonical
-				on canonical.DefinitionKey = N'D:' + convert(nvarchar(20), actual.object_id)
-			where actual.parent_object_id = object_id('dbo.' + expected.TableName)
-				and actual.name collate database_default = expected.ConstraintName
-				and actual.parent_column_id = columnproperty(object_id('dbo.' + expected.TableName), expected.ColumnName, 'ColumnId')
-				and canonical.CanonicalDefinition collate Latin1_General_100_BIN2 = expected.CanonicalDefinition collate Latin1_General_100_BIN2
-		)
-
-	if @incompatible_owned_object is not null
-		raiserror('Owned default constraint %s is missing, bound to the wrong column, or has an unsupported definition. Restore it before rerunning.', 16, 1, @incompatible_owned_object)
-
-	if exists
-	(
-		select 1 from sys.check_constraints
-		where parent_object_id in
-		(
-			object_id('dbo.RegistrationFormCodeMetadata'), object_id('dbo.RegistrationSettingDrafts'),
-			object_id('dbo.RegistrationSettingDraftChanges'), object_id('dbo.RegistrationSettingAuditEvents'),
-			object_id('dbo.RegistrationFormAssets'), object_id('dbo.RegistrationFormAssetReferenceLocks')
-		)
-			and (is_disabled = 1 or is_not_trusted = 1)
-	)
-		raiserror('A patron-registration-owned check constraint is disabled or untrusted. Re-enable and validate it before rerunning.', 16, 1)
-
-	if exists
-	(
-		select 1 from sys.foreign_keys
-		where parent_object_id in
-			(object_id('dbo.RegistrationSettingDraftChanges'), object_id('dbo.RegistrationSettingPreviewLinks'))
-			and (is_disabled = 1 or is_not_trusted = 1 or delete_referential_action <> 1)
-	)
-		raiserror('A patron-registration-owned draft foreign key is disabled, untrusted, or does not cascade deletes. Restore the repository definition before rerunning.', 16, 1)
-
-	declare @expected_indexes table
-	(
-		TableName sysname not null,
-		IndexName sysname not null,
-		IsUnique bit not null,
-		HasFilter bit not null,
-		IndexType tinyint not null,
-		IsPrimaryKey bit not null,
-		IsUniqueConstraint bit not null,
-		KeyColumns nvarchar(500) not null,
-		IncludedColumns nvarchar(500) not null,
-		CanonicalFilterDefinition nvarchar(500) null,
-		IsHistoricalOptional bit not null,
-		primary key (TableName, IndexName)
-	)
-
-	insert @expected_indexes
-	(
-		TableName, IndexName, IsUnique, HasFilter, IndexType, IsPrimaryKey,
-		IsUniqueConstraint, KeyColumns, IncludedColumns, CanonicalFilterDefinition,
-		IsHistoricalOptional
-	)
-	values
-		('RegistrationFormCodeMetadata','PK_RegistrationFormCodeMetadata',1,0,1,1,0,'OrganizationId:A,FormCode:A','',null,0),
-		('RegistrationSettingScopeVersions','PK_RegistrationSettingScopeVersions',1,0,1,1,0,'OrganizationId:A,FormCode:A','',null,0),
-		('RegistrationSettingDrafts','PK_RegistrationSettingDrafts',1,0,1,1,0,'DraftId:A','',null,0),
-		('RegistrationSettingDrafts','UX_RSD_ActiveScope',1,1,2,0,0,'OrganizationId:A,FormCode:A','','status=''Active''',0),
-		('RegistrationSettingDraftChanges','PK_RegistrationSettingDraftChanges',1,0,1,1,0,'DraftChangeId:A','',null,0),
-		('RegistrationSettingDraftChanges','UQ_RSDC_Key',1,0,2,0,1,'DraftId:A,SettingKey:A','',null,0),
-		('RegistrationSettingPreviewLinks','PK_RegistrationSettingPreviewLinks',1,0,1,1,0,'PreviewLinkId:A','',null,0),
-		('RegistrationSettingPreviewLinks','UQ_RSPL_Token',1,0,2,0,1,'TokenHash:A','',null,0),
-		('RegistrationSettingAuditEvents','PK_RegistrationSettingAuditEvents',1,0,1,1,0,'AuditEventId:A','',null,0),
-		('RegistrationSettingAuditEvents','IX_RSAE_LibraryTime',0,0,2,0,0,'TargetLibraryId:A,TimestampUtc:D','EventType,TargetOrganizationId,FormCode',null,0),
-		('RegistrationSettingAuditEvents','IX_RSAE_ScopeFilter',0,0,2,0,0,'TargetOrganizationId:A,FormCode:A,EventType:A,TimestampUtc:D','',null,0),
-		('RegistrationSettingsCacheGeneration','PK_RegistrationSettingsCacheGeneration',1,0,1,1,0,'Id:A','',null,0),
-		('RegistrationFormAssets','PK_RegistrationFormAssets',1,0,1,1,0,'AssetId:A','',null,0),
-		('RegistrationFormAssets','IX_RegistrationFormAssets_UploadScope',0,0,2,0,0,'UploadOrganizationId:A,UploadFormCode:A','',null,1),
-		('RegistrationFormAssets','IX_RegistrationFormAssets_CreatedDate',0,0,2,0,0,'CreatedDate:A','',null,1),
-		('RegistrationFormAssetReferenceLocks','PK_RegistrationFormAssetReferenceLocks',1,0,1,1,0,'LockId:A','',null,0)
-
-	declare @actual_indexes table
-	(
-		TableName sysname not null,
-		IndexName sysname not null,
-		IsUnique bit not null,
-		HasFilter bit not null,
-		IndexType tinyint not null,
-		IsPrimaryKey bit not null,
-		IsUniqueConstraint bit not null,
-		CanonicalFilterDefinition nvarchar(max) null,
-		IsDisabled bit not null,
-		IsHypothetical bit not null,
-		KeyColumns nvarchar(500) not null,
-		IncludedColumns nvarchar(500) not null,
-		primary key (TableName, IndexName)
-	)
-
-	insert @actual_indexes
-	select
-		table_object.name,
-		index_object.name,
-		index_object.is_unique,
-		index_object.has_filter,
-		index_object.type,
-		index_object.is_primary_key,
-		index_object.is_unique_constraint,
-		canonical.CanonicalDefinition,
-		index_object.is_disabled,
-		index_object.is_hypothetical,
-		coalesce(keys.KeyColumns, ''),
-		coalesce(includes.IncludedColumns, '')
-	from sys.tables table_object
-	inner join sys.indexes index_object
-		on index_object.object_id = table_object.object_id and index_object.index_id > 0
-	outer apply
-	(
-		select stuff
-		(
-			(
-				select ',' + column_object.name
-					+ case when index_column.is_descending_key = 1 then ':D' else ':A' end
-				from sys.index_columns index_column
-				inner join sys.columns column_object
-					on column_object.object_id = index_column.object_id
-					and column_object.column_id = index_column.column_id
-				where index_column.object_id = index_object.object_id
-					and index_column.index_id = index_object.index_id
-					and index_column.key_ordinal > 0
-				order by index_column.key_ordinal
-				for xml path(''), type
-			).value('.', 'nvarchar(max)'),
-			1, 1, ''
-			) KeyColumns
-		) keys
-	outer apply
-	(
-		select stuff
-		(
-			(
-				select ',' + column_object.name
-				from sys.index_columns index_column
-				inner join sys.columns column_object
-					on column_object.object_id = index_column.object_id
-					and column_object.column_id = index_column.column_id
-				where index_column.object_id = index_object.object_id
-					and index_column.index_id = index_object.index_id
-					and index_column.is_included_column = 1
-				order by index_column.index_column_id
-				for xml path(''), type
-			).value('.', 'nvarchar(max)'),
-			1, 1, ''
-			) IncludedColumns
-		) includes
-	left join @canonical_owned_definitions canonical
-		on canonical.DefinitionKey = N'I:' + convert(nvarchar(20), index_object.object_id) + N':' + convert(nvarchar(20), index_object.index_id)
-	where table_object.schema_id = schema_id('dbo')
-
-	set @incompatible_owned_object = null
-
-	select top (1) @incompatible_owned_object = 'dbo.' + expected.TableName + '.' + expected.IndexName
-	from @expected_indexes expected
-	left join @actual_indexes actual
-		on actual.TableName = expected.TableName and actual.IndexName = expected.IndexName
-	where object_id('dbo.' + expected.TableName, 'U') is not null
-		and
-		(
-			(actual.IndexName is null and not
-				(expected.IsHistoricalOptional = 1 and
-					(expected.IndexName = 'IX_RegistrationFormAssets_CreatedDate'
-						or col_length('dbo.RegistrationFormAssets', 'UploadOrganizationId') is null)))
-			or
-			(actual.IndexName is not null and
-				(actual.IsUnique <> expected.IsUnique
-					or actual.HasFilter <> expected.HasFilter
-					or actual.IndexType <> expected.IndexType
-					or actual.IsPrimaryKey <> expected.IsPrimaryKey
-					or actual.IsUniqueConstraint <> expected.IsUniqueConstraint
-					or actual.IsDisabled <> 0
-					or actual.IsHypothetical <> 0
-					or actual.KeyColumns <> expected.KeyColumns
-					or actual.IncludedColumns <> expected.IncludedColumns
-					or (actual.CanonicalFilterDefinition collate Latin1_General_100_BIN2 <> expected.CanonicalFilterDefinition collate Latin1_General_100_BIN2
-						or (actual.CanonicalFilterDefinition is null and expected.CanonicalFilterDefinition is not null)
-						or (actual.CanonicalFilterDefinition is not null and expected.CanonicalFilterDefinition is null))))
-		)
-
-	if @incompatible_owned_object is not null
-		raiserror('Owned index %s is missing or incompatible with every supported historical definition. Restore it before rerunning.', 16, 1, @incompatible_owned_object)
-
-	set @incompatible_owned_object = null
-
-	select top (1) @incompatible_owned_object = 'dbo.' + actual.TableName + '.' + actual.IndexName
-	from @actual_indexes actual
-	left join @expected_indexes expected
-		on expected.TableName collate database_default = actual.TableName collate database_default
-		and expected.IndexName collate database_default = actual.IndexName collate database_default
-	where actual.TableName collate Latin1_General_100_BIN2 in
-		(
-			'RegistrationFormCodeMetadata','RegistrationSettingScopeVersions',
-			'RegistrationSettingDrafts','RegistrationSettingDraftChanges',
-			'RegistrationSettingPreviewLinks','RegistrationSettingAuditEvents',
-			'RegistrationSettingsCacheGeneration','RegistrationFormAssets',
-			'RegistrationFormAssetReferenceLocks'
-		)
-		and expected.IndexName is null
-
-	if @incompatible_owned_object is not null
-		raiserror('Owned index %s is not part of a supported current or historical schema state. Remove it or restore the repository schema before rerunning.', 16, 1, @incompatible_owned_object)
 
 	/* 3. Creation of missing current objects */
 	if object_id('dbo.RegistrationFormCodeMetadata', 'U') is null
@@ -1092,24 +282,6 @@ if not exists
 		include (EventType, TargetOrganizationId, FormCode)
 	end
 
-	if not exists
-	(
-		select 1
-		from sys.indexes
-		where object_id = object_id('dbo.RegistrationSettingAuditEvents')
-			and name = 'IX_RSAE_ScopeFilter'
-	)
-	begin
-		create index IX_RSAE_ScopeFilter
-		on dbo.RegistrationSettingAuditEvents
-		(
-			TargetOrganizationId,
-			FormCode,
-			EventType,
-			TimestampUtc desc
-		)
-	end
-
 	if object_id('dbo.RegistrationSettingsCacheGeneration', 'U') is null
 	begin
 		create table dbo.RegistrationSettingsCacheGeneration
@@ -1157,7 +329,8 @@ if not exists
 		)
 	end
 
-	/* 4. Upgrades from known historical states */
+
+	/* 4. Additive and widening upgrades required by the current application */
 	if col_length('dbo.RegistrationSettingPreviewLinks', 'OperationalBranchId') is null
 	begin
 		update dbo.RegistrationSettingPreviewLinks
@@ -1223,22 +396,6 @@ if not exists
 			add UploadFormCode nvarchar(64) null
 	end
 
-	if not exists
-	(
-		select 1
-		from sys.indexes
-		where object_id = object_id('dbo.RegistrationFormAssets')
-			and name = 'IX_RegistrationFormAssets_UploadScope'
-	)
-	begin
-		create index IX_RegistrationFormAssets_UploadScope
-		on dbo.RegistrationFormAssets
-		(
-			UploadOrganizationId,
-			UploadFormCode
-		)
-	end
-
 	if col_length('dbo.RegistrationSettingDrafts', 'Revision') is null
 	begin
 		alter table dbo.RegistrationSettingDrafts
@@ -1258,7 +415,8 @@ if not exists
 	end
 
 
-	/* 5. Required data transformations */
+
+	/* 5. Required data transformations and current singleton state */
 	if not exists
 	(
 		select 1
@@ -1284,13 +442,13 @@ if not exists
 	   A NULL LiveSettingsGeneration has no durable evidence of the generation
 	   under which an old live bearer token was issued. Revoke those links while
 	   they are attached to an active draft; links for inactive drafts remain
-	   historical records, and safe-preview links are not affected by the live
+	   existing records, and safe-preview links are not affected by the live
 	   generation contract. A generation-bound link is never rewritten here.
 	*/
 	/*
 	   LiveSettingsGeneration may be introduced earlier in this same batch.
 	   Execute this statement dynamically so SQL Server resolves the upgraded
-	   column after the historical ALTER TABLE has committed to the transaction.
+	   column after the ALTER TABLE has committed to the transaction.
 	*/
 	exec
 	(
@@ -1602,12 +760,16 @@ if not exists
 	on changed_draft.DraftId = preview_link.DraftId
 	where preview_link.RevokedAtUtc is null
 
-	update draft
-	set Revision = draft.Revision + 1
-	from dbo.RegistrationSettingDrafts draft
-	inner join #SettingsAdministrationChangedDrafts changed_draft
-	on changed_draft.DraftId = draft.DraftId
-	where draft.Status = 'Active'
+	/* Revision may have been added earlier in this batch. */
+	exec
+	(
+		N'update draft
+		set Revision = draft.Revision + 1
+		from dbo.RegistrationSettingDrafts draft
+		inner join #SettingsAdministrationChangedDrafts changed_draft
+			on changed_draft.DraftId = draft.DraftId
+		where draft.Status = ''Active'''
+	)
 
 	delete from dbo.RegistrationFormSettings
 	where Setting = 'header_image_url'
@@ -1625,505 +787,29 @@ if not exists
 			from @setting_map
 		)
 
-	/* Refresh rendered definitions because this run may have created legacy objects. */
-	delete from @canonical_owned_definitions
-
-	select @max_definition_length = isnull(max(DefinitionLength), 0)
-	from
-	(
-		select len(check_constraint.definition) DefinitionLength
-		from sys.check_constraints check_constraint
-		where check_constraint.parent_object_id in
-		(
-			object_id('dbo.RegistrationFormCodeMetadata'), object_id('dbo.RegistrationSettingDrafts'),
-			object_id('dbo.RegistrationSettingDraftChanges'), object_id('dbo.RegistrationSettingAuditEvents'),
-			object_id('dbo.RegistrationFormAssets'), object_id('dbo.RegistrationFormAssetReferenceLocks')
-		)
-		union all
-		select len(default_constraint.definition) DefinitionLength
-		from sys.default_constraints default_constraint
-		where default_constraint.parent_object_id in
-		(
-			object_id('dbo.RegistrationFormCodeMetadata'), object_id('dbo.RegistrationSettingScopeVersions'),
-			object_id('dbo.RegistrationSettingDrafts'), object_id('dbo.RegistrationSettingDraftChanges'),
-			object_id('dbo.RegistrationSettingPreviewLinks'), object_id('dbo.RegistrationSettingAuditEvents'),
-			object_id('dbo.RegistrationFormAssets')
-		)
-		union all
-		select len(index_object.filter_definition) DefinitionLength
-		from sys.indexes index_object
-		where index_object.object_id in
-		(
-			object_id('dbo.RegistrationFormCodeMetadata'), object_id('dbo.RegistrationSettingScopeVersions'),
-			object_id('dbo.RegistrationSettingDrafts'), object_id('dbo.RegistrationSettingDraftChanges'),
-			object_id('dbo.RegistrationSettingPreviewLinks'), object_id('dbo.RegistrationSettingAuditEvents'),
-			object_id('dbo.RegistrationSettingsCacheGeneration'), object_id('dbo.RegistrationFormAssets'),
-			object_id('dbo.RegistrationFormAssetReferenceLocks')
-		)
-			and index_object.has_filter = 1
-			and index_object.filter_definition is not null
-	) lengths
-
-	;with OwnedDefinitions as
-	(
-		select convert(nvarchar(100), N'C:' + convert(nvarchar(20), check_constraint.object_id)) DefinitionKey,
-			check_constraint.definition DefinitionText
-		from sys.check_constraints check_constraint
-		where check_constraint.parent_object_id in
-		(
-			object_id('dbo.RegistrationFormCodeMetadata'), object_id('dbo.RegistrationSettingDrafts'),
-			object_id('dbo.RegistrationSettingDraftChanges'), object_id('dbo.RegistrationSettingAuditEvents'),
-			object_id('dbo.RegistrationFormAssets'), object_id('dbo.RegistrationFormAssetReferenceLocks')
-		)
-		union all
-		select convert(nvarchar(100), N'D:' + convert(nvarchar(20), default_constraint.object_id)) DefinitionKey,
-			default_constraint.definition DefinitionText
-		from sys.default_constraints default_constraint
-		where default_constraint.parent_object_id in
-		(
-			object_id('dbo.RegistrationFormCodeMetadata'), object_id('dbo.RegistrationSettingScopeVersions'),
-			object_id('dbo.RegistrationSettingDrafts'), object_id('dbo.RegistrationSettingDraftChanges'),
-			object_id('dbo.RegistrationSettingPreviewLinks'), object_id('dbo.RegistrationSettingAuditEvents'),
-			object_id('dbo.RegistrationFormAssets')
-		)
-		union all
-		select convert(nvarchar(100), N'I:' + convert(nvarchar(20), index_object.object_id) + N':' + convert(nvarchar(20), index_object.index_id)) DefinitionKey,
-			index_object.filter_definition DefinitionText
-		from sys.indexes index_object
-		where index_object.object_id in
-		(
-			object_id('dbo.RegistrationFormCodeMetadata'), object_id('dbo.RegistrationSettingScopeVersions'),
-			object_id('dbo.RegistrationSettingDrafts'), object_id('dbo.RegistrationSettingDraftChanges'),
-			object_id('dbo.RegistrationSettingPreviewLinks'), object_id('dbo.RegistrationSettingAuditEvents'),
-			object_id('dbo.RegistrationSettingsCacheGeneration'), object_id('dbo.RegistrationFormAssets'),
-			object_id('dbo.RegistrationFormAssetReferenceLocks')
-		)
-			and index_object.has_filter = 1
-			and index_object.filter_definition is not null
-	),
-	Numbers as
-	(
-		select 1 Number
-		union all
-		select Number + 1
-		from Numbers
-		where Number < @max_definition_length
-	),
-	CanonicalDefinitions as
-	(
-		select source.DefinitionKey,
-			(
-				select case
-					when substring(source.DefinitionText, Number, 1) = NCHAR(39)
-						then substring(source.DefinitionText, Number, 1)
-					when
-						(
-							len(left(source.DefinitionText, Number - 1))
-							- len(replace(left(source.DefinitionText, Number - 1), NCHAR(39), N''))
-						) % 2 = 1
-						then substring(source.DefinitionText, Number, 1)
-					when substring(source.DefinitionText, Number, 1) not in
-						(N'[', N']', N' ', NCHAR(9), NCHAR(10), NCHAR(12), NCHAR(13), NCHAR(160))
-						then lower(substring(source.DefinitionText, Number, 1))
-					else N''
-				end
-				from Numbers
-				where Number <= len(source.DefinitionText)
-				order by Number
-				for xml path(''), type
-			).value('.', 'nvarchar(max)') RawCanonicalDefinition
-		from OwnedDefinitions source
-	)
-	insert @canonical_owned_definitions (DefinitionKey, CanonicalDefinition)
-	select DefinitionKey,
-		case
-			when left(RawCanonicalDefinition, 1) = N'('
-				and right(RawCanonicalDefinition, 1) = N')'
-			then substring(RawCanonicalDefinition, 2, len(RawCanonicalDefinition) - 2)
-			else RawCanonicalDefinition
-		end
-	from CanonicalDefinitions
-	option (maxrecursion 0)
-
-	/* 6. Final invariant validation */
-	set @incompatible_owned_object = null
-
-	select top (1) @incompatible_owned_object = 'dbo.' + expected.TableName + '.' + expected.ColumnName
-	from @owned_columns expected
-	left join sys.columns actual
-		on actual.object_id = object_id('dbo.' + expected.TableName)
-		and actual.name collate database_default = expected.ColumnName
-	where actual.column_id is null
-		or actual.system_type_id <> expected.SystemTypeId
-		or actual.max_length <> expected.MaxLength
-		or actual.is_nullable <> expected.IsNullable
-		or actual.is_identity <> expected.IsIdentity
-
-	if @incompatible_owned_object is not null
-		raiserror('Final owned schema column invariant failed for %s.', 16, 1, @incompatible_owned_object)
-
-	set @incompatible_owned_object = null
-
-	select top (1) @incompatible_owned_object = 'dbo.' + expected.TableName + '.' + expected.ConstraintName
-	from @expected_constraints expected
-	where not exists
-	(
-		select 1 from sys.objects actual
-		where actual.parent_object_id = object_id('dbo.' + expected.TableName)
-			and actual.name collate database_default = expected.ConstraintName
-			and actual.type collate database_default = expected.ConstraintType
-	)
-
-	if @incompatible_owned_object is not null
-		raiserror('Final owned constraint invariant failed for %s.', 16, 1, @incompatible_owned_object)
-
-	set @incompatible_owned_object = null
-
-	select top (1) @incompatible_owned_object = 'dbo.' + owned_table.name + '.' + actual.name
-	from sys.objects actual
-	inner join sys.tables owned_table
-		on owned_table.object_id = actual.parent_object_id
-	left join @expected_constraints expected
-		on expected.TableName collate database_default = owned_table.name collate database_default
-		and expected.ConstraintName collate database_default = actual.name collate database_default
-		and expected.ConstraintType collate Latin1_General_100_BIN2 = actual.type collate Latin1_General_100_BIN2
-	where owned_table.schema_id = schema_id('dbo')
-		and owned_table.name in
-		(
-			'RegistrationFormCodeMetadata','RegistrationSettingScopeVersions',
-			'RegistrationSettingDrafts','RegistrationSettingDraftChanges',
-			'RegistrationSettingPreviewLinks','RegistrationSettingAuditEvents',
-			'RegistrationSettingsCacheGeneration','RegistrationFormAssets',
-			'RegistrationFormAssetReferenceLocks'
-		)
-		and actual.type in ('C', 'D', 'F', 'PK', 'UQ')
-		and expected.ConstraintName is null
-
-	if @incompatible_owned_object is not null
-		raiserror('Final owned constraint invariant failed because %s is not part of a supported current or historical schema state.', 16, 1, @incompatible_owned_object)
-
-	set @incompatible_owned_object = null
-
-	select top (1) @incompatible_owned_object = 'dbo.' + expected.TableName + '.' + expected.ConstraintName
-	from @expected_check_constraints expected
-	where not exists
-	(
-		select 1
-		from sys.check_constraints actual
-		inner join @canonical_owned_definitions canonical
-			on canonical.DefinitionKey = N'C:' + convert(nvarchar(20), actual.object_id)
-		where actual.parent_object_id = object_id('dbo.' + expected.TableName)
-			and actual.name collate database_default = expected.ConstraintName
-			and actual.is_disabled = 0
-			and actual.is_not_trusted = 0
-			and canonical.CanonicalDefinition collate Latin1_General_100_BIN2 = expected.CanonicalDefinition collate Latin1_General_100_BIN2
-	)
-
-	if @incompatible_owned_object is not null
-		raiserror('Final owned check constraint invariant failed for %s.', 16, 1, @incompatible_owned_object)
-
-	set @incompatible_owned_object = null
-
-	select top (1) @incompatible_owned_object = 'dbo.' + expected.TableName + '.' + expected.ConstraintName
-	from @expected_defaults expected
-	where not exists
-	(
-		select 1
-		from sys.default_constraints actual
-		inner join @canonical_owned_definitions canonical
-			on canonical.DefinitionKey = N'D:' + convert(nvarchar(20), actual.object_id)
-		where actual.parent_object_id = object_id('dbo.' + expected.TableName)
-			and actual.name collate database_default = expected.ConstraintName
-			and actual.parent_column_id = columnproperty(object_id('dbo.' + expected.TableName), expected.ColumnName, 'ColumnId')
-			and canonical.CanonicalDefinition collate Latin1_General_100_BIN2 = expected.CanonicalDefinition collate Latin1_General_100_BIN2
-		)
-
-	if @incompatible_owned_object is not null
-		raiserror('Final owned default constraint invariant failed for %s.', 16, 1, @incompatible_owned_object)
-
-	set @incompatible_owned_object = null
-
-	select top (1) @incompatible_owned_object = 'dbo.' + expected.TableName + '.' + expected.ConstraintName
-	from @expected_foreign_keys expected
-	where not exists
-	(
-		select 1
-		from sys.foreign_keys actual
-		where actual.parent_object_id = object_id('dbo.' + expected.TableName)
-			and actual.name collate database_default = expected.ConstraintName
-			and actual.referenced_object_id = object_id('dbo.' + expected.ReferencedTableName)
-			and actual.delete_referential_action = expected.DeleteReferentialAction
-			and actual.update_referential_action = expected.UpdateReferentialAction
-			and actual.is_disabled = 0
-			and actual.is_not_trusted = 0
-			and actual.is_not_for_replication = 0
-			and
-			(
-				select count(*)
-				from sys.foreign_key_columns actual_column
-				where actual_column.constraint_object_id = actual.object_id
-			) = 1
-			and exists
-			(
-				select 1
-				from sys.foreign_key_columns actual_column
-				inner join sys.columns parent_column
-					on parent_column.object_id = actual.parent_object_id
-					and parent_column.column_id = actual_column.parent_column_id
-				inner join sys.columns referenced_column
-					on referenced_column.object_id = actual.referenced_object_id
-					and referenced_column.column_id = actual_column.referenced_column_id
-				where actual_column.constraint_object_id = actual.object_id
-					and actual_column.constraint_column_id = 1
-					and parent_column.name collate database_default = expected.ParentColumnName
-					and referenced_column.name collate database_default = expected.ReferencedColumnName
-			)
-		)
-
-	if @incompatible_owned_object is not null
-		raiserror('Final owned foreign key invariant failed for %s.', 16, 1, @incompatible_owned_object)
-
-	/* Re-read indexes because missing current indexes may have been created above. */
-	delete from @actual_indexes
-
-	insert @actual_indexes
-	select
-		table_object.name,
-		index_object.name,
-		index_object.is_unique,
-		index_object.has_filter,
-		index_object.type,
-		index_object.is_primary_key,
-		index_object.is_unique_constraint,
-		canonical.CanonicalDefinition,
-		index_object.is_disabled,
-		index_object.is_hypothetical,
-		coalesce(keys.KeyColumns, ''),
-		coalesce(includes.IncludedColumns, '')
-	from sys.tables table_object
-	inner join sys.indexes index_object
-		on index_object.object_id = table_object.object_id and index_object.index_id > 0
-	outer apply
-	(
-		select stuff
-		(
-			(
-				select ',' + column_object.name
-					+ case when index_column.is_descending_key = 1 then ':D' else ':A' end
-				from sys.index_columns index_column
-				inner join sys.columns column_object
-					on column_object.object_id = index_column.object_id
-					and column_object.column_id = index_column.column_id
-				where index_column.object_id = index_object.object_id
-					and index_column.index_id = index_object.index_id
-					and index_column.key_ordinal > 0
-				order by index_column.key_ordinal
-				for xml path(''), type
-			).value('.', 'nvarchar(max)'),
-			1, 1, ''
-			) KeyColumns
-		) keys
-	outer apply
-	(
-		select stuff
-		(
-			(
-				select ',' + column_object.name
-				from sys.index_columns index_column
-				inner join sys.columns column_object
-					on column_object.object_id = index_column.object_id
-					and column_object.column_id = index_column.column_id
-				where index_column.object_id = index_object.object_id
-					and index_column.index_id = index_object.index_id
-					and index_column.is_included_column = 1
-				order by index_column.index_column_id
-				for xml path(''), type
-			).value('.', 'nvarchar(max)'),
-			1, 1, ''
-			) IncludedColumns
-		) includes
-	left join @canonical_owned_definitions canonical
-		on canonical.DefinitionKey = N'I:' + convert(nvarchar(20), index_object.object_id) + N':' + convert(nvarchar(20), index_object.index_id)
-	where table_object.schema_id = schema_id('dbo')
-
-	select top (1) @incompatible_owned_object = 'dbo.' + expected.TableName + '.' + expected.IndexName
-	from @expected_indexes expected
-	left join @actual_indexes actual
-		on actual.TableName = expected.TableName and actual.IndexName = expected.IndexName
-	where actual.IndexName is null
-		or actual.IsUnique <> expected.IsUnique
-		or actual.HasFilter <> expected.HasFilter
-		or actual.IndexType <> expected.IndexType
-		or actual.IsPrimaryKey <> expected.IsPrimaryKey
-		or actual.IsUniqueConstraint <> expected.IsUniqueConstraint
-		or actual.IsDisabled <> 0
-		or actual.IsHypothetical <> 0
-		or actual.KeyColumns <> expected.KeyColumns
-		or actual.IncludedColumns <> expected.IncludedColumns
-		or (actual.CanonicalFilterDefinition collate Latin1_General_100_BIN2 <> expected.CanonicalFilterDefinition collate Latin1_General_100_BIN2
-			or (actual.CanonicalFilterDefinition is null and expected.CanonicalFilterDefinition is not null)
-			or (actual.CanonicalFilterDefinition is not null and expected.CanonicalFilterDefinition is null))
-
-	if @incompatible_owned_object is not null
-		raiserror('Final owned index invariant failed for %s.', 16, 1, @incompatible_owned_object)
-
-	set @incompatible_owned_object = null
-
-	select top (1) @incompatible_owned_object = 'dbo.' + actual.TableName + '.' + actual.IndexName
-	from @actual_indexes actual
-	left join @expected_indexes expected
-		on expected.TableName collate database_default = actual.TableName collate database_default
-		and expected.IndexName collate database_default = actual.IndexName collate database_default
-	where actual.TableName collate Latin1_General_100_BIN2 in
-		(
-			'RegistrationFormCodeMetadata','RegistrationSettingScopeVersions',
-			'RegistrationSettingDrafts','RegistrationSettingDraftChanges',
-			'RegistrationSettingPreviewLinks','RegistrationSettingAuditEvents',
-			'RegistrationSettingsCacheGeneration','RegistrationFormAssets',
-			'RegistrationFormAssetReferenceLocks'
-		)
-		and expected.IndexName is null
-
-	if @incompatible_owned_object is not null
-		raiserror('Owned index %s is not part of a supported current or historical schema state after deployment. Remove it or restore the repository schema before rerunning.', 16, 1, @incompatible_owned_object)
-
-	if exists
-	(
-		select 1 from sys.check_constraints
-		where parent_object_id in
-		(
-			object_id('dbo.RegistrationFormCodeMetadata'), object_id('dbo.RegistrationSettingDrafts'),
-			object_id('dbo.RegistrationSettingDraftChanges'), object_id('dbo.RegistrationSettingAuditEvents'),
-			object_id('dbo.RegistrationFormAssets'), object_id('dbo.RegistrationFormAssetReferenceLocks')
-		)
-			and (is_disabled = 1 or is_not_trusted = 1)
-	)
-		raiserror('A settings-administration check constraint is disabled or untrusted after deployment.', 16, 1)
-
-	if exists
-	(
-		select 1 from sys.foreign_keys
-		where parent_object_id in
-			(object_id('dbo.RegistrationSettingDraftChanges'), object_id('dbo.RegistrationSettingPreviewLinks'))
-			and (is_disabled = 1 or is_not_trusted = 1 or delete_referential_action <> 1)
-	)
-		raiserror('A settings-administration draft foreign key is incompatible after deployment.', 16, 1)
-
-	if not exists
-	(
-		select 1
-		from dbo.RegistrationFormAssetReferenceLocks
-		where LockId = 1
-	)
-	begin
-		raiserror('RegistrationFormAssetReferenceLocks row 1 is missing after deployment.', 16, 1)
-	end
-
-	if exists
-	(
-		select required.Setting
-		from @required_setting_types as required
-		where not exists
-		(
-			select 1
-			from dbo.RegistrationFormSettingTypes as existing
-			where existing.Setting = required.Setting
-		)
-	)
-	begin
-		raiserror('One or more required registration setting types are missing after deployment.', 16, 1)
-	end
-
-	if exists
-	(
-		select 1
-		from dbo.RegistrationFormSettings
-		where Setting = 'header_image_url'
-			or Setting in
-			(
-				select LegacyKey
-				from @setting_map
-			)
-	)
-	begin
-		raiserror('One or more retired settings remain in RegistrationFormSettings after deployment.', 16, 1)
-	end
-
-	if exists
-	(
-		select 1
-		from dbo.RegistrationFormSettingTypes
-		where Setting = 'header_image_url'
-			or Setting in
-			(
-				select LegacyKey
-				from @setting_map
-			)
-	)
-	begin
-		raiserror('One or more retired settings remain in RegistrationFormSettingTypes after deployment.', 16, 1)
-	end
-
-	if exists
-	(
-		select 1
-		from dbo.RegistrationSettingDraftChanges as draft_change
-		inner join dbo.RegistrationSettingDrafts as draft
-		on draft.DraftId = draft_change.DraftId
-		where draft.Status = 'Active'
-			and
-			(
-				draft_change.SettingKey = 'header_image_url'
-				or draft_change.SettingKey in
-				(
-					select LegacyKey
-					from @setting_map
-				)
-			)
-	)
-	begin
-		raiserror('One or more active drafts still contain retired settings after deployment.', 16, 1)
-	end
-
-	if not exists
-	(
-		select 1
-		from dbo.RegistrationSettingsCacheGeneration
-		where Id = 1
-	)
-	begin
-		raiserror('RegistrationSettingsCacheGeneration row 1 is missing after deployment.', 16, 1)
-	end
-
+	/* 6. Focused final application invariants */
 	if (select count(*) from dbo.RegistrationSettingsCacheGeneration) <> 1
 		raiserror('RegistrationSettingsCacheGeneration must contain exactly one singleton row.', 16, 1)
 
 	if (select count(*) from dbo.RegistrationFormAssetReferenceLocks) <> 1
 		raiserror('RegistrationFormAssetReferenceLocks must contain exactly one singleton row.', 16, 1)
 
-	/* Revision may have been added earlier in this same batch. */
 	declare @invalid_version_state bit = 0
 	exec sys.sp_executesql
-		N'
-			select @invalid = case when exists
-			(
-				select 1
-				from dbo.RegistrationSettingScopeVersions
-				where Version < 0
-			) or exists
-			(
-				select 1
-				from dbo.RegistrationSettingDrafts
-				where BaselineVersion < 0 or Revision < 0
-			) then 1 else 0 end',
+		N'select @invalid = case when exists
+		(
+			select 1 from dbo.RegistrationSettingScopeVersions where Version < 0
+		) or exists
+		(
+			select 1 from dbo.RegistrationSettingDrafts where BaselineVersion < 0 or Revision < 0
+		) then 1 else 0 end',
 		N'@invalid bit output',
 		@invalid = @invalid_version_state output
 
 	if @invalid_version_state = 1
 		raiserror('Settings administration versions must be non-negative after deployment.', 16, 1)
 
-	/* These columns can also have been added earlier in this same batch. */
-	declare @invalid_optional_preview_state bit = 0
+	declare @invalid_preview_state bit = 0
 	exec sys.sp_executesql
 		N'
 			select @invalid = case when exists
@@ -2135,25 +821,47 @@ if not exists
 				where preview_link.AllowLiveSubmission = 1
 					and preview_link.RevokedAtUtc is null
 					and draft.Status = ''Active''
-					and
-					(
-						preview_link.LiveSettingsGeneration is null
-						or preview_link.LiveSettingsGeneration > generation.Generation
-					)
+					and (preview_link.LiveSettingsGeneration is null or preview_link.LiveSettingsGeneration > generation.Generation)
 			) or exists
 			(
-				select 1
-				from dbo.RegistrationSettingPreviewLinks
+				select 1 from dbo.RegistrationSettingPreviewLinks
 				where RevokedAtUtc is null and OperationalBranchId = -2147483648
 			) then 1 else 0 end',
 		N'@invalid bit output',
-		@invalid = @invalid_optional_preview_state output
+		@invalid = @invalid_preview_state output
 
-	if @invalid_optional_preview_state = 1
+	if @invalid_preview_state = 1
 		raiserror('An active live-preview link has an invalid settings generation or an unrevoked link has the unknown operational-branch sentinel after deployment.', 16, 1)
 
-	drop table #SettingsAdministrationChangedDrafts
+	if exists
+	(
+		select required.Setting
+		from @required_setting_types required
+		where not exists
+		(
+			select 1 from dbo.RegistrationFormSettingTypes existing where existing.Setting = required.Setting
+		)
+	)
+		raiserror('One or more required registration setting types are missing after deployment.', 16, 1)
 
+	if exists
+	(
+		select 1 from dbo.RegistrationFormSettings
+		where Setting = 'header_image_url' or Setting in (select LegacyKey from @setting_map)
+	)
+		raiserror('One or more retired settings remain in RegistrationFormSettings after deployment.', 16, 1)
+
+	if exists
+	(
+		select 1
+		from dbo.RegistrationSettingDraftChanges draft_change
+		inner join dbo.RegistrationSettingDrafts draft on draft.DraftId = draft_change.DraftId
+		where draft.Status = 'Active'
+			and (draft_change.SettingKey = 'header_image_url' or draft_change.SettingKey in (select LegacyKey from @setting_map))
+	)
+		raiserror('One or more active drafts still contain retired settings after deployment.', 16, 1)
+
+	drop table #SettingsAdministrationChangedDrafts
 	commit transaction
 end try
 begin catch

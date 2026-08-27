@@ -2,9 +2,9 @@
 
 [`settings-administration.sql`](settings-administration.sql) is the authoritative deployment for the patron-registration settings-administration schema and data. It computes the current required database state from the state it finds; deployment numbers, checksums, and deployment history are intentionally not stored.
 
-The script supports three classes of input: a database where the shared prerequisites exist but settings administration has never been installed, known schema states produced by earlier repository deployments, and the fully current state. It creates missing current objects, applies the explicit upgrades and data transitions required by those historical releases, and validates the final invariants.
+The script accepts a database where the shared prerequisites exist, whether settings administration is absent, old, or already current. It creates missing current objects, applies the few additive/widening upgrades the application needs, preserves and transforms application data, and validates focused final invariants.
 
-Arbitrary malformed or manually reshaped patron-registration-owned objects are outside the supported state space. The deployment reports the incompatible column, constraint, or index and rolls back instead of attempting generic type conversion, nullability repair, or constraint reconstruction.
+It does not identify historical releases or reject harmless additional DBA indexes or constraints. States that cannot safely accept the required transformations still fail atomically with SQL Server's normal actionable error.
 
 ## Deployment
 
@@ -23,9 +23,9 @@ The application runtime identity remains separate from the deployment identity. 
 
 ## Safety and repeatability
 
-The SQL script validates shared `clcdb` prerequisites, then starts one transaction with `SET XACT_ABORT ON` and acquires an exclusive SQL Server application lock with `sp_getapplock` scoped to that transaction. It validates any existing owned schema against known historical shapes before changing it, converges the supported state, and checks the final invariants. A second deployment waits for the lock and then evaluates the resulting state. Any failure rolls back the complete update, including schema and data changes.
+The SQL script validates the shared `clcdb` prerequisites, then starts one transaction with `SET XACT_ABORT ON` and acquires an exclusive SQL Server application lock with `sp_getapplock` scoped to that transaction. It converges the current state and checks focused application invariants. A second deployment waits for the lock and then evaluates the resulting state. Any failure rolls back the complete update, including schema and data changes.
 
-The script is safe to run repeatedly. A successful second run does not duplicate catalog rows, singleton rows, settings, drafts, assets, or indexes. Legacy values are copied to their current keys before retired rows are removed. When both a legacy value and its current replacement exist, the current replacement is retained; active draft mutations follow the same replacement-wins rule. Unexpected owned schema shapes fail with an actionable error and are not guessed or repaired.
+The script is safe to run repeatedly. A successful second run does not duplicate catalog rows, singleton rows, settings, drafts, assets, or required indexes. Legacy values are copied to their current keys before retired rows are removed. When both a legacy value and its current replacement exist, the current replacement is retained; active draft mutations follow the same replacement-wins rule.
 
 The shared prerequisite tables `dbo.RegistrationFormSettingTypes` and `dbo.RegistrationFormSettings` must already exist with the columns and trusted relationship required by the application. The script validates those shared objects but does not take ownership of their schema. Missing or incompatible prerequisites fail before deployment can commit.
 
