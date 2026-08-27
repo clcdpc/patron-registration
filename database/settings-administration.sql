@@ -133,8 +133,8 @@ if not exists
 	raiserror('Shared prerequisite dbo.RegistrationFormSettings requires an enabled, unfiltered unique key containing exactly OrganizationID, Setting, and FormCode; column order may vary. No qualifying key was found. Restore that uniqueness guarantee before rerunning deployment.', 16, 1)
 
 declare @setting_fk_name sysname
-declare @setting_fk_disabled bit
-declare @setting_fk_untrusted bit
+declare @setting_fk_disabled int
+declare @setting_fk_untrusted int
 
 select top (1)
 	@setting_fk_name = fk.name,
