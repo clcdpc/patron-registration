@@ -52,6 +52,7 @@ namespace Clc.PatronRegistration
         public string? StreetTwo { get; set; } = string.Empty;
         public string City { get; set; } = string.Empty;
         public string State { get; set; } = string.Empty;
+        public string County { get; set; } = string.Empty;
         public string? User1 { get; set; } = string.Empty;
         public string User2 { get; set; } = string.Empty;
         public string User4 { get; set; } = string.Empty;
@@ -527,7 +528,8 @@ namespace Clc.PatronRegistration
         public Registration VerifyAndFixAddress(IMelissaRestClient melissa)
         {
             var status = AddressVerificationStatus.None;
-            var response = melissa.PersonatorRequest(new PersonatorRequestRecord
+
+            var request = new PersonatorRequest(new PersonatorRequestRecord
             {
                 FirstName = NameFirst,
                 LastName = NameLast,
@@ -536,7 +538,10 @@ namespace Clc.PatronRegistration
                 City = City,
                 State = State,
                 PostalCode = PostalCode
-            });
+            })
+            { Columns = "GrpCensus" };
+
+            var response = melissa.PersonatorRequest(request);
 
             MelissaResponse = response;
 
@@ -570,6 +575,7 @@ namespace Clc.PatronRegistration
                     City = textInfo.ToTitleCase(record.City);
                     State = record.State.Length == 2 ? record.State.ToUpper() : textInfo.ToTitleCase(record.State);
                     PostalCode = record.PostalCode.Split('-')[0];
+                    County = record.CountyName;
                 }
             }
 
