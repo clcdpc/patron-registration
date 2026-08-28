@@ -85,6 +85,7 @@ jobs:
   live-development:
     name: DEVELOPMENT Polaris live gate
     needs: [resolve_release, deterministic, live-rerun-guard]
+    if: ${{ github.run_attempt == 1 }}
     runs-on: [self-hosted, patron-registration-live-development]
     timeout-minutes: 30
     concurrency:
@@ -92,31 +93,16 @@ jobs:
       cancel-in-progress: false
     environment:
       name: live-development-tests
-    env:
-      PATRON_REGISTRATION_LIVE_TESTS: 'true'
-      PATRON_REGISTRATION_PAPI_HOST: ${{ vars.PATRON_REGISTRATION_PAPI_HOST }}
-      PATRON_REGISTRATION_PAPI_ACCESS_ID: ${{ secrets.PATRON_REGISTRATION_PAPI_ACCESS_ID }}
-      PATRON_REGISTRATION_PAPI_ACCESS_KEY: ${{ secrets.PATRON_REGISTRATION_PAPI_ACCESS_KEY }}
-      PATRON_REGISTRATION_PAPI_ORGANIZATION_ID: ${{ vars.PATRON_REGISTRATION_PAPI_ORGANIZATION_ID }}
-      PATRON_REGISTRATION_PAPI_LIBRARY_ID: ${{ vars.PATRON_REGISTRATION_PAPI_LIBRARY_ID }}
-      PATRON_REGISTRATION_PAPI_BRANCH_ID: ${{ vars.PATRON_REGISTRATION_PAPI_BRANCH_ID }}
-      PATRON_REGISTRATION_PAPI_PATRON_CODE_ID: ${{ vars.PATRON_REGISTRATION_PAPI_PATRON_CODE_ID }}
-      PATRON_REGISTRATION_PAPI_LOGON_USER_ID: ${{ vars.PATRON_REGISTRATION_PAPI_LOGON_USER_ID }}
-      PATRON_REGISTRATION_PAPI_ECARD_PATRON_CODE_ID: ${{ vars.PATRON_REGISTRATION_PAPI_ECARD_PATRON_CODE_ID }}
-      PATRON_REGISTRATION_PAPI_STUDENT_PATRON_CODE_ID: ${{ vars.PATRON_REGISTRATION_PAPI_STUDENT_PATRON_CODE_ID }}
-      PATRON_REGISTRATION_PAPI_TEACHER_PATRON_CODE_ID: ${{ vars.PATRON_REGISTRATION_PAPI_TEACHER_PATRON_CODE_ID }}
-      PATRON_REGISTRATION_PAPI_SCHOOL: ${{ vars.PATRON_REGISTRATION_PAPI_SCHOOL }}
-      PATRON_REGISTRATION_LIVE_COMMIT_SHA: ${{ needs.resolve_release.outputs.commit_sha }}
     steps:
       - name: Check out exact tagged commit
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ needs.resolve_release.outputs.commit_sha }}
           fetch-depth: 0
           persist-credentials: false
 
       - name: Set up .NET
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
         with:
           dotnet-version: 8.x
 
@@ -155,13 +141,47 @@ jobs:
       - name: Run serial DEVELOPMENT gate
         shell: bash
         env:
+          PATRON_REGISTRATION_LIVE_TESTS: 'true'
+          PATRON_REGISTRATION_PAPI_HOST: ${{ vars.PATRON_REGISTRATION_PAPI_HOST }}
+          PATRON_REGISTRATION_PAPI_ACCESS_ID: ${{ secrets.PATRON_REGISTRATION_PAPI_ACCESS_ID }}
+          PATRON_REGISTRATION_PAPI_ACCESS_KEY: ${{ secrets.PATRON_REGISTRATION_PAPI_ACCESS_KEY }}
+          PATRON_REGISTRATION_PAPI_ORGANIZATION_ID: ${{ vars.PATRON_REGISTRATION_PAPI_ORGANIZATION_ID }}
+          PATRON_REGISTRATION_PAPI_LIBRARY_ID: ${{ vars.PATRON_REGISTRATION_PAPI_LIBRARY_ID }}
+          PATRON_REGISTRATION_PAPI_BRANCH_ID: ${{ vars.PATRON_REGISTRATION_PAPI_BRANCH_ID }}
+          PATRON_REGISTRATION_PAPI_PATRON_CODE_ID: ${{ vars.PATRON_REGISTRATION_PAPI_PATRON_CODE_ID }}
+          PATRON_REGISTRATION_PAPI_LOGON_USER_ID: ${{ vars.PATRON_REGISTRATION_PAPI_LOGON_USER_ID }}
+          PATRON_REGISTRATION_PAPI_ECARD_PATRON_CODE_ID: ${{ vars.PATRON_REGISTRATION_PAPI_ECARD_PATRON_CODE_ID }}
+          PATRON_REGISTRATION_PAPI_STUDENT_PATRON_CODE_ID: ${{ vars.PATRON_REGISTRATION_PAPI_STUDENT_PATRON_CODE_ID }}
+          PATRON_REGISTRATION_PAPI_TEACHER_PATRON_CODE_ID: ${{ vars.PATRON_REGISTRATION_PAPI_TEACHER_PATRON_CODE_ID }}
+          PATRON_REGISTRATION_PAPI_SCHOOL: ${{ vars.PATRON_REGISTRATION_PAPI_SCHOOL }}
+          PATRON_REGISTRATION_LIVE_COMMIT_SHA: ${{ needs.resolve_release.outputs.commit_sha }}
           PATRON_REGISTRATION_LIVE_MANIFEST: ${{ runner.temp }}/patron-registration-live-results.json
         run: ./test.sh --live-development
 
       - name: Publish public-safe live manifest
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         continue-on-error: true
         with:
           name: patron-registration-live-results
           path: ${{ runner.temp }}/patron-registration-live-results.json
+
+  release-validation-result:
+    name: Release validation result
+    if: ${{ always() }}
+    needs: [resolve_release, deterministic, live-rerun-guard, live-development]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Require successful first-attempt release validation
+        shell: bash
+        env:
+          RELEASE_VALIDATION_PASSED: ${{ github.run_attempt == 1 && needs.resolve_release.result == 'success' && needs.deterministic.result == 'success' && needs.live-rerun-guard.result == 'success' && needs.live-development.result == 'success' }}
+        run: |
+          set -euo pipefail
+          if [[ "$RELEASE_VALIDATION_PASSED" != "true" ]]; then
+            echo "Release validation requires a first-attempt run and successful resolve_release, deterministic, live-rerun-guard, and live-development jobs."
+            exit 1
+          fi
+          echo "Release validation completed successfully on the first attempt."

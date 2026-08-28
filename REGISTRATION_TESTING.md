@@ -172,9 +172,13 @@ and is terminal validation (there is no deployment workflow here). It:
 
 Before the live job, a GitHub-hosted `live-rerun-guard` checks
 `github.run_attempt` with no live Environment, secrets, or internal runner.
-`live-development` depends on that guard as well as deterministic validation,
-so an ordinary rerun is rejected before the self-hosted live trust boundary is
-entered. The live job passes the resolved commit separately as
+`live-development` also has a job-level first-attempt condition evaluated before
+its runner, Environment, and secrets are selected. It depends on that guard as
+well as deterministic validation, so an ordinary rerun is rejected before the
+self-hosted live trust boundary is entered. A hosted
+`release-validation-result` job always runs after all release stages and fails
+unless this is the first attempt and every required stage succeeded. The live
+job passes the resolved commit separately as
 `PATRON_REGISTRATION_LIVE_COMMIT_SHA`; this keeps live breadcrumbs and synthetic
 identity tied to the peeled release commit even when the pushed tag is annotated.
 
@@ -184,7 +188,10 @@ self-hosted label, `cancel-in-progress: false`, `[DoNotParallelize]`, and a
 30-minute outer timeout. Only the live job is globally serialized; deterministic
 validation for different tags may run concurrently. The manifest upload is
 best-effort with `if: always()` and cannot hide the test result. The workflow
-checkout disables persisted credentials.
+checkout disables persisted credentials. Only the `Run serial DEVELOPMENT gate`
+execution step receives PAPI credentials and live operational configuration;
+checkout, .NET setup, tag revalidation, and artifact publication receive no live
+credentials.
 
 An ordinary GitHub rerun has `GITHUB_RUN_ATTEMPT > 1` and fails closed in the
 GitHub-hosted prerequisite before live setup/mutation. The in-test
@@ -211,10 +218,10 @@ ephemeral or tightly restricted runner group available only to this repository
 and approved release workflow, never to arbitrary PR/branch workflows. The
 label in the workflow is not proof that organization-level restrictions exist;
 if they cannot be established, leave the live job blocked. Prefer first-party
-actions and pin actions on the internal runner to verified immutable full SHAs
-when the organization can resolve them. The workflow currently uses first-party
-version tags because this source does not fabricate unverifiable SHA pins; that
-external hardening remains required.
+actions and pin actions on the internal runner to verified immutable full SHAs.
+The live job pins its first-party checkout, .NET setup, and artifact upload
+actions to verified immutable full SHAs; future actions added to that trust
+boundary must meet the same standard.
 
 ## Investigating a failed live attempt
 
