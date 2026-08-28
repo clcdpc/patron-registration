@@ -433,6 +433,16 @@ public sealed record LiveDevelopmentConfiguration(
             ? parsed
             : throw new InvalidOperationException($"Live configuration {name} must be positive; no patron mutation was attempted.");
 
+        // Keep the rerun guard first so a repeat is rejected before any other
+        // live configuration is interpreted. This remains defense in depth
+        // for local/manual invocation; the workflow guard runs earlier still.
+        var runAttempt = Get("GITHUB_RUN_ATTEMPT");
+        if (int.TryParse(runAttempt, out var attempt) && attempt > 1)
+        {
+            throw new InvalidOperationException(
+                "A workflow rerun is fail-closed because an earlier attempt may have created patrons; inspect the public manifest before recovery.");
+        }
+
         var enabled = Get("PATRON_REGISTRATION_LIVE_TESTS");
         if (!string.Equals(enabled, "true", StringComparison.OrdinalIgnoreCase))
         {
@@ -447,15 +457,25 @@ public sealed record LiveDevelopmentConfiguration(
                 "The configured Polaris endpoint is not the committed DEVELOPMENT allowlist; no patron mutation was attempted.");
         }
 
-        var runAttempt = Get("GITHUB_RUN_ATTEMPT");
-        if (int.TryParse(runAttempt, out var attempt) && attempt > 1)
+        var selected = (selectedScenarios ?? LiveDevelopmentScenarioSelector.AllScenarioNames)
+            .Select(name => name.Trim().ToLowerInvariant())
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (selected.Count == 0)
         {
             throw new InvalidOperationException(
-                "A workflow rerun is fail-closed because an earlier attempt may have created patrons; inspect the public manifest before recovery.");
+                "At least one live registration scenario must be selected; no patron mutation was attempted.");
         }
 
-        var selected = (selectedScenarios ?? LiveDevelopmentScenarioSelector.AllScenarioNames)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var unknown = selected
+            .Where(name => !LiveDevelopmentScenarioSelector.AllScenarioNames.Contains(name, StringComparer.Ordinal))
+            .OrderBy(name => name, StringComparer.Ordinal)
+            .ToArray();
+        if (unknown.Length > 0)
+        {
+            throw new InvalidOperationException(
+                $"Unknown live registration scenario: {string.Join(", ", unknown)}; no patron mutation was attempted.");
+        }
+
         var requiresStandardPatronCode = selected.Contains("standard") || selected.Contains("school");
         var requiresEcardPatronCode = selected.Contains("ecard");
 
@@ -549,8 +569,12 @@ public sealed class LiveDevelopmentRegistrationGateTests
         using var harness = LiveSubmissionHarness.Create(configuration, papi.Object, store);
 
         Assert.IsTrue(string.IsNullOrWhiteSpace(harness.SettingsFor("standard").SchoolInfoFormat));
+        Assert.AreEqual(4, harness.SettingsFor("standard").PatronCodeId);
+        Assert.AreEqual(0, harness.SettingsFor("standard").EcardPatronCodeId);
         Assert.AreEqual("uapl", harness.SettingsFor("school").SchoolInfoFormat);
+        Assert.AreEqual(4, harness.SettingsFor("school").PatronCodeId);
         Assert.AreEqual("uapl", harness.SettingsFor("ecard").SchoolInfoFormat);
+        Assert.AreEqual(6, harness.SettingsFor("ecard").EcardPatronCodeId);
         Assert.AreNotEqual(
             harness.SettingsFor("standard").SchoolInfoFormat,
             harness.SettingsFor("school").SchoolInfoFormat);
@@ -569,6 +593,72 @@ public sealed class LiveDevelopmentRegistrationGateTests
         var preflightPassed = scenario.Preflight();
         papi.Verify(value => value.PatronRegistrationCreate(It.IsAny<PatronRegistrationParams>()), Times.Never);
         Assert.IsTrue(preflightPassed);
+        Assert.IsFalse(harness.ModelStateFor("school").TryGetValue(
+            nameof(Registration.User1), out var user1State) && user1State.Errors.Count > 0);
+    }
+
+    [TestMethod]
+    public void StandardScenario_PreflightUsesNonSchoolContract()
+    {
+        var configuration = SyntheticConfiguration();
+        var papi = new Mock<IPapiClient>();
+        papi.Setup(value => value.PatronRegistrationCreate(It.IsAny<PatronRegistrationParams>()))
+            .Returns((PatronRegistrationParams parameters) => new RestResponse<PatronRegistrationCreateResult>
+            {
+                Data = new PatronRegistrationCreateResult
+                {
+                    PAPIErrorCode = 0,
+                    PatronID = 123,
+                    Barcode = "STANDARD-123"
+                }
+            });
+        using var store = new LiveAttemptStore();
+        using var harness = LiveSubmissionHarness.Create(configuration, papi.Object, store);
+        var identity = new LiveIdentity("v1.2.3", new string('a', 40), "run", 1, "invocation");
+        var scenario = harness.BuildScenario("standard", identity);
+
+        var result = LiveDevelopmentGateRunner.Run([scenario], identity, store);
+
+        Assert.IsTrue(result.Succeeded, result.SafeSummary());
+        Assert.IsNotNull(harness.LastParameters);
+        Assert.AreEqual(4, harness.LastParameters!.PatronCode);
+        Assert.IsTrue(string.IsNullOrEmpty(harness.LastParameters.User1));
+        papi.Verify(value => value.PatronRegistrationCreate(It.IsAny<PatronRegistrationParams>()), Times.Once);
+    }
+
+    [TestMethod]
+    public void PreparedScenario_IsReusedForExecution()
+    {
+        var configuration = SyntheticConfiguration();
+        var formBuildCount = 0;
+        var papi = new Mock<IPapiClient>();
+        papi.Setup(value => value.PatronRegistrationCreate(It.IsAny<PatronRegistrationParams>()))
+            .Returns((PatronRegistrationParams parameters) => new RestResponse<PatronRegistrationCreateResult>
+            {
+                Data = new PatronRegistrationCreateResult
+                {
+                    PAPIErrorCode = 0,
+                    PatronID = 123,
+                    Barcode = "STANDARD-123"
+                }
+            });
+        using var store = new LiveAttemptStore();
+        using var harness = LiveSubmissionHarness.Create(
+            configuration,
+            papi.Object,
+            store,
+            (name, token) =>
+            {
+                formBuildCount++;
+                return SyntheticFormValues(configuration.BranchId, name, token);
+            });
+        var identity = new LiveIdentity("v1.2.3", new string('a', 40), "run", 1, "invocation");
+        var scenario = harness.BuildScenario("standard", identity);
+
+        var result = LiveDevelopmentGateRunner.Run([scenario], identity, store);
+
+        Assert.IsTrue(result.Succeeded, result.SafeSummary());
+        Assert.AreEqual(1, formBuildCount);
     }
 
     [TestMethod]
@@ -596,6 +686,7 @@ public sealed class LiveDevelopmentRegistrationGateTests
         Assert.IsTrue(result.Succeeded, result.SafeSummary());
         Assert.IsNotNull(harness.LastParameters);
         Assert.AreEqual(string.Empty, harness.LastParameters!.User1);
+        Assert.AreEqual(6, harness.LastParameters.PatronCode);
         papi.Verify(value => value.PatronRegistrationCreate(It.IsAny<PatronRegistrationParams>()), Times.Once);
     }
 
@@ -624,12 +715,11 @@ public sealed class LiveDevelopmentRegistrationGateTests
             harness.BuildScenario("school", identity),
             harness.BuildScenario("ecard", identity)];
 
-        Assert.IsFalse(scenarios[1].Preflight(),
-            string.Join(" | ", harness.ModelStateFor("school").SelectMany(entry =>
-                entry.Value.Errors.Select(error => $"{entry.Key}={error.ErrorMessage}"))));
         var result = LiveDevelopmentGateRunner.Run(scenarios, identity, store);
 
-        Assert.IsFalse(result.Succeeded);
+        Assert.IsFalse(result.Succeeded,
+            string.Join(" | ", harness.ModelStateFor("school").SelectMany(entry =>
+                entry.Value.Errors.Select(error => $"{entry.Key}={error.ErrorMessage}"))));
         Assert.AreEqual(0, result.Results.Count);
         papi.Verify(value => value.PatronRegistrationCreate(It.IsAny<PatronRegistrationParams>()), Times.Never);
     }
@@ -659,12 +749,11 @@ public sealed class LiveDevelopmentRegistrationGateTests
             harness.BuildScenario("school", identity),
             harness.BuildScenario("ecard", identity)];
 
-        Assert.IsFalse(scenarios[1].Preflight(),
-            string.Join(" | ", harness.ModelStateFor("school").SelectMany(entry =>
-                entry.Value.Errors.Select(error => $"{entry.Key}={error.ErrorMessage}"))));
         var result = LiveDevelopmentGateRunner.Run(scenarios, identity, store);
 
-        Assert.IsFalse(result.Succeeded);
+        Assert.IsFalse(result.Succeeded,
+            string.Join(" | ", harness.ModelStateFor("school").SelectMany(entry =>
+                entry.Value.Errors.Select(error => $"{entry.Key}={error.ErrorMessage}"))));
         Assert.AreEqual(0, result.Results.Count);
         papi.Verify(value => value.PatronRegistrationCreate(It.IsAny<PatronRegistrationParams>()), Times.Never);
     }
@@ -820,6 +909,16 @@ public sealed class LiveDevelopmentRegistrationGateTests
             ScenarioContext Context,
             Registration Registration,
             string Token);
+
+        private sealed class ScenarioRequestServices(
+            IServiceProvider inner,
+            ISettingProvider settings) : IServiceProvider
+        {
+            public object? GetService(Type serviceType) =>
+                serviceType == typeof(ISettingProvider)
+                    ? settings
+                    : inner.GetService(serviceType);
+        }
 
         private LiveSubmissionHarness(
             ServiceProvider provider,
@@ -1026,49 +1125,63 @@ public sealed class LiveDevelopmentRegistrationGateTests
             var body = string.Join("&", values.Select(pair =>
                 $"{Uri.EscapeDataString(pair.Key)}={Uri.EscapeDataString(pair.Value)}"));
             var bytes = Encoding.UTF8.GetBytes(body);
-            httpContext.Request.Method = HttpMethods.Post;
-            httpContext.Request.ContentType = "application/x-www-form-urlencoded";
-            httpContext.Request.ContentLength = bytes.Length;
-            httpContext.Request.Body = new MemoryStream(bytes);
-            httpContext.Features.Set<IFormFeature>(new FormFeature(httpContext.Request));
-
-            var actionDescriptor = provider.GetRequiredService<IActionDescriptorCollectionProvider>()
-                .ActionDescriptors.Items.OfType<ControllerActionDescriptor>()
-                .Single(descriptor => descriptor.ControllerTypeInfo == typeof(RegistrationController).GetTypeInfo() &&
-                    descriptor.ActionName == nameof(RegistrationController.Submit));
-            var parameter = actionDescriptor.Parameters.OfType<ControllerParameterDescriptor>().Single();
-            var actionContext = new ActionContext(
-                httpContext,
-                new Microsoft.AspNetCore.Routing.RouteData(),
-                actionDescriptor,
-                new ModelStateDictionary());
-            context.Controller.ControllerContext = new ControllerContext(actionContext);
-            var metadataProvider = provider.GetRequiredService<IModelMetadataProvider>();
-            var metadata = ((DefaultModelMetadataProvider)metadataProvider)
-                .GetMetadataForParameter(parameter.ParameterInfo);
-            var binder = provider.GetRequiredService<IModelBinderFactory>().CreateBinder(new ModelBinderFactoryContext
+            var originalRequestServices = httpContext.RequestServices;
+            // Registration's model-bound constructor obtains ISettingProvider
+            // from RequestServices. Scope that lookup to this scenario so MVC
+            // binding, selected-branch revalidation, and execution all see the
+            // same settings instance.
+            httpContext.RequestServices = new ScenarioRequestServices(
+                originalRequestServices, context.Settings);
+            try
             {
-                BindingInfo = parameter.BindingInfo,
-                Metadata = metadata,
-                CacheToken = parameter
-            });
-            var valueProvider = CompositeValueProvider.CreateAsync(
-                actionContext,
-                provider.GetRequiredService<IOptions<MvcOptions>>().Value.ValueProviderFactories)
-                .GetAwaiter().GetResult();
-            var bindingResult = provider.GetRequiredService<ParameterBinder>().BindModelAsync(
-                actionContext,
-                binder,
-                valueProvider,
-                parameter,
-                metadata,
-                null).GetAwaiter().GetResult();
+                httpContext.Request.Method = HttpMethods.Post;
+                httpContext.Request.ContentType = "application/x-www-form-urlencoded";
+                httpContext.Request.ContentLength = bytes.Length;
+                httpContext.Request.Body = new MemoryStream(bytes);
+                httpContext.Features.Set<IFormFeature>(new FormFeature(httpContext.Request));
 
-            return bindingResult.IsModelSet &&
-                bindingResult.Model is Registration registration &&
-                context.Controller.ModelState.IsValid
-                    ? registration
-                    : null;
+                var actionDescriptor = provider.GetRequiredService<IActionDescriptorCollectionProvider>()
+                    .ActionDescriptors.Items.OfType<ControllerActionDescriptor>()
+                    .Single(descriptor => descriptor.ControllerTypeInfo == typeof(RegistrationController).GetTypeInfo() &&
+                        descriptor.ActionName == nameof(RegistrationController.Submit));
+                var parameter = actionDescriptor.Parameters.OfType<ControllerParameterDescriptor>().Single();
+                var actionContext = new ActionContext(
+                    httpContext,
+                    new Microsoft.AspNetCore.Routing.RouteData(),
+                    actionDescriptor,
+                    new ModelStateDictionary());
+                context.Controller.ControllerContext = new ControllerContext(actionContext);
+                var metadataProvider = provider.GetRequiredService<IModelMetadataProvider>();
+                var metadata = ((DefaultModelMetadataProvider)metadataProvider)
+                    .GetMetadataForParameter(parameter.ParameterInfo);
+                var binder = provider.GetRequiredService<IModelBinderFactory>().CreateBinder(new ModelBinderFactoryContext
+                {
+                    BindingInfo = parameter.BindingInfo,
+                    Metadata = metadata,
+                    CacheToken = parameter
+                });
+                var valueProvider = CompositeValueProvider.CreateAsync(
+                    actionContext,
+                    provider.GetRequiredService<IOptions<MvcOptions>>().Value.ValueProviderFactories)
+                    .GetAwaiter().GetResult();
+                var bindingResult = provider.GetRequiredService<ParameterBinder>().BindModelAsync(
+                    actionContext,
+                    binder,
+                    valueProvider,
+                    parameter,
+                    metadata,
+                    null).GetAwaiter().GetResult();
+
+                return bindingResult.IsModelSet &&
+                    bindingResult.Model is Registration registration &&
+                    context.Controller.ModelState.IsValid
+                        ? registration
+                        : null;
+            }
+            finally
+            {
+                httpContext.RequestServices = originalRequestServices;
+            }
         }
 
         private static bool ScenarioSettingsAreValid(string name, ISettingProvider settings) => name switch
@@ -1085,7 +1198,8 @@ public sealed class LiveDevelopmentRegistrationGateTests
 
         private static bool ScenarioInputIsValid(string name, Registration registration) => name switch
         {
-            "standard" => !registration.IsStudent && !registration.IsTeacher && !registration.IsECard,
+            "standard" => !registration.IsStudent && !registration.IsTeacher && !registration.IsECard &&
+                string.IsNullOrWhiteSpace(registration.User1),
             "school" => !registration.IsStudent && !registration.IsTeacher && !registration.IsECard &&
                 string.IsNullOrWhiteSpace(registration.User1),
             "ecard" => registration.IsECard && !string.IsNullOrWhiteSpace(registration.User1),
@@ -1162,11 +1276,16 @@ public sealed class LiveDevelopmentRegistrationGateTests
             var settings = new Mock<ISettingProvider>();
             settings.SetupGet(value => value.OrganizationId).Returns(configuration.OrganizationId);
             settings.SetupGet(value => value.LibraryId).Returns(configuration.LibraryId);
-            settings.SetupGet(value => value.PatronCodeId).Returns(configuration.PatronCodeId);
+            settings.SetupGet(value => value.PatronCodeId)
+                .Returns(scenario == "ecard" ? 0 : configuration.PatronCodeId);
             settings.SetupGet(value => value.RegistrationLogonUserId).Returns(configuration.LogonUserId);
-            settings.SetupGet(value => value.EcardPatronCodeId).Returns(configuration.EcardPatronCodeId);
-            settings.SetupGet(value => value.StudentPatronCodeId).Returns(configuration.StudentPatronCodeId);
-            settings.SetupGet(value => value.TeacherPatronCodeId).Returns(configuration.TeacherPatronCodeId);
+            settings.SetupGet(value => value.EcardPatronCodeId)
+                .Returns(scenario == "ecard" ? configuration.EcardPatronCodeId : 0);
+            // The live matrix deliberately submits neither role. Keep those
+            // unrelated identifiers out of every effective scenario settings
+            // object, even when a synthetic configuration supplies them.
+            settings.SetupGet(value => value.StudentPatronCodeId).Returns(0);
+            settings.SetupGet(value => value.TeacherPatronCodeId).Returns(0);
             settings.SetupGet(value => value.SchoolInfoFormat)
                 .Returns(scenario is "school" or "ecard" ? "uapl" : string.Empty);
             settings.SetupGet(value => value.EcardBarcodePrefix).Returns("CI-");
@@ -1210,6 +1329,7 @@ public sealed class LiveDevelopmentGateSafetyTests
     public void ConfigurationRequirements_FollowSelectedScenarios()
     {
         var standardEnvironment = BaseEnvironment();
+        standardEnvironment.Remove("PATRON_REGISTRATION_PAPI_ECARD_PATRON_CODE_ID");
         var standard = LiveDevelopmentConfiguration.FromEnvironment(
             ["standard"], standardEnvironment);
 
@@ -1227,10 +1347,16 @@ public sealed class LiveDevelopmentGateSafetyTests
             LiveDevelopmentConfiguration.FromEnvironment(["ecard"], standardEnvironment));
 
         standardEnvironment["PATRON_REGISTRATION_PAPI_ECARD_PATRON_CODE_ID"] = "22";
+        standardEnvironment.Remove("PATRON_REGISTRATION_PAPI_PATRON_CODE_ID");
         var ecard = LiveDevelopmentConfiguration.FromEnvironment(
             ["ecard"], standardEnvironment);
         Assert.AreEqual(0, ecard.PatronCodeId);
         Assert.AreEqual(22, ecard.EcardPatronCodeId);
+
+        Assert.ThrowsException<InvalidOperationException>(() =>
+            LiveDevelopmentConfiguration.FromEnvironment([], standardEnvironment));
+        Assert.ThrowsException<InvalidOperationException>(() =>
+            LiveDevelopmentConfiguration.FromEnvironment(["diagnostic"], standardEnvironment));
     }
 
     [TestMethod]

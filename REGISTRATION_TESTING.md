@@ -88,10 +88,10 @@ for older tests/API consumers; new successful-path tests use the injected mock.
 There is one `[TestCategory("LiveDevelopment")]`, `[DoNotParallelize]`
 orchestration test. It constructs every selected scenario with its own
 settings shape: `standard` is a true non-school baseline (`SchoolInfoFormat`
-empty), `school` is the UAPL empty-`User1` regression contract, and `ecard` is
-the specialized UAPL e-card shape that supplies a school value which the real
-transformation clears. Configuration is checked against the selected scenario
-set before the harness starts.
+empty and empty `User1`), `school` is the UAPL empty-`User1` regression
+contract, and `ecard` is the specialized UAPL e-card shape that supplies a
+school value which the real transformation clears. Configuration is checked
+against the selected scenario set before the harness starts.
 
 For every selected scenario, preflight builds the actual form body, runs the
 real MVC action-descriptor/parameter-metadata model binder and form value
