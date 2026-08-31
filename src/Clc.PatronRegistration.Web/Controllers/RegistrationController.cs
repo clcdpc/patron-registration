@@ -236,8 +236,7 @@ namespace Clc.PatronRegistration.Web.Controllers
 
         // Keep binding/selected-branch validation separate from the mutating
         // registration workflow.  The live release harness uses this same
-        // preparation path for every selected scenario before it allows the
-        // first create call.
+        // preparation path before it allows the live create call.
         internal RegistrationAttempt? PrepareSubmission(Registration p)
         {
             var resolution = registrationScopeResolver.ResolveForSubmission(

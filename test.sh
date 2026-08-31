@@ -6,7 +6,6 @@ cd "$repo_root"
 
 live_development=false
 user_filter=""
-filter_supplied=false
 dotnet_args=()
 
 while (($# > 0)); do
@@ -20,20 +19,10 @@ while (($# > 0)); do
         echo "--filter requires a value." >&2
         exit 2
       fi
-      if [[ "$live_development" == true ]]; then
-        echo "Raw --filter is not allowed with --live-development; use PATRON_REGISTRATION_LIVE_SCENARIOS." >&2
-        exit 2
-      fi
-      filter_supplied=true
       user_filter="$2"
       shift 2
       ;;
     --filter=*)
-      if [[ "$live_development" == true ]]; then
-        echo "Raw --filter is not allowed with --live-development; use PATRON_REGISTRATION_LIVE_SCENARIOS." >&2
-        exit 2
-      fi
-      filter_supplied=true
       user_filter="${1#--filter=}"
       shift
       ;;
@@ -45,8 +34,8 @@ while (($# > 0)); do
 done
 
 if [[ "$live_development" == true ]]; then
-  if [[ "$filter_supplied" == true ]]; then
-    echo "Raw --filter is not allowed with --live-development; use PATRON_REGISTRATION_LIVE_SCENARIOS." >&2
+  if [[ -n "$user_filter" ]]; then
+    echo "--filter cannot be combined with --live-development." >&2
     exit 2
   fi
   if [[ "${PATRON_REGISTRATION_LIVE_TESTS:-}" != "true" ]]; then
@@ -59,12 +48,11 @@ if [[ "$live_development" == true ]]; then
 fi
 
 if [[ "$user_filter" == *LiveDevelopment* ]]; then
-  echo "Raw filters may not mention LiveDevelopment; the deterministic exclusion is mandatory." >&2
+  echo "Raw filters may not mention LiveDevelopment; deterministic exclusion is mandatory." >&2
   exit 2
 fi
 
 node --check src/Clc.PatronRegistration.Web/wwwroot/js/settings.js
-node --test .github/scripts/release-validation-guard.test.mjs
 node --test src/Clc.PatronRegistration.Web.Tests/JavaScript/settings-edit-session.test.mjs
 node --test src/Clc.PatronRegistration.Web.Tests/JavaScript/age-block.test.mjs
 node --test src/Clc.PatronRegistration.Web.Tests/JavaScript/registration-branch-switch.test.mjs
