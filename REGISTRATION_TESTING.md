@@ -167,8 +167,9 @@ and is terminal validation (there is no deployment workflow here). It:
    ancestor, but deliberately does not require it to equal the current master
    tip; and
 5. passes that exact commit to deterministic CI and then, after it succeeds,
-   the serialized live DEVELOPMENT job, which re-fetches and rechecks the named
-   tag immediately before live mutation.
+   the serialized live DEVELOPMENT job, which re-fetches and rechecks both the
+   named tag and current `origin/master` ancestry immediately before live
+   mutation.
 
 Before the live job, a GitHub-hosted `live-rerun-guard` checks
 `github.run_attempt` with no live Environment, secrets, or internal runner.

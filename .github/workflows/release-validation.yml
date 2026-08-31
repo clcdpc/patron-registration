@@ -138,6 +138,16 @@ jobs:
             exit 1
           fi
 
+          if ! git fetch --force --no-tags origin \
+            "+refs/heads/master:refs/remotes/origin/master"; then
+            echo "The current origin/master branch could not be freshly fetched immediately before live mutation; refusing live mutation."
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$EXPECTED_COMMIT_SHA" refs/remotes/origin/master; then
+            echo "The release commit is not in the current origin/master history immediately before live mutation; refusing live mutation."
+            exit 1
+          fi
+
       - name: Run serial DEVELOPMENT gate
         shell: bash
         env:
