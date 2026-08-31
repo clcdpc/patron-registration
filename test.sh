@@ -64,6 +64,7 @@ if [[ "$user_filter" == *LiveDevelopment* ]]; then
 fi
 
 node --check src/Clc.PatronRegistration.Web/wwwroot/js/settings.js
+node --test .github/scripts/release-validation-guard.test.mjs
 node --test src/Clc.PatronRegistration.Web.Tests/JavaScript/settings-edit-session.test.mjs
 node --test src/Clc.PatronRegistration.Web.Tests/JavaScript/age-block.test.mjs
 node --test src/Clc.PatronRegistration.Web.Tests/JavaScript/registration-branch-switch.test.mjs

@@ -158,21 +158,35 @@ receive live secrets, and never targets the live runner.
 `.github/workflows/release-validation.yml` triggers on version-shaped `v*` tags
 and is terminal validation (there is no deployment workflow here). It:
 
-1. validates `vMAJOR.MINOR.PATCH` with an optional prerelease suffix;
-2. peels the tag-push event SHA with `git rev-parse "${EVENT_SHA}^{commit}"`;
-3. fetches the current remote tag into a separate ref and requires its peeled
+1. accepts only a push event whose metadata says a version tag was genuinely
+   created, not updated, force-moved, or deleted;
+2. validates `vMAJOR.MINOR.PATCH` with an optional prerelease suffix;
+3. peels the tag-push event SHA with `git rev-parse "${EVENT_SHA}^{commit}"`;
+4. fetches the current remote tag into a separate ref and requires its peeled
    commit to equal the event commit (supporting lightweight and annotated tags
    and rejecting deleted/moved tags);
-4. freshly fetches `origin/master` and requires the release commit to be an
+5. freshly fetches `origin/master` and requires the release commit to be an
    ancestor, but deliberately does not require it to equal the current master
    tip; and
-5. passes that exact commit to deterministic CI and then, after it succeeds,
+6. passes that exact commit to deterministic CI and then, after it succeeds,
    the serialized live DEVELOPMENT job, which re-fetches and rechecks both the
    named tag and current `origin/master` ancestry immediately before live
    mutation.
 
 Before the live job, a GitHub-hosted `live-rerun-guard` checks
-`github.run_attempt` with no live Environment, secrets, or internal runner.
+`github.run_attempt` and reads the retained release-validation workflow-run
+history with `actions: read`; it compares each prior run's `head_branch` to the
+release tag and excludes only the current `github.run_id`. A matching earlier
+run blocks execution before any live Environment, PAPI secret, or internal
+runner is selected. The guard fails closed if the Actions API cannot be read or
+its response cannot be safely parsed. The workflow deliberately uses a strict
+one-run-per-tag policy: even a run that definitively failed before the live
+boundary consumes that tag, because this guard does not try to classify
+incomplete or ambiguous prior-run state. A top-level concurrency group
+serializes separate workflow runs for the same tag while leaving different tags
+independent, closing the gap where two runs could otherwise pass the history
+check before either reached the serialized live job.
+
 `live-development` also has a job-level first-attempt condition evaluated before
 its runner, Environment, and secrets are selected. It depends on that guard as
 well as deterministic validation, so an ordinary rerun is rejected before the
@@ -197,11 +211,21 @@ credentials.
 An ordinary GitHub rerun has `GITHUB_RUN_ATTEMPT > 1` and fails closed in the
 GitHub-hosted prerequisite before live setup/mutation. The in-test
 `GITHUB_RUN_ATTEMPT > 1` guard remains as defense in depth for local/manual
-execution and future workflow changes. Operators must inspect the prior
-public-safe manifest and breadcrumbs, locate any patron by synthetic token, and
-use the normal approved DEVELOPMENT cleanup process. There is no automatic
-recovery mode and a rerun is not an acknowledgement to repeat a non-idempotent
-create.
+execution and future workflow changes. A force-update or deletion event is
+rejected from its push metadata. Deleting and recreating a tag produces a new
+creation event, but the earlier run remains in Actions history and the
+cross-run guard rejects the recreated tag as well.
+
+The strict policy means a failed pre-live run is not retried under the same tag:
+inspect its result and logs, and if it definitely never reached the live
+boundary no DEVELOPMENT cleanup may be needed, but the tag is still consumed.
+For a corrected release, commit the fix to `master` through the normal review
+process and create a new version tag; do not move, delete/recreate, or rerun the
+old tag. If a prior run may have reached live mutation, inspect the public-safe
+manifest and breadcrumbs, locate any patron by synthetic token, and use the
+normal approved DEVELOPMENT cleanup process before creating the new release
+tag. There is no automatic recovery mode and a rerun is not an acknowledgement
+to repeat a non-idempotent create.
 
 ## Required external controls
 
@@ -209,8 +233,15 @@ Repository YAML cannot configure organization policy. Before enabling the live
 job, administrators must verify the `live-development-tests` Environment has
 the intended required reviewers and release-tag deployment restrictions, and
 that its secrets are separate from ordinary CI. A tag ruleset should restrict
-creation, update, and deletion of `v*` release tags to trusted release actors;
-the event-SHA/current-tag check remains required even with that ruleset.
+creation, update, and deletion of `v*` release tags to trusted release actors.
+That ruleset is defense in depth, not the sole mechanism preventing repeated
+live mutation: the event metadata check, retained workflow-run history guard,
+event-SHA/current-tag check, and immediate pre-mutation checks remain required
+even when the ruleset is present. Actions run history should be retained for as
+long as release tag names could otherwise be reused; if that cannot be
+guaranteed, tag names must still never be reused and the external controls must
+remain in force.
+
 `master` should have the normal review and required-CI branch protection. These
 are assumptions to verify externally, not settings claimed by this repository.
 
