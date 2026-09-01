@@ -490,9 +490,19 @@
             imageState.fileName = "";
             imageState.previewUrl = "";
             if (baseline.mode === "inherit") {
-                if (binding) binding.value = "";
-                imageState.message = "Upload an image to customize this scope.";
-                row.dataset.imageNeedsUpload = "true";
+                const localAssetValue = String(row.dataset.imageLocalValue || "").trim();
+                const canRestoreLocalAsset = row.dataset.imageLocalMissing !== "true" && Boolean(localAssetValue);
+                if (canRestoreLocalAsset) {
+                    if (binding) binding.value = localAssetValue;
+                    imageState.fileName = row.dataset.imageLocalFileName || row.dataset.liveSummary || "Current image";
+                    imageState.previewUrl = row.dataset.imageLocalPreviewUrl || "";
+                    imageState.message = "Reuse the current image at this scope.";
+                    delete row.dataset.imageNeedsUpload;
+                } else {
+                    if (binding) binding.value = "";
+                    imageState.message = "Upload an image to customize this scope.";
+                    row.dataset.imageNeedsUpload = "true";
+                }
             } else {
                 if (binding) binding.value = baseline.value;
                 imageState.message = "";

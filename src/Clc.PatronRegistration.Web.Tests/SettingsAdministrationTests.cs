@@ -1826,6 +1826,10 @@ public class SettingsAdministrationTests
         StringAssert.Contains(partial, "class=\"image-upload-trigger\"");
         StringAssert.Contains(partial, "class=\"image-choose-another\"");
         StringAssert.Contains(partial, "class=\"image-undo-pending\"");
+        StringAssert.Contains(partial, "data-image-local-value=");
+        StringAssert.Contains(partial, "data-image-local-missing=");
+        StringAssert.Contains(partial, "data-image-local-preview-url=");
+        StringAssert.Contains(partial, "data-image-local-file-name=");
         StringAssert.Contains(partial, "class=\"setting-mode-group\"");
         StringAssert.Contains(partial, "value=\"inherit\" data-mode=\"inherit\"");
         StringAssert.Contains(partial, "value=\"customize\" data-mode=\"customize\"");

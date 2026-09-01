@@ -305,6 +305,42 @@ function chooseMode(fixture, desiredMode, desiredValue) {
     return selected;
 }
 
+function makeImageRow({ localAssetValue = "", localAssetMissing = false } = {}) {
+    const fixture = makeRow({ key: "header_image_asset_id", valueType: "image", baselineMode: "inherit", baselineValue: "", value: localAssetValue || "10" });
+    const uploadTrigger = new NodeStub();
+    const chooseAnother = new NodeStub();
+    const undo = new NodeStub();
+    const imageFile = new NodeStub();
+    const pending = new NodeStub();
+    const pendingPreview = new NodeStub();
+    const pendingFileName = new NodeStub();
+    const uploadStatus = new NodeStub();
+    pending.querySelector = (selector) => ({
+        ".image-pending-preview": pendingPreview,
+        ".image-pending-file-name": pendingFileName,
+        ".image-upload-status": uploadStatus
+    }[selector] || null);
+    fixture.row.dataset.customizedHere = localAssetValue ? "true" : "false";
+    fixture.row.dataset.imageLocalValue = localAssetValue;
+    fixture.row.dataset.imageLocalMissing = String(localAssetMissing);
+    fixture.row.dataset.imageLocalFileName = localAssetValue ? "local-header.png" : "";
+    fixture.row.dataset.imageLocalPreviewUrl = localAssetValue ? `/settings/assets/${localAssetValue}` : "";
+    fixture.row.dataset.liveSummary = localAssetValue ? "local-header.png" : "No image configured";
+    fixture.binding.value = localAssetValue || "10";
+    const originalQuery = fixture.row.querySelector;
+    fixture.row.querySelector = (selector) => ({
+        ".image-upload-trigger": uploadTrigger,
+        ".image-choose-another": chooseAnother,
+        ".image-undo-pending": undo,
+        ".image-mode-inherit": fixture.inherit,
+        ".image-mode-customize": fixture.customize,
+        ".image-file": imageFile,
+        ".image-pending": pending,
+        ".setting-value-binding": fixture.binding
+    }[selector] || originalQuery(selector));
+    return { ...fixture, uploadTrigger, chooseAnother, undo, imageFile, pending, pendingPreview, pendingFileName, uploadStatus };
+}
+
 test("ordinary settings use direct semantic dirty state and no candidate edit session", () => {
     const api = loadSettings();
     const first = makeRow({ baselineValue: "original", value: "original" });
@@ -469,6 +505,39 @@ test("IP-prefix rows hydrate, edit, add, remove, and serialize without empty seg
     api.SettingsWorkflow.discardPendingChanges(form);
     assert.deepEqual(fixture.prefixes.map((input) => input.value), ["10.", "192.168."]);
     assert.equal(fixture.row.dataset.dirty, "false", "discard restores the complete baseline list");
+});
+
+test("customizing a remove-override image reuses the live local asset", () => {
+    const api = loadSettings();
+    const local = makeImageRow({ localAssetValue: "41" });
+    const noLocal = makeImageRow();
+    const missingLocal = makeImageRow({ localAssetValue: "42", localAssetMissing: true });
+    const form = makeForm([local.row, noLocal.row, missingLocal.row]);
+    api.SettingsEditor.initializeImageRow(local.row, form);
+    api.SettingsEditor.initializeImageRow(noLocal.row, form);
+    api.SettingsEditor.initializeImageRow(missingLocal.row, form);
+
+    chooseMode(local, "customize");
+    assert.equal(local.binding.value, "41");
+    assert.equal(local.operation.value, "Upsert");
+    assert.equal(local.row.dataset.dirty, "true");
+    assert.equal(local.row.dataset.imageNeedsUpload, undefined);
+    assert.equal(local.pendingFileName.textContent, "local-header.png");
+    assert.equal(local.pendingPreview.hidden, false);
+    assert.equal(local.pendingPreview.src, "/settings/assets/41");
+    assert.match(local.uploadStatus.textContent, /Reuse the current image/);
+    assert.equal(api.SettingsWorkflow.hasImageUpload(form), false);
+
+    chooseMode(noLocal, "customize");
+    assert.equal(noLocal.binding.value, "");
+    assert.equal(noLocal.operation.value, "Upsert");
+    assert.equal(noLocal.row.dataset.dirty, "true");
+    assert.equal(noLocal.row.dataset.imageNeedsUpload, "true");
+    assert.equal(api.SettingsWorkflow.hasImageUpload(form), true);
+
+    chooseMode(missingLocal, "customize");
+    assert.equal(missingLocal.binding.value, "");
+    assert.equal(missingLocal.row.dataset.imageNeedsUpload, "true");
 });
 
 test("status filter options compose with search and restore category disclosure state", () => {
