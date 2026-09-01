@@ -1839,11 +1839,19 @@ public class SettingsAdministrationTests
         StringAssert.Contains(index, "id=\"batch-@batchHeadingPrefix-field\"");
         StringAssert.Contains(batch, "class=\"batch-browser-status\"");
         StringAssert.Contains(batch, "headers=\"batch-@columnHeadingPrefix-effective\"");
+        StringAssert.Contains(index, "settingsErrorKey");
+        StringAssert.Contains(index, "row.Definition.Key, settingsErrorKey");
+        StringAssert.Contains(partial, "setting-validation-error");
+        StringAssert.Contains(partial, "aria-describedby=\"@validationErrorId\"");
+        StringAssert.Contains(batch, "setting-validation-error");
+        StringAssert.Contains(batch, "aria-describedby=\"@validationErrorId\"");
         StringAssert.Contains(partial, "bool.TryParse(Model.InheritedValue");
         StringAssert.Contains(batch, "bool.TryParse(Model.InheritedValue");
         StringAssert.Contains(partial, "Model.InheritedSourceDescription");
         StringAssert.Contains(batch, "Model.InheritedSourceDescription");
         StringAssert.Contains(css, "clip-path: inset(50%)");
+        Assert.IsFalse(css.Contains(".review-table thead { display: none", StringComparison.Ordinal));
+        StringAssert.Contains(css, ".review-table thead {\n        clip: rect(0 0 0 0)");
         Assert.IsFalse(css.Contains(".batch-settings thead { display: none", StringComparison.Ordinal));
 
         Assert.IsFalse(partial.Contains("data-candidate-operation", StringComparison.Ordinal));

@@ -330,7 +330,9 @@ public sealed class SettingsController(
         {
             repository.WriteAudit("ValidationFailed", false, CreateAudit(request.OrganizationId, request.FormCode), "One or more setting values were invalid.");
             TempData["SettingsError"] = string.Join(" ", ModelState.Values.SelectMany(value => value.Errors).Select(error => error.ErrorMessage));
-            TempData["SettingsErrorGroup"] = request.Changes.FirstOrDefault(change => ModelState.ContainsKey(change.Key))?.Key.Split('.')[0];
+            var invalidSettingKey = request.Changes.Select(change => change.Key).FirstOrDefault(ModelState.ContainsKey);
+            TempData["SettingsErrorKey"] = invalidSettingKey;
+            TempData["SettingsErrorGroup"] = invalidSettingKey?.Split('.')[0];
             return RedirectToAction(nameof(Index), new { organizationId = request.OrganizationId, formCode = request.FormCode });
         }
 
@@ -370,7 +372,9 @@ public sealed class SettingsController(
         {
             repository.WriteAudit("ValidationFailed", false, CreateAudit(request.OrganizationId, request.FormCode), "Shared draft changes were invalid.", request.ExpectedDraftId);
             TempData["SettingsError"] = string.Join(" ", ModelState.Values.SelectMany(value => value.Errors).Select(error => error.ErrorMessage));
-            TempData["SettingsErrorGroup"] = request.Changes.FirstOrDefault(change => ModelState.ContainsKey(change.Key))?.Key.Split('.')[0];
+            var invalidSettingKey = request.Changes.Select(change => change.Key).FirstOrDefault(ModelState.ContainsKey);
+            TempData["SettingsErrorKey"] = invalidSettingKey;
+            TempData["SettingsErrorGroup"] = invalidSettingKey?.Split('.')[0];
             return RedirectToAction(nameof(Index), new { organizationId = request.OrganizationId, formCode = request.FormCode });
         }
         try
@@ -1123,7 +1127,7 @@ public sealed class SettingsController(
         {
             if (!catalog.TryGet(input.Key, out var definition) || !authorization.CanManage(User, organizationId, definition.IsSensitive))
             {
-                ModelState.AddModelError("setting", "One or more submitted settings are unrecognized or inaccessible.");
+                ModelState.AddModelError(input.Key, "One or more submitted settings are unrecognized or inaccessible.");
                 continue;
             }
             if (!DraftOperationValidation.TryParseSupported(input.Operation, out var operation))

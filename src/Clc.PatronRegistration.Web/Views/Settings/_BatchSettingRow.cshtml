@@ -29,6 +29,12 @@
         _ => string.Empty
     };
     var searchText = $"{definition.DisplayName} {definition.Key} {definition.Description} {effectiveValue}".ToLowerInvariant();
+    var settingsError = ViewData["SettingsError"] as string;
+    var settingsErrorKey = ViewData["SettingsErrorKey"] as string;
+    var validationError = string.Equals(definition.Key, settingsErrorKey, StringComparison.OrdinalIgnoreCase)
+        ? settingsError
+        : null;
+    var validationErrorId = string.IsNullOrWhiteSpace(validationError) ? null : $"{token}-validation-error";
 }
 <tr class="setting-row batch-setting-row"
     data-search="@searchText"
@@ -58,11 +64,15 @@
         <small class="batch-browser-status" role="status" aria-live="polite"></small>
     </td>
     <td class="batch-scope" headers="batch-@columnHeadingPrefix-scope">
+        @if (validationErrorId is not null)
+        {
+            <p id="@validationErrorId" class="setting-validation-error" role="alert">@validationError</p>
+        }
         <input class="change-index" type="hidden" name="Changes.Index" value="@token" disabled />
         <input class="change-key" type="hidden" name="Changes[@token].Key" value="@definition.Key" disabled />
         <input class="operation" type="hidden" name="Changes[@token].Operation" value="@baselineOperation" disabled />
         <input class="setting-value-binding" type="hidden" name="Changes[@token].Value" value="@editorValue" disabled />
-        <fieldset class="setting-mode-group batch-mode-group">
+        <fieldset class="setting-mode-group batch-mode-group" aria-describedby="@validationErrorId">
             <legend class="visually-hidden">At this scope for @definition.DisplayName</legend>
             @if (isRequired)
             {
@@ -75,7 +85,7 @@
             {
                 <label><input class="setting-mode" type="radio" name="@token-mode" value="inherit" data-mode="inherit" checked="@(baselineMode == "inherit")" /> Inherit</label>
                 <label><input class="setting-mode" type="radio" name="@token-mode" value="customize" data-mode="customize" checked="@(baselineMode == "customize")" /> Customize here</label>
-                <label class="batch-label-input"><span class="visually-hidden">Custom label</span><input class="setting-value" type="text" value="@editorValue" maxlength="200" /></label>
+                <label class="batch-label-input"><span class="visually-hidden">Custom label</span><input class="setting-value" type="text" value="@editorValue" maxlength="200" aria-describedby="@validationErrorId" /></label>
             }
         </fieldset>
     </td>

@@ -850,6 +850,8 @@ public class SettingsControllerTests
         });
 
         Assert.IsInstanceOfType<RedirectToActionResult>(result);
+        Assert.AreEqual("header_image_asset_id", controller.TempData["SettingsErrorKey"]);
+        Assert.AreEqual("header_image_asset_id", controller.TempData["SettingsErrorGroup"]);
         repository.Verify(service => service.DirectSave(
             It.IsAny<int>(), It.IsAny<string>(), It.IsAny<long>(), It.IsAny<IReadOnlyList<SettingMutation>>(),
             It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), It.IsAny<AuditContext>()), Times.Never);
@@ -894,6 +896,8 @@ public class SettingsControllerTests
         });
 
         Assert.IsInstanceOfType<RedirectToActionResult>(result);
+        Assert.AreEqual("header_image_asset_id", controller.TempData["SettingsErrorKey"]);
+        Assert.AreEqual("header_image_asset_id", controller.TempData["SettingsErrorGroup"]);
         repository.Verify(service => service.SaveToSharedDraft(
             It.IsAny<int>(), It.IsAny<string>(), It.IsAny<long>(), It.IsAny<long?>(),
             It.IsAny<IReadOnlyList<SettingMutation>>(), It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(),

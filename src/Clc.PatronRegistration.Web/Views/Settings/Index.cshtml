@@ -15,8 +15,11 @@
         groups.Insert(0, (SettingGroup.Alert, "Validation messages"));
     }
     var settingsError = TempData["SettingsError"] as string;
+    var settingsErrorKey = TempData["SettingsErrorKey"] as string;
     var settingsErrorGroup = TempData["SettingsErrorGroup"] as string;
     var settingsStatus = TempData["SettingsStatus"] as string;
+    ViewData["SettingsError"] = settingsError;
+    ViewData["SettingsErrorKey"] = settingsErrorKey;
     var formDisplayName = string.IsNullOrWhiteSpace(Model.FormDisplayName)
         ? Model.FormCodes.FirstOrDefault(form => form.FormCode.Equals(Model.FormCode, StringComparison.OrdinalIgnoreCase))?.DisplayName
             ?? (Model.FormCode.Length == 0 ? "Default form" : Model.FormCode)
@@ -221,6 +224,7 @@
             .OrderBy(row => row.Definition.DisplayName, StringComparer.OrdinalIgnoreCase).ToList();
         if (rows.Count == 0) { continue; }
         bool categoryOpen = rows.Any(row => row.DraftOperation is not null);
+        categoryOpen = categoryOpen || rows.Any(row => string.Equals(row.Definition.Key, settingsErrorKey, StringComparison.OrdinalIgnoreCase));
         <details class="setting-category" open="@categoryOpen">
             <summary>@category.DisplayName() <span>(@rows.Count)</span></summary>
             <div class="settings-column-headings"><span>Setting</span><span>Value</span><span>Status</span></div>
@@ -235,6 +239,7 @@
         var rows = Model.Settings.Where(row => row.Definition.Group == group.Item1)
             .OrderBy(row => row.Definition.DisplayName, StringComparer.OrdinalIgnoreCase).ToList();
         bool isDynamicGroupOpen = rows.Any(row => row.DraftOperation is not null) ||
+            rows.Any(row => string.Equals(row.Definition.Key, settingsErrorKey, StringComparison.OrdinalIgnoreCase)) ||
             string.Equals(group.Item1.ToString(), settingsErrorGroup, StringComparison.OrdinalIgnoreCase);
         <details class="dynamic-settings" open="@isDynamicGroupOpen">
             <summary>@group.Item2 <span>(@rows.Count)</span></summary>

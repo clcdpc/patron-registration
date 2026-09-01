@@ -116,6 +116,7 @@ body.settings-administration-page #regFormContainer {
 .setting-content > .setting-editor[data-editor-kind="longstring"],
 .setting-content > .setting-editor[data-editor-kind="html"],
 .setting-content > .setting-editor[data-editor-kind="emailtemplate"] { grid-column: 1 / -1 }
+.setting-validation-error { background: #fff0f0; border: 2px solid #8a1c1c; color: #7a1f1b; grid-column: 1 / -1; grid-row: 2; margin: 0; padding: .5rem .65rem }
 .setting-description { grid-row: 1 }
 .setting-value-panel { background: #f8fafb; border: 1px solid #c8d2da; border-radius: .3rem; min-width: 0; padding: .6rem .7rem }
 .setting-value-panel-heading { align-items: baseline; display: flex; flex-wrap: wrap; gap: .35rem .75rem; justify-content: space-between; margin-bottom: .35rem }
@@ -200,7 +201,15 @@ body.settings-administration-page #regFormContainer {
     .batch-settings td:nth-child(2)::before { content: "Effective now" }
     .batch-settings td:nth-child(3)::before { content: "At this scope" }
     .review-table { min-width: 0 }
-    .review-table thead { display: none }
+    .review-table thead {
+        clip: rect(0 0 0 0);
+        clip-path: inset(50%);
+        height: 1px;
+        overflow: hidden;
+        position: absolute;
+        white-space: nowrap;
+        width: 1px
+    }
     .review-table, .review-table tbody, .review-table tr, .review-table th, .review-table td { display: block; width: auto }
     .review-table tr { border-top: 1px solid #c8c8c8; padding: .45rem 0 }
     .review-table tr:first-child { border-top: 0 }

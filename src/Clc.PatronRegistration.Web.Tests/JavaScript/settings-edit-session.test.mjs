@@ -607,6 +607,48 @@ test("status filter options compose with search and restore category disclosure 
     assert.equal(secondCategory.open, false);
 });
 
+test("draft review scrolling respects reduced-motion preference", () => {
+    const search = new NodeStub();
+    const statusFilter = new NodeStub();
+    statusFilter.value = "all";
+    statusFilter.options = [{ value: "all" }, { value: "draft" }];
+    const searchStatus = new NodeStub();
+    const searchRegion = new NodeStub();
+    const reviewButton = new NodeStub();
+    const draft = makeRow({ key: "draft", baselineValue: "draft value" });
+    draft.row.dataset.draftChange = "true";
+    draft.row.dataset.search = "draft value";
+    let scrollOptions;
+    searchRegion.scrollIntoView = (options) => { scrollOptions = options; };
+    const document = createDocument({
+        querySelector(selector) {
+            if (selector === "#setting-search") return search;
+            if (selector === "#setting-status-filter") return statusFilter;
+            if (selector === "#search-status") return searchStatus;
+            if (selector === ".settings-search") return searchRegion;
+            if (selector === "[data-review-draft]") return reviewButton;
+            if (selector.includes('.setting-row[data-draft-change="true"]')) return draft.row;
+            return null;
+        },
+        querySelectorAll(selector) {
+            if (selector === ".setting-row") return [draft.row];
+            if (selector === ".setting-category, .dynamic-settings") return [];
+            return [];
+        }
+    });
+    const api = loadSettings(document);
+
+    api.matchMedia = () => ({ matches: true });
+    api.SettingsWorkflow.reviewDraftChanges();
+    assert.equal(scrollOptions.behavior, "auto");
+    assert.equal(scrollOptions.block, "start");
+
+    api.matchMedia = () => ({ matches: false });
+    api.SettingsWorkflow.reviewDraftChanges();
+    assert.equal(scrollOptions.behavior, "smooth");
+    assert.equal(scrollOptions.block, "start");
+});
+
 test("review tables use safe comparison summaries and image filenames", () => {
     const api = loadSettings();
     const ordinary = makeRow({ key: "registration_text", baselineValue: "old", value: "new" });
@@ -715,6 +757,17 @@ test("draft saves bypass the generic review while live, publish, discard, and li
     assert.match(settingsScript, /submitter\?\.dataset\?\.submitKind === "draft"/);
     assert.match(settingsScript, /finalSubmit\(\{ form, submitter, trigger: submitter, prepare: disableDirtyMutations \}\)/);
     assert.match(settingsScript, /needsLiveConfirmation/);
+});
+
+test("settings validation markup preserves exact row targets and review headers", () => {
+    assert.match(settingsIndex, /settingsErrorKey/);
+    assert.match(settingsIndex, /row\.Definition\.Key, settingsErrorKey/);
+    assert.match(settingRowMarkup, /setting-validation-error/);
+    assert.match(settingRowMarkup, /aria-describedby="@validationErrorId"/);
+    assert.match(batchRowMarkup, /setting-validation-error/);
+    assert.match(batchRowMarkup, /aria-describedby="@validationErrorId"/);
+    assert.doesNotMatch(settingsCss, /\.review-table thead \{ display: none/);
+    assert.match(settingsCss, /\.review-table thead \{\s*clip: rect\(0 0 0 0\)/);
 });
 
 test("settings context submits only after a selector change", () => {

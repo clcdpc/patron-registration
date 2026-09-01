@@ -824,7 +824,8 @@
         statusFilter.value = "draft";
         persistFilterState();
         const visible = applyFilters();
-        searchRegion?.scrollIntoView?.({ behavior: "smooth", block: "start" });
+        const behavior = globalThis.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches ? "auto" : "smooth";
+        searchRegion?.scrollIntoView?.({ behavior, block: "start" });
         const firstRow = visible ? document.querySelector('.setting-row[data-draft-change="true"]:not([hidden])') : null;
         (firstRow?.querySelector?.("summary") || statusFilter || search)?.focus?.();
     }
