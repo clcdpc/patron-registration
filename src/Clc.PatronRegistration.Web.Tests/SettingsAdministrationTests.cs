@@ -1818,6 +1818,7 @@ public class SettingsAdministrationTests
         var partial = File.ReadAllText(Path.Combine(root, "src/Clc.PatronRegistration.Web/Views/Settings/_SettingRow.cshtml"));
         var batch = File.ReadAllText(Path.Combine(root, "src/Clc.PatronRegistration.Web/Views/Settings/_BatchSettingRow.cshtml"));
         var script = File.ReadAllText(Path.Combine(root, "src/Clc.PatronRegistration.Web/wwwroot/js/settings.js"));
+        var css = File.ReadAllText(Path.Combine(root, "src/Clc.PatronRegistration.Web/wwwroot/css/settings.css"));
 
         Assert.IsFalse(partial.Contains("<select id=\"@operationId\"", StringComparison.Ordinal));
         StringAssert.Contains(partial, "class=\"operation\" type=\"hidden\"");
@@ -1831,7 +1832,15 @@ public class SettingsAdministrationTests
         StringAssert.Contains(partial, "boolean-mode-group");
         StringAssert.Contains(partial, "class=\"plain-text-preview\"");
         StringAssert.Contains(index, "class=\"batch-settings");
+        StringAssert.Contains(index, "id=\"batch-@batchHeadingPrefix-field\"");
         StringAssert.Contains(batch, "class=\"batch-browser-status\"");
+        StringAssert.Contains(batch, "headers=\"batch-@columnHeadingPrefix-effective\"");
+        StringAssert.Contains(partial, "bool.TryParse(Model.InheritedValue");
+        StringAssert.Contains(batch, "bool.TryParse(Model.InheritedValue");
+        StringAssert.Contains(partial, "Model.InheritedSourceDescription");
+        StringAssert.Contains(batch, "Model.InheritedSourceDescription");
+        StringAssert.Contains(css, "clip-path: inset(50%)");
+        Assert.IsFalse(css.Contains(".batch-settings thead { display: none", StringComparison.Ordinal));
 
         Assert.IsFalse(partial.Contains("data-candidate-operation", StringComparison.Ordinal));
         Assert.IsFalse(partial.Contains("Keep change", StringComparison.Ordinal));

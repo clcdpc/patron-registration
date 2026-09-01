@@ -195,11 +195,14 @@ function makeRow({
     const prefixEditor = valueType === "ip-prefixes" ? new NodeStub() : null;
     const prefixes = valueType === "ip-prefixes" ? String(value || "").split(";").filter(Boolean).map((entry) => new NodeStub(entry)) : [];
     const addPrefix = valueType === "ip-prefixes" ? new NodeStub() : null;
+    const prefixRows = [];
     const removeButtons = [];
     if (prefixEditor) {
         prefixEditor.insertBefore = (wrapper) => {
             const input = wrapper.children[0];
             prefixes.push(input);
+            prefixRows.push(wrapper);
+            removeButtons.push(wrapper.children[1]);
             prefixEditor.children.push(wrapper);
             wrapper.parentElement = prefixEditor;
         };
@@ -207,18 +210,26 @@ function makeRow({
             const input = wrapper.children[0];
             const indexToRemove = prefixes.indexOf(input);
             if (indexToRemove >= 0) prefixes.splice(indexToRemove, 1);
+            const rowIndex = prefixRows.indexOf(wrapper);
+            if (rowIndex >= 0) prefixRows.splice(rowIndex, 1);
+            const removeIndex = removeButtons.indexOf(wrapper.children[1]);
+            if (removeIndex >= 0) removeButtons.splice(removeIndex, 1);
             const childIndex = prefixEditor.children.indexOf(wrapper);
             if (childIndex >= 0) prefixEditor.children.splice(childIndex, 1);
             wrapper.parentElement = null;
         };
         prefixes.forEach((input) => {
+            const wrapper = new NodeStub();
+            wrapper.className = "ip-prefix-row";
             const remove = new NodeStub();
+            wrapper.append(input, remove);
+            wrapper.parentElement = prefixEditor;
             removeButtons.push(remove);
-            input.parentElement = { remove: () => {
-                const indexToRemove = prefixes.indexOf(input);
-                if (indexToRemove >= 0) prefixes.splice(indexToRemove, 1);
-            } };
+            prefixRows.push(wrapper);
+            prefixEditor.children.push(wrapper);
+            remove.closest = () => wrapper;
         });
+        prefixEditor.querySelectorAll = (query) => query === ".ip-prefix-row" ? prefixRows : [];
     }
     const selector = {
         ".setting-mode": modes,
@@ -245,6 +256,8 @@ function makeRow({
         if (query === ".setting-mode") return modes;
         if (query === ".ip-prefix-input") return prefixes;
         if (query === ".ip-prefix-remove") return removeButtons;
+        if (query === ".ip-prefix-add, .ip-prefix-remove") return [...removeButtons, addPrefix].filter(Boolean);
+        if (query === ".ip-prefix-row") return prefixRows;
         if (query.includes(".value-editor .setting-value") || query.includes(".batch-label-input")) return valueType === "ip-prefixes" ? prefixes : [visible];
         if (query === ".change-index") return [index];
         if (query === ".change-key") return [keyControl];
@@ -440,6 +453,22 @@ test("IP-prefix rows hydrate, edit, add, remove, and serialize without empty seg
     assert.equal(fixture.binding.value.includes(";;"), false);
     added.parentElement?.children?.[1]?.click();
     assert.equal(fixture.row.dataset.dirty, "false");
+
+    chooseMode(fixture, "inherit");
+    const countBeforeBlockedActions = fixture.prefixes.length;
+    assert.equal(fixture.addPrefix.disabled, true);
+    assert.equal(fixture.prefixes.every((input) => input.disabled), true);
+    fixture.addPrefix.click();
+    fixture.removeButtons[0].click();
+    assert.equal(fixture.prefixes.length, countBeforeBlockedActions, "inherit mode prevents hidden list mutations");
+    chooseMode(fixture, "customize");
+    fixture.prefixes[0].value = "changed";
+    fixture.prefixes[0].emit("input");
+    fixture.addPrefix.click();
+    assert.equal(fixture.row.dataset.dirty, "true");
+    api.SettingsWorkflow.discardPendingChanges(form);
+    assert.deepEqual(fixture.prefixes.map((input) => input.value), ["10.", "192.168."]);
+    assert.equal(fixture.row.dataset.dirty, "false", "discard restores the complete baseline list");
 });
 
 test("status filter options compose with search and restore category disclosure state", () => {

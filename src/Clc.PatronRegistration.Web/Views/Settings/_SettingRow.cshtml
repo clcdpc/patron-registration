@@ -95,8 +95,8 @@
         : definition.Key.Equals("reset_seconds", StringComparison.OrdinalIgnoreCase)
             ? SettingDefinition.MaximumResetSeconds.ToString(CultureInfo.InvariantCulture)
             : null;
-    var effectiveBoolean = bool.TryParse(resolution.EffectiveValue, out var parsedEffectiveBoolean)
-        ? parsedEffectiveBoolean ? "Yes" : "No"
+    var inheritedBoolean = Model.HasInheritedValue && bool.TryParse(Model.InheritedValue, out var parsedInheritedBoolean)
+        ? parsedInheritedBoolean ? "Yes" : "No"
         : "Not configured";
 }
 <details class="setting-row"
@@ -256,7 +256,7 @@
                 {
                     <fieldset class="setting-mode-group boolean-mode-group">
                         <legend>At this scope</legend>
-                        <label><input class="setting-mode" type="radio" name="@token-mode" value="inherit" data-mode="inherit" checked="@(baselineMode == "inherit")" /> Inherit — @effectiveBoolean <small>@(Model.HasInheritedValue ? $"from {Model.InheritedSourceDescription ?? "the inherited scope"}" : "not configured")</small></label>
+                        <label><input class="setting-mode" type="radio" name="@token-mode" value="inherit" data-mode="inherit" checked="@(baselineMode == "inherit")" /> Inherit — @inheritedBoolean <small>@(Model.HasInheritedValue ? $"from {Model.InheritedSourceDescription ?? "the inherited scope"}" : "not configured")</small></label>
                         <label><input class="setting-mode" type="radio" name="@token-mode" value="true" data-mode="customize" data-custom-value="true" checked="@(baselineMode == "customize" && (editorValue ?? string.Empty).Equals("true", StringComparison.OrdinalIgnoreCase))" /> Yes</label>
                         <label><input class="setting-mode" type="radio" name="@token-mode" value="false" data-mode="customize" data-custom-value="false" checked="@(baselineMode == "customize" && (editorValue ?? string.Empty).Equals("false", StringComparison.OrdinalIgnoreCase))" /> No</label>
                     </fieldset>

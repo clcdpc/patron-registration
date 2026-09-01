@@ -183,7 +183,15 @@ body.settings-administration-page #regFormContainer {
 }
 @media (max-width: 42rem) {
     .batch-settings { display: block; overflow: visible }
-    .batch-settings thead { display: none }
+    .batch-settings thead {
+        clip: rect(0 0 0 0);
+        clip-path: inset(50%);
+        height: 1px;
+        overflow: hidden;
+        position: absolute;
+        white-space: nowrap;
+        width: 1px
+    }
     .batch-settings tbody, .batch-settings tr, .batch-settings td { display: block; width: auto !important }
     .batch-settings tr { border-top: 1px solid #d1d1d1; padding: .45rem 0 }
     .batch-settings tr:first-child { border-top: 0 }

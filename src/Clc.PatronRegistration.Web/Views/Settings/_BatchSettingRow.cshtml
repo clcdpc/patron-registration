@@ -5,6 +5,7 @@
     var resolution = Model.Resolution;
     var token = Model.Token;
     var isRequired = definition.Group == SettingGroup.Require;
+    var columnHeadingPrefix = isRequired ? "required-fields" : "field-labels";
     var baselineOperation = Model.DraftOperation switch
     {
         DraftOperation.Upsert => "Upsert",
@@ -46,8 +47,8 @@
     data-baseline-mode="@baselineMode"
     data-baseline-value="@editorValue"
     data-baseline-operation="@baselineOperation">
-    <td class="batch-setting-name"><strong>@definition.DisplayName.Replace("Require ", "", StringComparison.OrdinalIgnoreCase)</strong><small>@definition.Description</small></td>
-    <td class="batch-effective">
+    <td class="batch-setting-name" headers="batch-@columnHeadingPrefix-field"><strong>@definition.DisplayName.Replace("Require ", "", StringComparison.OrdinalIgnoreCase)</strong><small>@definition.Description</small></td>
+    <td class="batch-effective" headers="batch-@columnHeadingPrefix-effective">
         <span class="batch-effective-summary">@effectiveValue</span>
         <small class="batch-effective-source">@source</small>
         @if (Model.DraftOperation.HasValue)
@@ -56,7 +57,7 @@
         }
         <small class="batch-browser-status" role="status" aria-live="polite"></small>
     </td>
-    <td class="batch-scope">
+    <td class="batch-scope" headers="batch-@columnHeadingPrefix-scope">
         <input class="change-index" type="hidden" name="Changes.Index" value="@token" disabled />
         <input class="change-key" type="hidden" name="Changes[@token].Key" value="@definition.Key" disabled />
         <input class="operation" type="hidden" name="Changes[@token].Operation" value="@baselineOperation" disabled />
@@ -65,8 +66,8 @@
             <legend class="visually-hidden">At this scope for @definition.DisplayName</legend>
             @if (isRequired)
             {
-                var effectiveBoolean = bool.TryParse(resolution.EffectiveValue, out var parsed) ? parsed ? "Yes" : "No" : "not configured";
-                <label><input class="setting-mode" type="radio" name="@token-mode" value="inherit" data-mode="inherit" checked="@(baselineMode == "inherit")" /> Inherit — @effectiveBoolean</label>
+                var inheritedBoolean = Model.HasInheritedValue && bool.TryParse(Model.InheritedValue, out var parsed) ? parsed ? "Yes" : "No" : "Not configured";
+                <label><input class="setting-mode" type="radio" name="@token-mode" value="inherit" data-mode="inherit" checked="@(baselineMode == "inherit")" /> Inherit — @inheritedBoolean <small>@(Model.HasInheritedValue ? $"from {Model.InheritedSourceDescription ?? "the inherited scope"}" : "not configured")</small></label>
                 <label><input class="setting-mode" type="radio" name="@token-mode" value="true" data-mode="customize" data-custom-value="true" checked="@(baselineMode == "customize" && (editorValue ?? string.Empty).Equals("true", StringComparison.OrdinalIgnoreCase))" /> Required</label>
                 <label><input class="setting-mode" type="radio" name="@token-mode" value="false" data-mode="customize" data-custom-value="false" checked="@(baselineMode == "customize" && (editorValue ?? string.Empty).Equals("false", StringComparison.OrdinalIgnoreCase))" /> Optional</label>
             }

@@ -240,10 +240,11 @@
             <summary>@group.Item2 <span>(@rows.Count)</span></summary>
             @if (group.Item1 == SettingGroup.Label || group.Item1 == SettingGroup.Require)
             {
+                var batchHeadingPrefix = group.Item1 == SettingGroup.Label ? "field-labels" : "required-fields";
                 <p class="group-introduction">Compare these related fields together. Each choice still uses the normal settings save and validation path. @if (group.Item1 == SettingGroup.Label) { <span>Blank labels override inherited labels; choose Inherit to remove a customization.</span> }</p>
                 <table class="batch-settings @(group.Item1 == SettingGroup.Label ? "field-labels-editor" : "required-fields-editor")">
                     <caption class="visually-hidden">@group.Item2</caption>
-                    <thead><tr><th scope="col">Field</th><th scope="col">Effective now</th><th scope="col">At this scope</th></tr></thead>
+                    <thead><tr><th id="batch-@batchHeadingPrefix-field" scope="col">Field</th><th id="batch-@batchHeadingPrefix-effective" scope="col">Effective now</th><th id="batch-@batchHeadingPrefix-scope" scope="col">At this scope</th></tr></thead>
                     <tbody>
                     @foreach (var row in rows)
                     {

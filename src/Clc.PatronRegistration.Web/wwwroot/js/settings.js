@@ -221,6 +221,7 @@
     function updateEditorAvailability(row, state) {
         const inherited = state.mode === "inherit";
         controlsAll(row, ".value-editor .setting-value:not(.setting-value-binding), .batch-label-input .setting-value, .ip-prefix-input").forEach((control) => { control.disabled = inherited; });
+        controlsAll(row, ".ip-prefix-add, .ip-prefix-remove").forEach((control) => { control.disabled = inherited; });
     }
 
     function updatePendingActions(settingsForm = form) {
@@ -319,11 +320,13 @@
             return wrapper;
         };
         addPrefix?.addEventListener("click", () => {
+            if (addPrefix.disabled) return;
             const wrapper = createPrefixRow();
             prefixEditor?.insertBefore(wrapper, addPrefix);
             wrapper.children?.[0]?.focus?.();
         });
         controlsAll(row, ".ip-prefix-remove").forEach((remove) => remove.addEventListener("click", () => {
+            if (remove.disabled) return;
             remove.closest?.(".ip-prefix-row")?.remove();
             updateStandardRow(row, settingsForm);
         }));
@@ -335,11 +338,10 @@
             if (valueEditor && baseline.mode === "customize" && !controls(row, "[data-ip-prefix-editor]")) valueEditor.value = baseline.value;
             if (controls(row, "[data-ip-prefix-editor]")) {
                 const values = baseline.value.split(";").filter(Boolean);
-                const inputs = controlsAll(row, ".ip-prefix-input");
-                if (!inputs.length && prefixEditor && addPrefix) {
-                    prefixEditor.insertBefore(createPrefixRow(values[0] || ""), addPrefix);
-                } else {
-                    inputs.forEach((input, index) => { input.value = values[index] || ""; });
+                const desiredValues = values.length ? values : [""];
+                controlsAll(row, ".ip-prefix-row").forEach((prefixRow) => prefixRow.remove());
+                if (prefixEditor && addPrefix) {
+                    desiredValues.forEach((prefix) => prefixEditor.insertBefore(createPrefixRow(prefix), addPrefix));
                 }
             }
             updateStandardRow(row, settingsForm);
