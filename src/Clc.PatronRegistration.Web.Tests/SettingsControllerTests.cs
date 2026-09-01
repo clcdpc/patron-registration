@@ -1289,6 +1289,30 @@ public class SettingsControllerTests
     }
 
     [TestMethod]
+    public void Index_InheritedRowsExposeEffectiveValueAsTheInheritanceChoice()
+    {
+        var repository = new Mock<ISettingsAdministrationRepository>();
+        repository.Setup(service => service.GetVersion(3, string.Empty)).Returns(4);
+        repository.Setup(service => service.GetFormCodes(It.IsAny<int>(), It.IsAny<int>())).Returns([]);
+        repository.Setup(service => service.GetLegacyFormCodes()).Returns([]);
+        var cache = new TestCache
+        {
+            SettingsCache =
+            [
+                new() { OrganizationID = 1, FormCode = string.Empty, Setting = "registration_text", Value = "System text" }
+            ]
+        };
+
+        var result = (ViewResult)CreateController(repository, LibraryAuthorization(), cache).Index(3);
+        var row = ((SettingsIndexViewModel)result.Model!).Settings.Single(setting => setting.Definition.Key == "registration_text");
+
+        Assert.IsFalse(row.Resolution.OwnsOverride);
+        Assert.IsTrue(row.HasInheritedValue);
+        Assert.AreEqual("System text", row.InheritedValue);
+        Assert.AreEqual("System defaults", row.InheritedSourceDescription);
+    }
+
+    [TestMethod]
     public void Index_HeaderImageRemoveOverridePresentsValidInheritedAsset()
     {
         var repository = ImagePresentationRepository(new SettingDraft(5, 3, string.Empty, 0, DraftStatus.Active,
