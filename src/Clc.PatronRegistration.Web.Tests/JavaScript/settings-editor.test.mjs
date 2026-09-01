@@ -149,7 +149,6 @@ function makeRow({
         sensitive: String(sensitive),
         baselineMode,
         baselineValue,
-        baselineOperation: baselineMode === "inherit" ? "RemoveOverride" : "Upsert",
         customizedHere: baselineMode === "customize" ? "true" : "false",
         presentationState: baselineMode === "inherit" ? (inherited ? "inherited" : "notset") : "customized",
         liveState: baselineMode === "inherit" ? (inherited ? "inherited" : "notset") : "customized",

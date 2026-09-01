@@ -170,11 +170,6 @@ body.settings-administration-page #regFormContainer {
 .review-table th[scope="row"] { background: #fafafa }
 .review-table td { overflow-wrap: anywhere }
 
-/* Preview management stays available without pushing the setting list down. */
-.preview-tools { border-top: 0; padding-top: 0; }
-.preview-tools > summary { cursor: pointer; font-weight: 700; padding: .35rem 0; }
-.preview-tools-content { border-top: 1px solid #aaa; margin-top: .3rem; padding-top: .65rem; }
-
 @media (max-width: 60rem) {
     .setting-content { grid-template-columns: minmax(0, 1fr) }
     .setting-content > .setting-description, .setting-content > .technical-details,
@@ -925,12 +920,15 @@ body.settings-administration-page #regFormContainer {
 .draft-actions button, .preview-link-actions button { min-height: 2.4rem }
 .draft-actions { padding-bottom: .1rem }
 
-.preview-tools {
-    border-top: 1px solid #aaa;
-    padding-top: var(--draft-section-gap)
+.preview-tools { border-top: 0; padding-top: 0 }
+.preview-tools > summary {
+    cursor: pointer;
+    font-weight: 700;
+    margin: 0 0 .4rem;
+    padding: .35rem 0
 }
-
-.preview-tools > summary, .preview-links > h4 { margin: 0 0 .4rem }
+.preview-tools-content { border-top: 1px solid #aaa; margin-top: .3rem; padding-top: .65rem }
+.preview-links > h4 { margin: 0 0 .4rem }
 .preview-tools > form { display: grid; gap: .5rem; min-width: 0 }
 .preview-create-row { align-items: stretch; display: flex; flex-wrap: wrap; gap: var(--draft-control-gap); max-width: 100%; width: fit-content }
 .preview-branch-field { align-items: center; display: flex; flex: 0 1 auto; gap: .4rem .5rem }
@@ -1014,10 +1012,6 @@ dialog::backdrop { background:rgb(0 0 0 / .55) }
     .preview-link-actions form, .preview-link-actions button { width: 100% }
 }
 
-/* Final settings-page overrides for the direct editor and compact preview disclosure. */
-.preview-tools { border-top: 0; padding-top: 0; }
-.preview-tools > summary { cursor: pointer; font-weight: 700; padding: .35rem 0; }
-.preview-tools-content { border-top: 1px solid #aaa; margin-top: .3rem; padding-top: .65rem; }
 .settings-filter-group { align-items: center; display: flex; gap: .45rem; margin: 0; }
 .settings-filter-group label { white-space: nowrap; }
 .settings-filter-group select { min-height: 2.3rem; min-width: 13rem; }

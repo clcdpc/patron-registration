@@ -1850,6 +1850,8 @@ public class SettingsAdministrationTests
         StringAssert.Contains(partial, "Model.InheritedSourceDescription");
         StringAssert.Contains(batch, "Model.InheritedSourceDescription");
         StringAssert.Contains(css, "clip-path: inset(50%)");
+        Assert.AreEqual(1, css.Split(".preview-tools-content", StringSplitOptions.None).Length - 1);
+        Assert.AreEqual(1, css.Split(".preview-tools > summary", StringSplitOptions.None).Length - 1);
         Assert.IsFalse(css.Contains(".review-table thead { display: none", StringComparison.Ordinal));
         StringAssert.Contains(css, ".review-table thead {\n        clip: rect(0 0 0 0)");
         Assert.IsFalse(css.Contains(".batch-settings thead { display: none", StringComparison.Ordinal));

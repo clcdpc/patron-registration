@@ -157,7 +157,7 @@
     }
 
     function baselineState(row) {
-        const mode = row?.dataset?.baselineMode || (row?.dataset?.baselineOperation === "RemoveOverride" ? "inherit" : "customize");
+        const mode = row?.dataset?.baselineMode;
         return { mode, operation: mode === "inherit" ? "RemoveOverride" : "Upsert", value: normalizeValue(row, row?.dataset?.baselineValue || "") };
     }
 
@@ -215,7 +215,6 @@
         }
         if (batchStatus) batchStatus.textContent = text;
         else if (status) status.textContent = "Unsaved in this browser";
-        row.dataset.browserState = "unsaved";
     }
 
     function updateEditorAvailability(row, state) {
@@ -259,7 +258,6 @@
             }
             if (status && clean) status.textContent = clean.status;
             if (batchStatus) batchStatus.textContent = "";
-            delete row.dataset.browserState;
         }
         updatePendingActions(settingsForm);
         return dirty;
@@ -415,11 +413,9 @@
                     : imageState.fileName || "new image";
                 if (summary) { summary.textContent = `Unsaved: ${pendingText}`; summary.setAttribute?.("title", summary.textContent); }
                 if (rowStatus) rowStatus.textContent = "Unsaved in this browser";
-                row.dataset.browserState = "unsaved";
             } else {
                 if (summary) { summary.textContent = clean.summary; clean.title === null ? summary.removeAttribute?.("title") : summary.setAttribute?.("title", clean.title); }
                 if (rowStatus) rowStatus.textContent = clean.status;
-                delete row.dataset.browserState;
             }
             updatePendingActions(activeForm);
             syncBlockingStatus(activeForm);

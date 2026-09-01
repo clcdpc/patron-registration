@@ -439,7 +439,6 @@ public sealed class RegistrationFormAssetTests
         StringAssert.Contains(row, "class=\"image-choose-another\"");
         StringAssert.Contains(row, "class=\"image-undo-pending\"");
         StringAssert.Contains(row, "data-image-inherited-missing=");
-        Assert.AreEqual(1, row.Split("data-image-current", StringSplitOptions.None).Length - 1);
         Assert.IsFalse(row.Contains("image-value-editor", StringComparison.Ordinal));
         Assert.IsFalse(row.Contains("image-edit-current", StringComparison.Ordinal));
         Assert.IsFalse(row.Contains("legacy", StringComparison.OrdinalIgnoreCase));

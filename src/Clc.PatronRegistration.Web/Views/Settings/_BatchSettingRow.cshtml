@@ -51,8 +51,7 @@
     data-inherited-source="@(Model.InheritedSourceDescription ?? string.Empty)"
     data-has-inherited="@Model.HasInheritedValue.ToString().ToLowerInvariant()"
     data-baseline-mode="@baselineMode"
-    data-baseline-value="@editorValue"
-    data-baseline-operation="@baselineOperation">
+    data-baseline-value="@editorValue">
     <td class="batch-setting-name" headers="batch-@columnHeadingPrefix-field"><strong>@definition.DisplayName.Replace("Require ", "", StringComparison.OrdinalIgnoreCase)</strong><small>@definition.Description</small></td>
     <td class="batch-effective" headers="batch-@columnHeadingPrefix-effective">
         <span class="batch-effective-summary">@effectiveValue</span>

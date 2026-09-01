@@ -123,7 +123,6 @@
          data-has-inherited="@Model.HasInheritedValue.ToString().ToLowerInvariant()"
          data-baseline-mode="@baselineMode"
          data-baseline-value="@(definition.IsSensitive ? string.Empty : baselineValue)"
-         data-baseline-operation="@baselineOperation"
          data-image-local-value="@(isImage && resolution.OwnsOverride ? resolution.CurrentOverrideValue ?? string.Empty : string.Empty)"
          data-image-local-missing="@((isImage && resolution.OwnsOverride && Model.EffectiveAssetMissing).ToString().ToLowerInvariant())"
          data-image-local-preview-url="@(isImage && resolution.OwnsOverride ? Model.EffectiveAsset?.PreviewUrl ?? string.Empty : string.Empty)"
@@ -201,7 +200,7 @@
         {
             <div class="image-setting" aria-labelledby="@inputId-label">
                 <span id="@inputId-label" class="visually-hidden">@definition.DisplayName controls</span>
-                <div class="@imageCurrentClass" data-image-current>
+                <div class="@imageCurrentClass">
                     @if (Model.EffectiveAsset is not null)
                     {
                         <img class="setting-image-preview" src="@Model.EffectiveAsset.PreviewUrl" alt="Current header image" />
@@ -219,7 +218,7 @@
 
                 @if (hasDraftOperation)
                 {
-                    <div class="image-card image-draft" data-image-draft>
+                    <div class="image-card image-draft">
                         <strong>Shared draft</strong>
                         @if (isDraftUpsert && Model.StagedAsset is not null)
                         {
@@ -286,7 +285,7 @@
                     </fieldset>
                 }
 
-                <div class="value-editor" data-custom-editor aria-describedby="@validationErrorId">
+                <div class="value-editor" aria-describedby="@validationErrorId">
                     @if (definition.Key.Equals("show_dl_ips", StringComparison.OrdinalIgnoreCase))
                     {
                         <label>On-site IP address prefixes</label>
