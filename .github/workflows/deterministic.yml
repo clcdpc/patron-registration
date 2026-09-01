@@ -34,6 +34,18 @@ jobs:
         with:
           node-version: 20.x
 
+      - name: Install settings browser-test dependencies
+        working-directory: src/playwright
+        run: npm ci
+
+      - name: Install Chromium for settings browser tests
+        working-directory: src/playwright
+        run: npx playwright install --with-deps chromium
+
+      - name: Run settings browser regressions
+        working-directory: src/playwright
+        run: npm run test:settings
+
       - name: Start SQL Server 2022
         shell: bash
         env:

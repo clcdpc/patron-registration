@@ -282,6 +282,7 @@
             <strong>@Model.OrganizationName</strong><span aria-hidden="true"> · </span><strong>@formDisplayName</strong>
         </span>
         <div class="settings-action-buttons">
+            <button type="button" data-review-pending data-label-template="Review {count} {noun}">Review changes</button>
             @if (Model.ActiveDraft is not null) {
                 <button type="submit" class="settings-primary-action" formaction="@Url.Action("SaveToSharedDraft")" data-submit-kind="draft" data-label-template="Add {count} {noun} to shared draft">Add changes to shared draft</button>
                 <button type="submit" class="settings-secondary-action" data-label-template="Save {count} {noun} live instead" data-review-title="Save changes live" data-confirm-label="Save live">Save changes live instead</button>
@@ -297,11 +298,12 @@
 
 <dialog id="save-confirm" aria-labelledby="save-confirm-title">
     <h2 id="save-confirm-title">Review changes</h2>
-    <p>Target: <strong>@Model.OrganizationName</strong> · <strong>@formDisplayName</strong>.</p>
+    <p data-save-review-context>Target: <strong>@Model.OrganizationName</strong> · <strong>@formDisplayName</strong>.</p>
+    <p data-browser-review-context hidden>These changes exist only in this browser. Reviewing them does not save or publish anything.</p>
     <div class="review-table-wrap">
-        <table class="review-table">
+        <table class="review-table browser-review-table">
             <caption class="visually-hidden">Pending setting changes</caption>
-            <thead><tr><th scope="col">Setting</th><th scope="col">Live now</th><th scope="col">Proposed</th></tr></thead>
+            <thead><tr><th scope="col">Setting</th><th scope="col" class="review-baseline-column">Live now</th><th scope="col" class="review-pending-column">Proposed</th></tr></thead>
             <tbody></tbody>
         </table>
     </div>

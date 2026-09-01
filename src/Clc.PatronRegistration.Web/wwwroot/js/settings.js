@@ -129,7 +129,7 @@
     }
 
     function normalizeValue(row, value) {
-        const text = value === null || value === undefined ? "" : String(value);
+        const text = (value === null || value === undefined ? "" : String(value)).replace(/\r\n?/g, "\n");
         if (row?.dataset?.valueType === "boolean") return text.trim().toLowerCase() === "true" ? "true" : "false";
         if (row?.dataset?.valueType === "ip-prefixes" || controls(row, "[data-ip-prefix-editor]")) {
             return text.split(";").map((part) => part.trim()).filter(Boolean).join(";");
@@ -689,7 +689,10 @@
             return "Remove customization; no inherited value configured";
         }
         if (row?.dataset?.valueType === "image") {
-            return controls(row, ".image-pending-file-name")?.textContent?.trim() || "Uploaded image";
+            const fileName = controls(row, ".image-pending-file-name")?.textContent?.trim();
+            if (row.dataset.imageNeedsUpload === "true") return "Choose an image to customize here";
+            if (row.dataset.imageUploading === "true") return fileName ? `${fileName} (uploading)` : "Image upload in progress";
+            return fileName || "Uploaded image";
         }
         return safeBrowserSummary(row, value, operation);
     }
@@ -700,26 +703,67 @@
         heading.scope = "row";
         heading.textContent = row.dataset.displayName || "Setting";
         const live = document.createElement("td");
+        live.className = "review-baseline-column";
         live.textContent = reviewLiveSummary(row);
         const proposed = document.createElement("td");
+        proposed.className = "review-pending-column";
         proposed.textContent = reviewProposedSummary(row, value, operation);
         tr.append(heading, live, proposed);
         tbody.append(tr);
     }
 
-    function populateReviewTable(settingsForm, tableOrBody) {
+    function populateReviewTable(settingsForm, tableOrBody, options = {}) {
         const tbody = tableOrBody?.tagName?.toLowerCase() === "tbody" ? tableOrBody : tableOrBody?.querySelector?.("tbody") || tableOrBody;
         tbody?.replaceChildren?.();
         let valid = true;
         settingsForm?.querySelectorAll?.('.setting-row[data-dirty="true"]')?.forEach((row) => {
             const state = proposedState(row);
             if (row.dataset.valueType === "image" && state.operation === "Upsert" && (!Number.isInteger(Number(state.value)) || Number(state.value) <= 0)) {
-                valid = false;
-                return;
+                if (options.validateImages !== false) {
+                    valid = false;
+                    return;
+                }
             }
             appendReviewRow(tbody, row, state.value, state.operation);
         });
         return valid;
+    }
+
+    function setReviewDialogMode(mode, count, trigger) {
+        if (!reviewDialog) return;
+        const reviewOnly = mode === "review";
+        reviewDialog.dataset.reviewMode = reviewOnly ? "browser" : "save";
+        reviewDialog._trigger = trigger;
+        const title = reviewDialog.querySelector("#save-confirm-title");
+        const confirm = reviewDialog.querySelector("#confirm-save");
+        const close = reviewDialog.querySelector("#cancel-save");
+        const saveContext = reviewDialog.querySelector("[data-save-review-context]");
+        const browserContext = reviewDialog.querySelector("[data-browser-review-context]");
+        const proposedHeading = reviewDialog.querySelector(".review-pending-column[scope='col']");
+        const caption = reviewDialog.querySelector("caption");
+        if (title) title.textContent = reviewOnly
+            ? `Review ${count} ${count === 1 ? "change" : "changes"}`
+            : trigger?.dataset?.reviewTitle || "Review changes";
+        if (confirm) {
+            confirm.hidden = reviewOnly;
+            if (!reviewOnly) confirm.textContent = trigger?.dataset?.confirmLabel || "Save changes";
+        }
+        if (close) close.textContent = reviewOnly ? "Close" : "Cancel";
+        if (saveContext) saveContext.hidden = reviewOnly;
+        if (browserContext) browserContext.hidden = !reviewOnly;
+        if (proposedHeading) proposedHeading.textContent = reviewOnly ? "Pending change" : "Proposed";
+        if (caption) caption.textContent = reviewOnly ? "Browser-pending setting changes" : "Pending setting changes";
+    }
+
+    function reviewPendingChanges(event) {
+        const table = reviewDialog?.querySelector(".review-table");
+        if (!table) return false;
+        populateReviewTable(form, table, { validateImages: false });
+        const count = table.querySelector?.("tbody")?.children?.length || 0;
+        if (!count) return false;
+        reviewSubmitter = null;
+        setReviewDialogMode("review", count, event?.currentTarget || document.querySelector("[data-review-pending]"));
+        return showModal(reviewDialog, "#cancel-save");
     }
 
     function ensureSettingVisible(row, options = {}) {
@@ -982,7 +1026,6 @@
             return;
         }
         event.preventDefault();
-        reviewSubmitter = submitter;
         if (blockActiveEdit(form, statusRegion)) return;
         const table = reviewDialog?.querySelector(".review-table");
         if (!table || !populateReviewTable(form, table)) {
@@ -993,15 +1036,15 @@
             if (statusRegion) { statusRegion.textContent = "No settings have changed."; statusRegion.hidden = false; }
             return;
         }
-        const title = reviewDialog.querySelector("#save-confirm-title");
-        const confirm = reviewDialog.querySelector("#confirm-save");
-        if (title) title.textContent = submitter?.dataset?.reviewTitle || "Review changes";
-        if (confirm) confirm.textContent = submitter?.dataset?.confirmLabel || "Save changes";
-        reviewDialog._trigger = submitter;
+        reviewSubmitter = submitter;
+        setReviewDialogMode("save", table.querySelector("tbody").children.length, submitter);
         showModal(reviewDialog, "#confirm-save");
     });
 
+    document.querySelector("[data-review-pending]")?.addEventListener("click", reviewPendingChanges);
+
     document.querySelector("#confirm-save")?.addEventListener("click", () => {
+        if (reviewDialog?.dataset?.reviewMode !== "save") return;
         const action = { form, submitter: reviewSubmitter, trigger: reviewSubmitter, prepare: disableDirtyMutations };
         reviewDialog.close();
         finalSubmit(action);
@@ -1042,7 +1085,10 @@
         owner._trigger?.focus?.();
         pendingAction = null;
         submitting = false;
-        if (owner === reviewDialog) reviewSubmitter = null;
+        if (owner === reviewDialog) {
+            reviewSubmitter = null;
+            reviewDialog.dataset.reviewMode = "save";
+        }
     }
     function bindDialogCancellation(owner) {
         owner.addEventListener("cancel", (event) => { event.preventDefault(); cancelWorkflowDialog(owner); });
@@ -1084,7 +1130,7 @@
     globalThis.SettingsEditor = {
         initializeSettingsContext, setNavigationGuard: (guard) => { navigationGuard = guard; }, initializeRow,
         initializeStandardRow, initializeImageRow, updatePendingActions, hasImageUpload, blockActiveEdit,
-        populateReviewTable
+        populateReviewTable, reviewPendingChanges
     };
     globalThis.SettingsWorkflow = {
         continuePipeline, lifecycleSubmit, needsLiveConfirmation, disableDirtyMutations, discardPendingChanges,

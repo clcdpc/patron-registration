@@ -2,7 +2,9 @@
   "name": "playwright",
   "version": "1.0.0",
   "main": "index.js",
-  "scripts": {},
+  "scripts": {
+    "test:settings": "playwright test tests/settings-editor.spec.ts --project=chromium --reporter=line"
+  },
   "keywords": [],
   "author": "",
   "license": "ISC",
