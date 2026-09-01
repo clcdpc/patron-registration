@@ -38,9 +38,9 @@ jobs:
         working-directory: src/playwright
         run: npm ci
 
-      - name: Install Chromium for settings browser tests
+      - name: Install Chromium and Firefox for settings browser tests
         working-directory: src/playwright
-        run: npx playwright install --with-deps chromium
+        run: npx playwright install --with-deps chromium firefox
 
       - name: Run settings browser regressions
         working-directory: src/playwright

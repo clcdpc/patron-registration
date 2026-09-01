@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
-    "test:settings": "playwright test tests/settings-editor.spec.ts --project=chromium --reporter=line"
+    "test:settings": "playwright test tests/settings-editor.spec.ts --project=chromium --project=firefox --reporter=line"
   },
   "keywords": [],
   "author": "",

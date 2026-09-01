@@ -144,6 +144,23 @@
             .join(";");
     }
 
+    function syncEditorPreview(source, preview = source?.nextElementSibling) {
+        if (!source || !preview) return;
+        if (preview.classList?.contains?.("html-preview")) {
+            const frame = preview;
+            frame.srcdoc = source.value;
+        } else if (preview.classList?.contains?.("plain-text-preview")) {
+            preview.textContent = source.value;
+        }
+    }
+
+    function restoreVisibleEditorValue(row, value) {
+        const editor = controls(row, ".setting-value:not(.setting-value-binding)");
+        if (!editor) return;
+        editor.value = value === null || value === undefined ? "" : String(value);
+        syncEditorPreview(editor);
+    }
+
     function proposedState(row) {
         const modeControl = selectedModeControl(row);
         const mode = modeControl?.dataset?.mode || (modeControl?.value === "inherit" ? "inherit" : modeFromRow(row));
@@ -252,7 +269,7 @@
         if (statusFilter?.value === "unsaved") applyFilters();
     }
 
-    function updateStandardRow(row, settingsForm = form) {
+    function updateStandardRow(row, settingsForm = form, options = {}) {
         const state = proposedState(row);
         const baseline = baselineState(row);
         const dirty = !sameState(row, state, baseline);
@@ -274,7 +291,7 @@
             if (status && clean) status.textContent = clean.status;
             if (batchStatus) batchStatus.textContent = "";
         }
-        updatePendingActions(settingsForm);
+        if (options.updateActions !== false) updatePendingActions(settingsForm);
         return dirty;
     }
 
@@ -298,17 +315,20 @@
     function initializeStandardRow(row, settingsForm) {
         const summary = controls(row, ".summary-value");
         const status = controls(row, ".setting-status > span") || controls(row, ".setting-status");
+        const visibleValue = controls(row, ".setting-value:not(.setting-value-binding)");
+        const value = visibleValue || controls(row, ".setting-value");
         row._settingsCleanPresentation = {
             summary: summary?.textContent || "",
             title: summary?.getAttribute?.("title"),
             status: status?.textContent || ""
         };
+        row._settingsInitialEditorValue = visibleValue?.value ?? null;
+        row._settingsInitialIpPrefixValues = controlsAll(row, ".ip-prefix-input").map((input) => String(input.value ?? ""));
 
         controlsAll(row, ".setting-mode").forEach((mode) => mode.addEventListener("change", () => {
             if (mode.checked && modeFromRow(row) === "inherit") resetSensitiveEditor(row);
             updateStandardRow(row, settingsForm);
         }));
-        const value = controls(row, ".setting-value:not(.setting-value-binding)") || controls(row, ".setting-value");
         value?.addEventListener("input", () => updateStandardRow(row, settingsForm));
         value?.addEventListener("change", () => updateStandardRow(row, settingsForm));
         const reveal = controls(row, ".reveal-secret");
@@ -356,21 +376,21 @@
             updateStandardRow(row, settingsForm);
         }));
 
-        row._discardPendingChange = () => {
+        row._discardPendingChange = (options = {}) => {
             const baseline = baselineState(row);
             setSelectedMode(row, baseline.mode, baseline.value);
-            const valueEditor = controls(row, ".setting-value:not(.setting-value-binding)") || controls(row, ".setting-value");
             if (row.dataset?.sensitive === "true") resetSensitiveEditor(row);
-            else if (valueEditor && baseline.mode === "customize" && !controls(row, "[data-ip-prefix-editor]")) valueEditor.value = baseline.value;
+            else if (!controls(row, "[data-ip-prefix-editor]")) restoreVisibleEditorValue(row, row._settingsInitialEditorValue);
             if (controls(row, "[data-ip-prefix-editor]")) {
-                const values = baseline.value.split(";").filter(Boolean);
-                const desiredValues = values.length ? values : [""];
+                const desiredValues = Array.isArray(row._settingsInitialIpPrefixValues) && row._settingsInitialIpPrefixValues.length
+                    ? row._settingsInitialIpPrefixValues
+                    : [""];
                 controlsAll(row, ".ip-prefix-row").forEach((prefixRow) => prefixRow.remove());
                 if (prefixEditor && addPrefix) {
                     desiredValues.forEach((prefix) => prefixEditor.insertBefore(createPrefixRow(prefix), addPrefix));
                 }
             }
-            updateStandardRow(row, settingsForm);
+            updateStandardRow(row, settingsForm, options);
         };
         updateStandardRow(row, settingsForm);
     }
@@ -423,7 +443,7 @@
             return { mode, operation: operationName, value: operationName === "Upsert" ? String(binding?.value || "") : "" };
         }
 
-        function renderImage() {
+        function renderImage(options = {}) {
             const state = currentImageState();
             const dirty = !sameState(row, state, baseline) ||
                 Boolean(row.dataset.imageNeedsUpload === "true") ||
@@ -445,7 +465,7 @@
                 if (summary) { summary.textContent = clean.summary; clean.title === null ? summary.removeAttribute?.("title") : summary.setAttribute?.("title", clean.title); }
                 if (rowStatus) rowStatus.textContent = clean.status;
             }
-            updatePendingActions(activeForm);
+            if (options.updateActions !== false) updatePendingActions(activeForm);
             syncBlockingStatus(activeForm);
         }
 
@@ -472,7 +492,7 @@
             if (undo) undo.hidden = !row.dataset.dirty || row.dataset.dirty !== "true";
         }
 
-        function restoreBaseline(message = "") {
+        function restoreBaseline(message = "", options = {}) {
             imageState.requestVersion++;
             imageState.uploadPromise = null;
             discardFallback();
@@ -488,7 +508,7 @@
             imageState.message = message;
             imageState.error = Boolean(message);
             renderPending();
-            renderImage();
+            renderImage(options);
         }
 
         function chooseInherited() {
@@ -634,7 +654,7 @@
             imageFile.value = "";
             if (selected) uploadImage(selected);
         });
-        row._discardPendingChange = () => restoreBaseline();
+        row._discardPendingChange = (options = {}) => restoreBaseline("", options);
         renderPending();
         renderImage();
     }
@@ -943,10 +963,37 @@
             .forEach((control) => { control.disabled = true; });
     }
 
-    function discardPendingChanges(settingsForm = form) {
-        browserWorkRows(settingsForm).forEach((row) => row._discardPendingChange?.());
+    function discardPendingChanges(settingsForm = form, options = {}) {
+        const rows = [...browserWorkRows(settingsForm)];
+        const failures = [];
+        rows.forEach((row) => {
+            try {
+                if (typeof row._discardPendingChange !== "function") throw new Error("This setting does not support browser discard.");
+                row._discardPendingChange({ updateActions: false });
+            } catch (error) {
+                failures.push({ row, error });
+            }
+        });
         updatePendingActions(settingsForm);
         syncBlockingStatus(settingsForm);
+        const remainingDirtyRows = [...(settingsForm?.querySelectorAll?.('.setting-row[data-dirty="true"]') || [])];
+        const result = { discardedCount: rows.length, failures, remainingDirtyRows };
+        if (options.announce) announceDiscardResult(result);
+        return result;
+    }
+
+    function announceDiscardResult(result) {
+        if (!statusRegion) return;
+        const remaining = result.remainingDirtyRows;
+        if (!remaining.length) {
+            statusRegion.textContent = `Discarded ${result.discardedCount} browser ${result.discardedCount === 1 ? "change" : "changes"}.`;
+        } else {
+            const names = remaining.map((row) => row.dataset?.displayName || row.dataset?.settingKey || "setting");
+            const noun = remaining.length === 1 ? "change" : "changes";
+            statusRegion.textContent = `${remaining.length} browser ${noun} could not be discarded: ${names.join(", ")}. Reload the page before continuing.`;
+        }
+        statusRegion.hidden = false;
+        statusRegion.focus?.();
     }
 
     function needsLiveConfirmation(targetForm, submitter) {
@@ -1061,7 +1108,17 @@
         pendingAction = { navigate: action, trigger };
         if (unsavedDialog) unsavedDialog._trigger = trigger;
         setUnsavedDialogMode("guard", dirtyCount());
-        if (!showModal(unsavedDialog, '[data-dialog-cancel]')) { discardPendingChanges(); submitting = true; action(); return true; }
+        if (!showModal(unsavedDialog, '[data-dialog-cancel]')) {
+            const result = discardPendingChanges(form);
+            if (result.remainingDirtyRows.length) {
+                pendingAction = null;
+                announceDiscardResult(result);
+                return false;
+            }
+            submitting = true;
+            action();
+            return true;
+        }
         return false;
     };
     document.querySelectorAll("form[data-guard-action]").forEach((guardedForm) => guardedForm.addEventListener("submit", lifecycleSubmit));
@@ -1098,10 +1155,17 @@
     document.querySelector("[data-guard-discard]")?.addEventListener("click", () => {
         unsavedDialog.close();
         const action = pendingAction;
-        discardPendingChanges();
+        const result = discardPendingChanges(form);
+        if (result.remainingDirtyRows.length) {
+            pendingAction = null;
+            submitting = false;
+            announceDiscardResult(result);
+            return;
+        }
         if (action?.explicitDiscard) {
             pendingAction = null;
             submitting = false;
+            announceDiscardResult(result);
             action.focusTarget?.querySelector?.("summary")?.focus?.() || search?.focus?.();
         } else if (action?.navigate) { submitting = true; action.navigate(); }
         else if (action) continuePipeline(action, true);

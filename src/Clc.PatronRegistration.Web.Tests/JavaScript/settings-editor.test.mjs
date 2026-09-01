@@ -438,6 +438,99 @@ test("inheritance modes compare semantically and preserve explicit blank customi
     assert.equal(blank.row.dataset.dirty, "false");
 });
 
+test("explicit discard restores the loaded inherited editor buffer", () => {
+    const api = loadSettings();
+    const inherited = makeRow({ key: "inherited-buffer", baselineMode: "inherit", baselineValue: "", value: "Loaded inherited value", inherited: true });
+    const form = makeForm([inherited.row]);
+    api.SettingsEditor.initializeStandardRow(inherited.row, form);
+
+    chooseMode(inherited, "customize");
+    inherited.visible.value = "Temporary browser value";
+    inherited.visible.emit("input");
+    assert.equal(inherited.row.dataset.dirty, "true");
+
+    api.SettingsWorkflow.discardPendingChanges(form);
+
+    assert.equal(inherited.inherit.checked, true);
+    assert.equal(inherited.visible.value, "Loaded inherited value");
+    assert.equal(inherited.binding.value, "");
+    assert.equal(inherited.row.dataset.dirty, "false");
+    chooseMode(inherited, "customize");
+    assert.equal(inherited.visible.value, "Loaded inherited value");
+});
+
+test("explicit discard restores the loaded customized editor buffer", () => {
+    const api = loadSettings();
+    const customized = makeRow({ key: "customized-buffer", baselineValue: "Loaded customized value", value: "Loaded customized value" });
+    const form = makeForm([customized.row]);
+    api.SettingsEditor.initializeStandardRow(customized.row, form);
+
+    customized.visible.value = "Temporary browser value";
+    customized.visible.emit("input");
+    assert.equal(customized.row.dataset.dirty, "true");
+    api.SettingsWorkflow.discardPendingChanges(form);
+
+    assert.equal(customized.visible.value, "Loaded customized value");
+    assert.equal(customized.binding.value, "Loaded customized value");
+    assert.equal(customized.row.dataset.dirty, "false");
+});
+
+test("explicit discard preserves shared-draft upsert and remove-override baselines", () => {
+    const api = loadSettings();
+    const upsert = makeRow({ key: "draft-upsert", baselineValue: "Draft value", value: "Draft value" });
+    upsert.row.dataset.draftChange = "true";
+    const remove = makeRow({ key: "draft-remove", baselineMode: "inherit", baselineValue: "", value: "Draft inherited value", inherited: true });
+    remove.row.dataset.draftChange = "true";
+    const form = makeForm([upsert.row, remove.row]);
+    api.SettingsEditor.initializeStandardRow(upsert.row, form);
+    api.SettingsEditor.initializeStandardRow(remove.row, form);
+
+    upsert.visible.value = "Temporary draft change";
+    upsert.visible.emit("input");
+    chooseMode(remove, "customize");
+    remove.visible.value = "Temporary override";
+    remove.visible.emit("input");
+    assert.equal(form.querySelectorAll('.setting-row[data-dirty="true"]').length, 2);
+
+    api.SettingsWorkflow.discardPendingChanges(form);
+
+    assert.equal(upsert.visible.value, "Draft value");
+    assert.equal(upsert.row.dataset.draftChange, "true");
+    assert.equal(upsert.row.dataset.dirty, "false");
+    assert.equal(remove.inherit.checked, true);
+    assert.equal(remove.visible.value, "Draft inherited value");
+    assert.equal(remove.row.dataset.draftChange, "true");
+    assert.equal(remove.row.dataset.dirty, "false");
+});
+
+test("explicit discard synchronizes derived HTML and plain-text previews", () => {
+    const api = loadSettings();
+    const html = makeRow({ key: "html-preview", valueType: "html", baselineValue: "<p>Loaded HTML</p>", value: "<p>Loaded HTML</p>" });
+    const plain = makeRow({ key: "plain-preview", valueType: "emailtemplate", baselineValue: "Loaded plain text", value: "Loaded plain text" });
+    const htmlPreview = new NodeStub();
+    htmlPreview.classList.values.add("html-preview");
+    html.visible.nextElementSibling = htmlPreview;
+    const plainPreview = new NodeStub();
+    plainPreview.classList.values.add("plain-text-preview");
+    plain.visible.nextElementSibling = plainPreview;
+    const form = makeForm([html.row, plain.row]);
+    api.SettingsEditor.initializeStandardRow(html.row, form);
+    api.SettingsEditor.initializeStandardRow(plain.row, form);
+
+    html.visible.value = "<p>Temporary HTML</p>";
+    html.visible.emit("input");
+    plain.visible.value = "Temporary plain text";
+    plain.visible.emit("input");
+    api.SettingsWorkflow.discardPendingChanges(form);
+
+    assert.equal(html.visible.value, "<p>Loaded HTML</p>");
+    assert.equal(htmlPreview.srcdoc, "<p>Loaded HTML</p>");
+    assert.equal(plain.visible.value, "Loaded plain text");
+    assert.equal(plainPreview.textContent, "Loaded plain text");
+    assert.equal(html.row.dataset.dirty, "false");
+    assert.equal(plain.row.dataset.dirty, "false");
+});
+
 test("returning an inherited sensitive setting to inheritance clears and conceals the replacement", () => {
     const api = loadSettings();
     const secret = makeRow({ key: "postmark_api_key", baselineMode: "inherit", baselineValue: "", value: "", sensitive: true, inherited: true });
@@ -747,6 +840,48 @@ test("a failed replacement upload preserves the previous pending image", async (
     assert.match(image.uploadStatus.textContent, /first\.png remains selected/);
     assert.equal(image.uploadStatus.classList.contains("image-upload-error"), true);
     assert.equal(image.row.dataset.dirty, "true");
+});
+
+test("discard attempts every dirty row and reports an unresolved restoration", () => {
+    const first = makeRow({ key: "failed-setting", baselineValue: "first" });
+    const second = makeRow({ key: "later-setting", baselineValue: "second" });
+    const form = makeForm([first.row, second.row]);
+    const status = new NodeStub();
+    const document = createDocument({
+        querySelector(selector) {
+            if (selector === "#settings-form") return form;
+            if (selector === "#settings-status") return status;
+            return null;
+        }
+    });
+    const api = loadSettings(document);
+    api.SettingsEditor.initializeStandardRow(first.row, form);
+    api.SettingsEditor.initializeStandardRow(second.row, form);
+    first.visible.value = "first browser change";
+    first.visible.emit("input");
+    second.visible.value = "second browser change";
+    second.visible.emit("input");
+
+    const originalSecondDiscard = second.row._discardPendingChange;
+    let laterAttempted = 0;
+    first.row._discardPendingChange = () => { throw new Error("restoration failed"); };
+    second.row._discardPendingChange = (options) => { laterAttempted++; originalSecondDiscard(options); };
+    focused = null;
+    const result = api.SettingsWorkflow.discardPendingChanges(form, { announce: true });
+
+    assert.equal(laterAttempted, 1, "a failed row must not prevent later rows from being attempted");
+    assert.equal(result.discardedCount, 2);
+    assert.equal(result.failures.length, 1);
+    assert.equal(result.remainingDirtyRows.length, 1);
+    assert.equal(result.remainingDirtyRows[0], first.row);
+    assert.equal(first.row.dataset.dirty, "true");
+    assert.equal(second.row.dataset.dirty, "false");
+    assert.equal(form.actions.hidden, false, "the sticky bar remains while work is unresolved");
+    assert.match(status.textContent, /could not be discarded/);
+    assert.match(status.textContent, /failed-setting/);
+    assert.doesNotMatch(status.textContent, /^Discarded/);
+    assert.equal(status.hidden, false);
+    assert.equal(focused, status, "the unresolved error receives focus");
 });
 
 test("beforeunload protects unresolved uploads and ordinary pending browser work", () => {
