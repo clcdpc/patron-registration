@@ -341,18 +341,21 @@ public sealed class SettingsController(
             repository.DirectSave(request.OrganizationId, request.FormCode, request.ExpectedVersion, mutations, CatalogByKey, CreateAudit(request.OrganizationId, request.FormCode));
             cacheInvalidator.LiveSettingsChanged($"DirectSave organization={request.OrganizationId} form={request.FormCode}");
         }
-        catch (DBConcurrencyException exception)
+        catch (DBConcurrencyException)
         {
-            return Conflict(exception.Message);
+            TempData["SettingsError"] = "The settings changed while you were working. Reloaded values are shown below. Review them before trying again.";
+            return RedirectToAction(nameof(Index), new { organizationId = request.OrganizationId, formCode = request.FormCode });
         }
         catch (SqlException exception) when (exception.Number == 1205)
         {
-            return Conflict("Direct save conflicted with another settings change. Reload and review the settings.");
+            TempData["SettingsError"] = "The settings changed while you were working. Reloaded values are shown below. Review them before trying again.";
+            return RedirectToAction(nameof(Index), new { organizationId = request.OrganizationId, formCode = request.FormCode });
         }
         catch (InvalidOperationException exception)
         {
             repository.WriteAudit("ValidationFailed", false, CreateAudit(request.OrganizationId, request.FormCode), exception.Message);
-            return BadRequest(exception.Message);
+            TempData["SettingsError"] = $"{exception.Message} Reloaded values are shown below. Review them before trying again.";
+            return RedirectToAction(nameof(Index), new { organizationId = request.OrganizationId, formCode = request.FormCode });
         }
 
         return RedirectToAction(nameof(Index), new { organizationId = request.OrganizationId, formCode = request.FormCode });

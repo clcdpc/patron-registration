@@ -1838,6 +1838,9 @@ public class SettingsAdministrationTests
         StringAssert.Contains(index, "class=\"batch-settings");
         StringAssert.Contains(index, "id=\"batch-@batchHeadingPrefix-field\"");
         StringAssert.Contains(batch, "class=\"batch-browser-status\"");
+        Assert.IsFalse(batch.Contains("class=\"batch-browser-status\" role=\"status\"", StringComparison.Ordinal));
+        Assert.IsFalse(batch.Contains("class=\"batch-browser-status\" aria-live=", StringComparison.Ordinal));
+        StringAssert.Contains(index, "class=\"pending-changes-status\" role=\"status\" aria-live=\"polite\"");
         StringAssert.Contains(batch, "headers=\"batch-@columnHeadingPrefix-effective\"");
         StringAssert.Contains(index, "settingsErrorKey");
         StringAssert.Contains(index, "row.Definition.Key, settingsErrorKey");
@@ -1852,6 +1855,7 @@ public class SettingsAdministrationTests
         StringAssert.Contains(css, "clip-path: inset(50%)");
         Assert.AreEqual(1, css.Split(".preview-tools-content", StringSplitOptions.None).Length - 1);
         Assert.AreEqual(1, css.Split(".preview-tools > summary", StringSplitOptions.None).Length - 1);
+        Assert.IsFalse(css.Contains(".preview-tools > form", StringComparison.Ordinal));
         Assert.IsFalse(css.Contains(".review-table thead { display: none", StringComparison.Ordinal));
         StringAssert.Contains(css, ".review-table thead {\n        clip: rect(0 0 0 0)");
         Assert.IsFalse(css.Contains(".batch-settings thead { display: none", StringComparison.Ordinal));

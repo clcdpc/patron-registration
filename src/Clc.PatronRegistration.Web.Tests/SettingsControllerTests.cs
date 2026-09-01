@@ -812,7 +812,7 @@ public class SettingsControllerTests
     }
 
     [TestMethod]
-    public void DirectSave_RepositoryFailureStillReturnsConflictWithoutRefreshingCache()
+    public void DirectSave_ConcurrencyRedirectsWithRefreshMessageWithoutRefreshingCache()
     {
         var repository = new Mock<ISettingsAdministrationRepository>();
         repository.Setup(service => service.DirectSave(
@@ -829,7 +829,63 @@ public class SettingsControllerTests
             Changes = [new SettingMutationInput { Key = "label.NameFirst", Value = "First name" }]
         });
 
-        Assert.IsInstanceOfType<ConflictObjectResult>(result);
+        Assert.IsInstanceOfType<RedirectToActionResult>(result);
+        Assert.AreEqual(nameof(SettingsController.Index), ((RedirectToActionResult)result).ActionName);
+        StringAssert.Contains(controller.TempData["SettingsError"]?.ToString(), "Reloaded values are shown below");
+        StringAssert.Contains(controller.TempData["SettingsError"]?.ToString(), "Review them before trying again");
+        invalidator.Verify(service => service.LiveSettingsChanged(It.IsAny<string?>()), Times.Never);
+    }
+
+    [TestMethod]
+    public void DirectSave_DeadlockRedirectsWithRefreshMessageWithoutRefreshingCache()
+    {
+        var repository = new Mock<ISettingsAdministrationRepository>();
+        repository.Setup(service => service.DirectSave(
+                It.IsAny<int>(), It.IsAny<string>(), It.IsAny<long>(), It.IsAny<IReadOnlyList<SettingMutation>>(),
+                It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), It.IsAny<AuditContext>()))
+            .Throws(SqlExceptionWithNumber(1205));
+        var invalidator = new Mock<ISettingsCacheInvalidator>(MockBehavior.Strict);
+        var controller = CreateController(repository, LibraryAuthorization(), suppliedCacheInvalidator: invalidator.Object);
+
+        var result = controller.DirectSave(new SaveSettingsRequest
+        {
+            OrganizationId = 3,
+            ExpectedVersion = 1,
+            Changes = [new SettingMutationInput { Key = "label.NameFirst", Value = "First name" }]
+        });
+
+        Assert.IsInstanceOfType<RedirectToActionResult>(result);
+        Assert.AreEqual(nameof(SettingsController.Index), ((RedirectToActionResult)result).ActionName);
+        StringAssert.Contains(controller.TempData["SettingsError"]?.ToString(), "Reloaded values are shown below");
+        StringAssert.Contains(controller.TempData["SettingsError"]?.ToString(), "Review them before trying again");
+        invalidator.Verify(service => service.LiveSettingsChanged(It.IsAny<string?>()), Times.Never);
+    }
+
+    [TestMethod]
+    public void DirectSave_RepositoryValidationFailureRedirectsAndAuditsWithoutRefreshingCache()
+    {
+        var repository = new Mock<ISettingsAdministrationRepository>();
+        repository.Setup(service => service.DirectSave(
+                It.IsAny<int>(), It.IsAny<string>(), It.IsAny<long>(), It.IsAny<IReadOnlyList<SettingMutation>>(),
+                It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), It.IsAny<AuditContext>()))
+            .Throws(new InvalidOperationException("First name is invalid."));
+        var invalidator = new Mock<ISettingsCacheInvalidator>(MockBehavior.Strict);
+        var controller = CreateController(repository, LibraryAuthorization(), suppliedCacheInvalidator: invalidator.Object);
+
+        var result = controller.DirectSave(new SaveSettingsRequest
+        {
+            OrganizationId = 3,
+            ExpectedVersion = 1,
+            Changes = [new SettingMutationInput { Key = "label.NameFirst", Value = "First name" }]
+        });
+
+        Assert.IsInstanceOfType<RedirectToActionResult>(result);
+        Assert.AreEqual(nameof(SettingsController.Index), ((RedirectToActionResult)result).ActionName);
+        StringAssert.Contains(controller.TempData["SettingsError"]?.ToString(), "First name is invalid.");
+        StringAssert.Contains(controller.TempData["SettingsError"]?.ToString(), "Reloaded values are shown below");
+        StringAssert.Contains(controller.TempData["SettingsError"]?.ToString(), "Review them before trying again");
+        repository.Verify(service => service.WriteAudit("ValidationFailed", false, It.IsAny<AuditContext>(),
+            "First name is invalid.", null, null, null), Times.Once);
         invalidator.Verify(service => service.LiveSettingsChanged(It.IsAny<string?>()), Times.Never);
     }
 
