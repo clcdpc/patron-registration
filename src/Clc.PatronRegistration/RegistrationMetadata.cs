@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
 using Microsoft.AspNetCore.Mvc.Rendering;
+using Microsoft.AspNetCore.Mvc.ModelBinding.Validation;
 using Clc.PatronRegistration.Validators;
 using Clc.PatronRegistration.Configuration;
 using NLog;
@@ -43,6 +44,7 @@ namespace Clc.PatronRegistration
         public string? LegalNameLast { get; set; } = string.Empty;
 
         [Required]
+        [BirthdateNotInFuture]
         [DbConfiguredDisplayName]
         public DateTime? Birthdate { get; set; }
 
@@ -62,7 +64,6 @@ namespace Clc.PatronRegistration
 
         public int? TxtPhone { get; set; }
 
-        [DbConfiguredRequired]
         [DbConfiguredDisplayName]
         [VerifyEmailProvidedForEreceipts]
         public bool ReceiveEreceipts { get; set; }
@@ -93,7 +94,7 @@ namespace Clc.PatronRegistration
 
         [DbConfiguredDisplayName]
         [DbConfiguredRequired]
-        public string User5 { get; set; } = string.Empty;
+        public string? User5 { get; set; } = string.Empty;
 
         [RegularExpression(@"^\d{5}$", ErrorMessage = "Invalid ZIP")]
         [MaxLength(5)]
@@ -111,10 +112,11 @@ namespace Clc.PatronRegistration
         public string Password2 { get; set; } = string.Empty;
 
         [DbConfiguredDisplayName]
+        [DbConfiguredRequired]
         public int? RequestPickupBranchID { get; set; }
 
         [DbConfiguredDisplayName]
-        public string User1 { get; set; } = string.Empty;
+        public string? User1 { get; set; } = string.Empty;
 
         [DbConfiguredDisplayName]
         public bool DeliverCardToSchool { get; set; }
@@ -168,6 +170,7 @@ namespace Clc.PatronRegistration
         public bool ShowDlButton { get; set; }
 
         [JsonIgnore]
+        [ValidateNever]
         public ISettingProvider Settings { get; set; } = default!;
     }
 }

@@ -1,4 +1,19 @@
-﻿@inject ISettingProvider Settings
+@inject ISettingProvider Settings
+@inject Clc.PatronRegistration.Web.Settings.IPreviewRequestContextAccessor PreviewContext
+@using Clc.PatronRegistration.Administration
+
+@{
+    var bodyClass = ViewData["BodyClass"] as string;
+    var pageStylesheet = ViewData["PageStylesheet"] as string;
+    var pageStylesheetSupplement = ViewData["PageStylesheetSupplement"] as string;
+    var configuredStylesheet = Settings?.CssFile;
+    var safeSettingsStylesheet = SafeHtmlPolicy.IsSafeStylesheetReference(configuredStylesheet) ? configuredStylesheet : string.Empty;
+    var headerImageRoute = Settings?.HeaderImageAssetId is int selectedAssetId
+        ? PreviewContext.IsPreviewRequest && !string.IsNullOrWhiteSpace(PreviewContext.PlaintextToken)
+            ? Url?.RouteUrl("PreviewRegistrationFormAsset", new { token = PreviewContext.PlaintextToken, id = selectedAssetId })
+            : Url?.RouteUrl("RegistrationFormAsset", new { id = selectedAssetId })
+        : null;
+}
 
 <!DOCTYPE html>
 <html lang="en">
@@ -8,19 +23,32 @@
         <meta name="viewport" content="width=device-width, initial-scale=.9">
     }
     
-    <title>New Library Card Registration</title>
+    <title>@(ViewData["Title"] as string ?? "New Library Card Registration")</title>
 </head>
-<body aria-live="polite">
-    <link rel="stylesheet" href="~/css/site.css" asp-append-version="true" />
-    <div id="regFormContainer">
-        @if (!@Context.IsInjectedForm())
-        {
-            <link rel="stylesheet" href="@this.BuildUrl(Settings.CssFile)" />
-            
-            if (!string.IsNullOrWhiteSpace(Settings?.HeaderImageUrl))
+<body class="@bodyClass" aria-live="polite">
+    <link id="registration-site-stylesheet" rel="stylesheet" href="~/css/site.css" asp-append-version="true" />
+    <div id="regFormContainer" data-registration-branding-enabled="@((!Context.IsInjectedForm()).ToJavascriptBool())">
+        <div id="registration-branding">
+            @if (!@Context.IsInjectedForm())
             {
-                <img alt="header image containing the library's logo" src="@Settings.HeaderImageUrl" role="banner" />
+                @if (!string.IsNullOrWhiteSpace(safeSettingsStylesheet))
+                {
+                    <link id="registration-configured-stylesheet" rel="stylesheet" href="@this.BuildUrl(safeSettingsStylesheet)" />
+                }
+
+                if (headerImageRoute is not null)
+                {
+                    <img id="registration-header-image" alt="header image containing the library's logo" src="@headerImageRoute" role="banner" />
+                }
             }
+        </div>
+        @if (!string.IsNullOrWhiteSpace(pageStylesheet))
+        {
+            <link rel="stylesheet" href="@pageStylesheet" asp-append-version="true" />
+        }
+        @if (!string.IsNullOrWhiteSpace(pageStylesheetSupplement))
+        {
+            <link rel="stylesheet" href="@pageStylesheetSupplement" asp-append-version="true" />
         }
         @RenderBody()
     </div>

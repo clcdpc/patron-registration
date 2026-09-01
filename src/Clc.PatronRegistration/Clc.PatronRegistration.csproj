@@ -9,11 +9,12 @@
 	</PropertyGroup>
 
 	<ItemGroup>
-		<PackageReference Include="Clc.Melissa.Api" Version="1.0.1" />
+		<PackageReference Include="Clc.Melissa.Api" Version="1.0.3" />
 		<PackageReference Include="Clc.Polaris.Api" Version="3.1.0-alpha" />
 		<PackageReference Include="Clc.Postmark.Api" Version="1.0.2" />
 		<PackageReference Include="Clc.Rest.Client" Version="2.1.2" />
 		<PackageReference Include="Dapper" Version="2.0.123" />
+		<PackageReference Include="HtmlSanitizer" Version="9.2.995" />
 		<PackageReference Include="Microsoft.AspNetCore.Http.Abstractions" Version="2.2.0" />
 		<PackageReference Include="Microsoft.AspNetCore.Http.Extensions" Version="2.2.0" />
 		<PackageReference Include="Microsoft.Data.SqlClient" Version="5.2.0-preview1.23109.1" />

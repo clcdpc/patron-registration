@@ -1,0 +1,151 @@
+name: Release validation
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+jobs:
+  resolve_release:
+    runs-on: ubuntu-latest
+    outputs:
+      commit_sha: ${{ steps.resolve.outputs.commit_sha }}
+      release_tag: ${{ steps.resolve.outputs.release_tag }}
+    steps:
+      - name: Check out event object
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Resolve release tag and verify current identity
+        id: resolve
+        shell: bash
+        env:
+          EVENT_SHA: ${{ github.sha }}
+          EVENT_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          if [[ ! "$EVENT_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "Release tag must use vMAJOR.MINOR.PATCH with an optional prerelease suffix."
+            exit 1
+          fi
+
+          event_commit="$(git rev-parse "${EVENT_SHA}^{commit}")"
+          git fetch --force --no-tags origin \
+            "refs/tags/${EVENT_TAG}:refs/remotes/origin/release-tag-check"
+          current_tag_commit="$(git rev-parse "refs/remotes/origin/release-tag-check^{commit}")"
+          if [[ "$event_commit" != "$current_tag_commit" ]]; then
+            echo "The release tag does not resolve to the event commit."
+            exit 1
+          fi
+
+          git fetch --prune origin "+refs/heads/master:refs/remotes/origin/master"
+          if ! git merge-base --is-ancestor "$event_commit" refs/remotes/origin/master; then
+            echo "The tagged commit is not in the current origin/master history."
+            exit 1
+          fi
+
+          {
+            echo "commit_sha=$event_commit"
+            echo "release_tag=$EVENT_TAG"
+          } >> "$GITHUB_OUTPUT"
+
+  deterministic:
+    needs: resolve_release
+    uses: ./.github/workflows/deterministic.yml
+    with:
+      commit_sha: ${{ needs.resolve_release.outputs.commit_sha }}
+
+  live-development:
+    name: DEVELOPMENT Polaris live gate
+    needs: [resolve_release, deterministic]
+    if: ${{ github.run_attempt == 1 }}
+    runs-on: [self-hosted, patron-registration-live-development]
+    timeout-minutes: 30
+    concurrency:
+      group: patron-registration-live-development
+      cancel-in-progress: false
+    environment:
+      name: live-development-tests
+    steps:
+      - name: Check out exact tagged commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ needs.resolve_release.outputs.commit_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
+        with:
+          dotnet-version: 8.x
+
+      - name: Revalidate release tag and master ancestry before live mutation
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ needs.resolve_release.outputs.release_tag }}
+          EXPECTED_COMMIT_SHA: ${{ needs.resolve_release.outputs.commit_sha }}
+        run: |
+          set -euo pipefail
+
+          git fetch --force --no-tags origin \
+            "refs/tags/${RELEASE_TAG}:refs/remotes/origin/live-release-tag-check"
+          current_tag_commit="$(git rev-parse "refs/remotes/origin/live-release-tag-check^{commit}")"
+          if [[ "$EXPECTED_COMMIT_SHA" != "$current_tag_commit" ]]; then
+            echo "The release tag changed after deterministic validation; refusing live mutation."
+            exit 1
+          fi
+
+          git fetch --prune origin "+refs/heads/master:refs/remotes/origin/master"
+          if ! git merge-base --is-ancestor "$EXPECTED_COMMIT_SHA" refs/remotes/origin/master; then
+            echo "The release commit is no longer in the current origin/master history."
+            exit 1
+          fi
+
+      - name: Run serial DEVELOPMENT smoke test
+        shell: bash
+        env:
+          PATRON_REGISTRATION_LIVE_TESTS: 'true'
+          PATRON_REGISTRATION_PAPI_HOST: ${{ vars.PATRON_REGISTRATION_PAPI_HOST }}
+          PATRON_REGISTRATION_PAPI_ACCESS_ID: ${{ secrets.PATRON_REGISTRATION_PAPI_ACCESS_ID }}
+          PATRON_REGISTRATION_PAPI_ACCESS_KEY: ${{ secrets.PATRON_REGISTRATION_PAPI_ACCESS_KEY }}
+          PATRON_REGISTRATION_PAPI_LIBRARY_ID: ${{ vars.PATRON_REGISTRATION_PAPI_LIBRARY_ID }}
+          PATRON_REGISTRATION_PAPI_BRANCH_ID: ${{ vars.PATRON_REGISTRATION_PAPI_BRANCH_ID }}
+          PATRON_REGISTRATION_PAPI_PATRON_CODE_ID: ${{ vars.PATRON_REGISTRATION_PAPI_PATRON_CODE_ID }}
+          PATRON_REGISTRATION_PAPI_LOGON_USER_ID: ${{ vars.PATRON_REGISTRATION_PAPI_LOGON_USER_ID }}
+          PATRON_REGISTRATION_LIVE_COMMIT_SHA: ${{ needs.resolve_release.outputs.commit_sha }}
+          PATRON_REGISTRATION_LIVE_MANIFEST: ${{ runner.temp }}/patron-registration-live-result.json
+        run: ./test.sh --live-development
+
+      - name: Publish safe live result
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        continue-on-error: true
+        with:
+          name: patron-registration-live-result
+          path: ${{ runner.temp }}/patron-registration-live-result.json
+
+  release-validation-result:
+    name: Release validation result
+    if: ${{ always() }}
+    needs: [resolve_release, deterministic, live-development]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Require successful first-attempt release validation
+        shell: bash
+        env:
+          RELEASE_VALIDATION_PASSED: ${{ github.run_attempt == 1 && needs.resolve_release.result == 'success' && needs.deterministic.result == 'success' && needs.live-development.result == 'success' }}
+        run: |
+          set -euo pipefail
+          if [[ "$RELEASE_VALIDATION_PASSED" != "true" ]]; then
+            echo "Release validation requires a first-attempt run with successful release resolution, deterministic tests, and live DEVELOPMENT smoke validation."
+            exit 1
+          fi
+          echo "Release validation completed successfully on the first attempt."

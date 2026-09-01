@@ -6,6 +6,7 @@
         Error,
         Duplicate,
         ZipMismatch,
-        ZipMismatchRetry
+        ZipMismatchRetry,
+        Disabled
     }
 }

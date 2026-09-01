@@ -1,0 +1,14 @@
+name: Test
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  deterministic:
+    uses: ./.github/workflows/deterministic.yml
+    with:
+      commit_sha: ${{ github.sha }}

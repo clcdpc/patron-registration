@@ -1,0 +1,182 @@
+@model Clc.PatronRegistration.Web.Models.SettingsHelpViewModel
+@{
+    ViewData["Title"] = "Settings help";
+}
+@* Keep this workflow help up to date when staff-facing control labels or workflows change. *@
+
+<main class="settings-help">
+    <header class="settings-header settings-help-header">
+        <h1>Registration settings help</h1>
+        <p>This page explains how to select a context, understand setting states, make and save changes, and preview shared drafts.</p>
+        <nav class="settings-navigation" aria-label="Settings help navigation">
+            @if (Model.OrganizationId.HasValue)
+            {
+                <a asp-action="Index"
+                   asp-route-organizationId="@Model.OrganizationId"
+                   asp-route-formCode="@Model.FormCode">Settings</a>
+            }
+            else
+            {
+                <a asp-action="Index">Settings</a>
+            }
+            <a asp-action="Audit">Audit history</a>
+            <a asp-action="Forms">Form codes</a>
+            <a asp-action="Help" aria-current="page">Help</a>
+        </nav>
+    </header>
+
+    <nav class="settings-help-toc" aria-labelledby="help-contents-heading">
+        <h2 id="help-contents-heading">On this page</h2>
+        <ul>
+            <li><a href="#choose-context">Choose what you are editing</a></li>
+            <li><a href="#current-value">Understand the current value</a></li>
+            <li><a href="#find-setting">Find and open a setting</a></li>
+            <li><a href="#change-setting">Change a setting</a></li>
+            <li><a href="#save-now">Save a change immediately</a></li>
+            <li><a href="#shared-draft">Work with a shared draft</a></li>
+            <li><a href="#preview-draft">Preview draft changes</a></li>
+            <li><a href="#forms">Default and named forms</a></li>
+            <li><a href="#activity">Review past activity</a></li>
+            <li><a href="#common-tasks">Common tasks</a></li>
+        </ul>
+    </nav>
+
+    <section id="choose-context">
+        <h2>Choose what you are editing</h2>
+        <p>
+            The first selector chooses the system, library, or branch whose settings you are viewing. You see only
+            organizations you are allowed to manage. The second selector chooses the registration form.
+        </p>
+        <p><strong>Default form</strong> is the normal registration form. Named forms are separate versions for specific registration workflows. Changing either selection loads that settings context automatically and does not save anything.</p>
+        <p class="settings-help-note"><strong>Note:</strong> The selected organization and form are the target you are editing. They do not represent your own organization.</p>
+    </section>
+
+    <section id="current-value">
+        <h2>Understand the current value</h2>
+        <p>A branch can use a value from its library, and a library can use a system value, unless that level has its own customization. After you expand a setting, <strong>Comes from</strong> identifies where the displayed value was supplied.</p>
+        <table class="settings-help-status-table">
+            <caption>Setting statuses</caption>
+            <thead>
+                <tr>
+                    <th scope="col">Status</th>
+                    <th scope="col">Meaning</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <th scope="row">Live</th>
+                    <td>The currently effective persisted configuration. The expanded row also explains whether it is customized here, inherited, or not configured.</td>
+                </tr>
+                <tr>
+                    <th scope="row">Shared draft</th>
+                    <td>A persisted change visible to other authorized staff, but not live until the shared draft is published.</td>
+                </tr>
+                <tr>
+                    <th scope="row">Unsaved in this browser</th>
+                    <td>A value kept on this page but not yet saved live or added to the shared draft. It is not visible to other staff.</td>
+                </tr>
+            </tbody>
+        </table>
+    </section>
+
+    <section id="find-setting">
+        <h2>Find and open a setting</h2>
+        <p>Ordinary settings are organized into staff-facing categories by purpose. <strong>Field labels</strong> changes the wording shown beside supported registration fields, while <strong>Required fields</strong> controls the fields whose required behavior is currently configurable. Validation-message settings are planned but are not currently shown.</p>
+        <p>The number beside a category or group is the number of settings it contains, and each section can be expanded or collapsed. <strong>Search settings</strong> searches setting names and descriptions across the visible catalog.</p>
+        <p>Select a setting row to expand its description, current value, source, and editing controls. A collapsed row shows its name, current value, and status. <strong>Technical details</strong> can normally be ignored unless support staff request the setting key.</p>
+    </section>
+
+    <section id="change-setting">
+        <h2>Change a setting</h2>
+        <ol>
+            <li>Expand the setting.</li>
+            <li>Select <strong>Change</strong>.</li>
+            <li>Choose the appropriate action.</li>
+            <li>Enter or select the new value.</li>
+            <li>Select <strong>Keep change</strong>. This closes the editor and marks the row <strong>Unsaved in this browser</strong>; it does not send a request.</li>
+            <li>Save immediately or add the change to the shared draft.</li>
+        </ol>
+        <h3>Set a value here</h3>
+        <p>Creates or replaces the value specifically for the selected organization and form.</p>
+        <h3>Use inherited value</h3>
+        <p>Removes the customization at the selected organization and form, so the setting again uses the applicable library or system value. It does not delete the value at the library or system level.</p>
+        <p>Depending on the setting, you may use Yes/No selections, numbers, dates, URLs, email addresses, or longer text boxes. The page validates values before saving.</p>
+    </section>
+
+    <section id="save-now">
+        <h2>Save a change immediately</h2>
+        <p><strong>Save N changes live</strong> (or <strong>Save N changes live instead</strong> when a shared draft exists) opens a review before applying only the <strong>Unsaved in this browser</strong> changes to live registration settings. It does not publish or modify the shared draft.</p>
+        <p><strong>Discard unsaved changes</strong> restores the page to its saved state without changing live settings or anything already stored in the shared draft.</p>
+    </section>
+
+    <section id="shared-draft">
+        <h2>Work with a shared draft</h2>
+        <p>A shared draft begins when the first changes marked <strong>Unsaved in this browser</strong> are saved with <strong>Save N changes to shared draft</strong>. Once it exists, <strong>Add N changes to shared draft</strong> stores further changes marked <strong>Unsaved in this browser</strong> without making them live. Shared draft changes are visible to other authorized staff.</p>
+        <p>Use <strong>Review N shared draft changes</strong> or <strong>Show shared draft changes only</strong> to find stored changes. <strong>Show customized settings only</strong> means the selected organization/form owns a live override right now; it does not include inherited settings or changes marked <strong>Unsaved in this browser</strong>. The filters compose with search and with each other.</p>
+        <p>An active draft can be reviewed, previewed, published, or discarded. <strong>Remove shared draft change</strong> removes one stored change. <strong>Publish draft</strong> makes all remaining shared-draft changes live. <strong>Discard shared draft</strong> removes the entire draft without publishing it. Saving changes marked <strong>Unsaved in this browser</strong> live does not create a draft.</p>
+        <p class="settings-help-note"><strong>Remember:</strong> Discarding changes made in this browser does not alter the shared draft. Review every shared draft change before publishing because another authorized staff member may have contributed to it.</p>
+    </section>
+
+    <section id="preview-draft">
+        <h2>Preview draft changes</h2>
+        <p>Preview links are available only while a shared draft is active. <strong>Preview as branch</strong> determines the branch context. <strong>Safe preview</strong> blocks submissions and cannot create patron records. Share preview links only with staff who need them.</p>
+        <aside class="settings-help-warning" aria-labelledby="live-preview-warning">
+            <h3 id="live-preview-warning">Warning: live-submission preview</h3>
+            <p><strong>Live-submission preview</strong> can create real patron records. Treat it like the live registration form.</p>
+        </aside>
+        <p><strong>Revoke link</strong> disables an existing preview URL. Replacing safe/live mode revokes the old URL and creates a new one. Publishing or discarding the draft makes its preview links unusable.</p>
+    </section>
+
+    <section id="forms">
+        <h2>Default and named forms</h2>
+        <p>The default form always exists. Named forms let a library or the system maintain separate settings for a special registration workflow. The <a asp-action="Forms">Form codes page</a> is used to view and manage named forms; display names and descriptions help staff recognize their purpose. Deleting a named form is a separate administrative action and should be reviewed carefully. Staff who do not use named forms can continue using <strong>Default form</strong>.</p>
+    </section>
+
+    <section id="activity">
+        <h2>Review past activity</h2>
+        <p>
+            <a asp-action="Audit">Audit history</a> records settings-administration activity. Use it to see who
+            performed an action, the organization and form affected, whether it succeeded, and when it occurred.
+            The search box can find a staff member's name, form code, setting key, or wording from the recorded
+            event. Some restricted details may be visible only to global administrators.
+        </p>
+    </section>
+
+    <section id="common-tasks">
+        <h2>Common tasks</h2>
+        <h3>Change one setting for a branch</h3>
+        <ol>
+            <li>Select the branch and form.</li>
+            <li>Find and expand the setting.</li>
+            <li>Select <strong>Change</strong>.</li>
+            <li>Choose <strong>Set a value here</strong>.</li>
+            <li>Enter the value.</li>
+            <li>Use <strong>Save N changes live</strong>, or <strong>Add N changes to shared draft</strong>.</li>
+        </ol>
+        <h3>Return a branch setting to the library value</h3>
+        <ol>
+            <li>Select the branch and form.</li>
+            <li>Expand the customized setting.</li>
+            <li>Select <strong>Change</strong>.</li>
+            <li>Choose <strong>Use inherited value</strong>.</li>
+            <li>Save immediately or add the change to the draft.</li>
+        </ol>
+        <h3>Test several changes before publishing</h3>
+        <ol>
+            <li>Select the organization and form.</li>
+            <li>Make changes and keep them marked <strong>Unsaved in this browser</strong>, then use <strong>Save N changes to shared draft</strong>.</li>
+            <li>Create a safe preview link.</li>
+            <li>Review the registration form.</li>
+            <li>Publish the draft when ready, or discard it.</li>
+        </ol>
+        <h3>Check who changed a setting</h3>
+        <ol>
+            <li>Open <strong>Audit history</strong>.</li>
+            <li>
+                Search by the staff member's name, form code, setting key shown under
+                <strong>Technical details</strong>, or wording from the recorded event.
+            </li>
+            <li>Review the matching activity.</li>
+        </ol>
+    </section>
+</main>

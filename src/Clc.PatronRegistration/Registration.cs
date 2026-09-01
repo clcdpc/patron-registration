@@ -1,6 +1,7 @@
 ﻿using Microsoft.AspNetCore.Mvc.Rendering;
 using Microsoft.AspNetCore.Mvc;
 using Clc.PatronRegistration.Configuration;
+using Clc.PatronRegistration.Administration;
 using Clc.Melissa.Models;
 using Clc.Rest;
 using Newtonsoft.Json;
@@ -13,6 +14,7 @@ using Clc.PatronRegistration.Data;
 using Clc.PatronRegistration.Web.Models;
 using NLog;
 using Microsoft.AspNetCore.Mvc.ModelBinding;
+using Microsoft.AspNetCore.Mvc.ModelBinding.Validation;
 using Clc.PatronRegistration.Validators;
 using Clc.Rest.Models;
 using System.Text.RegularExpressions;
@@ -25,6 +27,8 @@ namespace Clc.PatronRegistration
     [ModelMetadataType(typeof(RegistrationMetadata))]
     public partial class Registration
     {
+        public const string RegistrationUnavailableMessage = "Registration is currently unavailable. Please try again later or contact the library.";
+
         [JsonIgnore]
         private static readonly ILogger logger = LogManager.GetCurrentClassLogger();
 
@@ -48,10 +52,11 @@ namespace Clc.PatronRegistration
         public string? StreetTwo { get; set; } = string.Empty;
         public string City { get; set; } = string.Empty;
         public string State { get; set; } = string.Empty;
-        public string User1 { get; set; } = string.Empty;
+        public string County { get; set; } = string.Empty;
+        public string? User1 { get; set; } = string.Empty;
         public string User2 { get; set; } = string.Empty;
         public string User4 { get; set; } = string.Empty;
-        public string User5 { get; set; } = string.Empty;
+        public string? User5 { get; set; } = string.Empty;
         public string PostalCode { get; set; } = string.Empty;
         public string Password { get; set; } = string.Empty;
         public string Password2 { get; set; } = string.Empty;
@@ -81,7 +86,13 @@ namespace Clc.PatronRegistration
         public bool AddToMailingList { get; set; }
         public bool ShowDlButton { get; set; }
         [JsonIgnore]
+        [ValidateNever]
         public ISettingProvider Settings { get; protected set; }
+
+        public void UseSettings(ISettingProvider settings)
+        {
+            Settings = settings;
+        }
 
         public bool BypassAgreement { get; set; } = false;
         public bool ShouldDisplayAgreement => !string.IsNullOrWhiteSpace(Settings?.WarningText) && !BypassAgreement;
@@ -106,7 +117,7 @@ namespace Clc.PatronRegistration
 
         public void SetPatronCode()
         {
-            PatronCode = Settings.PatronCodeId;
+            PatronCode = PositiveOptionalIdentifier("patron_code_id", Settings.PatronCodeId);
         }
 
         public void HandleSmsSettings()
@@ -149,19 +160,71 @@ namespace Clc.PatronRegistration
         public RegistrationAttempt CreateRegistration(string ip, ModelStateDictionary modelState, ISettingProvider settings, IDbHelper db, IPapiClient papi, IMelissaRestClient melissa, IEmailSender emailSender)
         {
             Settings = settings;
+
+            // These checks must remain before model validation and every operation that can
+            // contact Polaris, Melissa, Postmark, or persist registration history.
+            if (IsRegistrationDisabled)
+            {
+                return new RegistrationAttempt
+                {
+                    Status = RegistrationStatus.Disabled,
+                    Message = RegistrationUnavailableMessage
+                };
+            }
+
+            // a_password is the legacy honeypot field. Preserve its silent, side-effect-free
+            // suppression separately from the administrative unavailable response.
+            if (HasHoneypotValue)
+            {
+                return new RegistrationAttempt { Status = RegistrationStatus.Error };
+            }
+
+            if (!modelState.IsValid)
+            {
+                ModelErrors = RegistrationAttempt.ErrorsFromModelState(modelState);
+                return new RegistrationAttempt
+                {
+                    Status = RegistrationStatus.Error,
+                    Message = "Please correct the validation errors and try again.",
+                    Errors = ModelErrors
+                };
+            }
+
+            if (IsFutureBirthdate(Birthdate))
+            {
+                modelState.AddModelError(nameof(Birthdate), "Please enter a valid birth date.");
+                ModelErrors = RegistrationAttempt.ErrorsFromModelState(modelState);
+                return new RegistrationAttempt
+                {
+                    Status = RegistrationStatus.Error,
+                    Message = "Please correct the validation errors and try again.",
+                    Errors = ModelErrors
+                };
+            }
+
+            var ageBlockResult = AgeBlockPolicy.Evaluate(settings, Birthdate);
+            if (ageBlockResult.IsBlocked)
+            {
+                return new RegistrationAttempt
+                {
+                    Status = RegistrationStatus.Error,
+                    Message = ageBlockResult.Message
+                };
+            }
+
             HandleSmsSettings(); // might need to go back above ValidateRegistration
 
             ApplyForceEcardSetting(ip);
 
             if (!ValidateRegistration(db, papi))
             {
-                AddHistoryEntry(ip);
+                AddHistoryEntry(db, ip);
                 return new RegistrationAttempt { Status = RegistrationStatus.Error, Errors = ModelErrors };
             }
 
             FormatRegistration();
-            VerifyAndFixAddress(melissa);
             SetPatronCode();
+            VerifyAndFixAddress(melissa);
             HandleLibrarySettings();
             HandleMailingList();
             HandleEReceipts();
@@ -171,32 +234,51 @@ namespace Clc.PatronRegistration
             HandleSchoolInfo();
             SetLogonUserID();
 
+            if (!ValidateRequiredOperationalIdentifiers())
+            {
+                return new RegistrationAttempt
+                {
+                    Status = RegistrationStatus.Error,
+                    Message = "Registration is temporarily unavailable because required configuration is invalid.",
+                    Errors = ModelErrors
+                };
+            }
+
             if (!ValidateRegistration(db, papi))
             {
-                AddHistoryEntry(ip);
+                AddHistoryEntry(db, ip);
                 return new RegistrationAttempt { Status = RegistrationStatus.Error, Errors = ModelErrors };
             }
 
-            logger.Trace(this.ToJson());
+            logger.Trace("Submitting validated patron registration for branch {0}.", PatronBranchID);
             var registrationParams = ConvertToPatronRegistrationParams();
-            HandleExpirationDate(registrationParams);
+            if (!HandleExpirationDate(registrationParams))
+            {
+                return new RegistrationAttempt
+                {
+                    Status = RegistrationStatus.Error,
+                    Message = "Registration is temporarily unavailable because expiration configuration is invalid.",
+                    Errors = ModelErrors
+                };
+            }
 
             var papiResponse = papi.PatronRegistrationCreate(registrationParams);
-            logger.Trace(papiResponse.Data.ToJson());
+            logger.Trace("Patron registration create returned PAPI error code {0}.",
+                papiResponse?.Data?.PAPIErrorCode);
 
             if (!BypassPapiDupeCheck(registrationParams, papiResponse, papi, out papiResponse))
             {
-                AddHistoryEntry(ip, papiResponse, "duplicate that cannot be bypassed");
+                AddHistoryEntry(db, ip, papiResponse, "duplicate that cannot be bypassed");
                 return new RegistrationAttempt { Status = RegistrationStatus.Duplicate, Message = DuplicateMessage(papi) };
             }
 
             if ((papiResponse?.Data?.PatronID).GetValueOrDefault(0) <= 0)
             {
-                AddHistoryEntry(ip, papiResponse, $"{papiResponse.Data?.PAPIErrorCode} - {papiResponse.Data?.ErrorMessage}");
+                AddHistoryEntry(db, ip, papiResponse, $"{papiResponse.Data?.PAPIErrorCode} - {papiResponse.Data?.ErrorMessage}");
                 return HandlePapiRegistrationCreateError(papiResponse);
             }
 
-            AddHistoryEntry(ip, papiResponse);
+            AddHistoryEntry(db, ip, papiResponse);
             return FinalizeRegistration(ip, papiResponse, db, papi, emailSender);
         }
 
@@ -207,6 +289,12 @@ namespace Clc.PatronRegistration
             if (!Birthdate.HasValue)
             {
                 ModelErrors.Add(new("", "Please enter a valid birth date."));
+            }
+
+            if (IsFutureBirthdate(Birthdate))
+            {
+                ModelErrors.Add(new(nameof(Birthdate), "Please enter a valid birth date."));
+                return false;
             }
 
             var dupeCheckResult = DupeCheck(db, papi);
@@ -261,6 +349,9 @@ namespace Clc.PatronRegistration
             return ModelErrors.Count == 0;
         }
 
+        private static bool IsFutureBirthdate(DateTime? birthdate) =>
+            birthdate.HasValue && DateOnly.FromDateTime(birthdate.Value) > DateOnly.FromDateTime(DateTime.Today);
+
         public void HandleLibrarySettings()
         {
             if (LibraryId == 6)
@@ -300,10 +391,10 @@ namespace Clc.PatronRegistration
 
         public void HandleECardSettings()
         {
-            if (Settings.DisplayECardCheckbox && IsECard)
+            if (IsECard)
             {
                 Barcode = $"{Settings.EcardBarcodePrefix}{DateTimeOffset.Now.ToUnixTimeSeconds()}";
-                PatronCode = Settings.EcardPatronCodeId;
+                PatronCode = PositivePatronCodeOrCurrent(Settings.EcardPatronCodeId, "ecard_patron_code_id");
             }
         }
 
@@ -318,15 +409,22 @@ namespace Clc.PatronRegistration
             {
                 if (IsTeacher)
                 {
-                    PatronCode = Settings.TeacherPatronCodeId;
+                    PatronCode = PositivePatronCodeOrCurrent(Settings.TeacherPatronCodeId, "teacher_patron_code_id");
                 }
                 if (IsStudent)
                 {
-                    PatronCode = Settings.StudentPatronCodeId;
+                    PatronCode = PositivePatronCodeOrCurrent(Settings.StudentPatronCodeId, "student_patron_code_id");
                 }
             }
         }
-        public bool ShouldSkipRegistration() => !string.IsNullOrWhiteSpace(a_password) || Settings.DisableBranch;
+        public bool HasHoneypotValue => !string.IsNullOrWhiteSpace(a_password);
+
+        public bool IsRegistrationDisabled => Settings.DisableBranch;
+
+        // Retain the legacy combined predicate for callers that still use it. The workflow
+        // deliberately uses the named predicates above so honeypot suppression and an
+        // administrative unavailable response cannot be confused with one another.
+        public bool ShouldSkipRegistration() => HasHoneypotValue || IsRegistrationDisabled;
 
         public void SetLogonUserID()
         {
@@ -336,21 +434,81 @@ namespace Clc.PatronRegistration
             }
             else
             {
-                LogonUserID = Settings.RegistrationLogonUserId;
+                var configuredId = Settings.RegistrationLogonUserId;
+                LogonUserID = configuredId > 0 ? configuredId : 0;
             }
         }
 
-        public void HandleExpirationDate(PatronRegistrationParams registrationParams)
+        private bool ValidateRequiredOperationalIdentifiers()
+        {
+            if (AddressVerificationStatus is AddressVerificationStatus.Valid or AddressVerificationStatus.ValidPlusNameMatch)
+            {
+                return true;
+            }
+            var result = IdentifierState("registration_logon_user_id", Settings.RegistrationLogonUserId);
+            if (result.IsPositive)
+            {
+                return true;
+            }
+            logger.Error($"Invalid registration setting registration_logon_user_id ({result.State}).");
+            ModelErrors.Add(new("", "Registration configuration is incomplete. Please contact the library."));
+            return false;
+        }
+
+        private int? PositivePatronCodeOrCurrent(int configuredId, string settingKey)
+        {
+            return PositiveOptionalIdentifier(settingKey, configuredId) ?? PatronCode;
+        }
+
+        private IdentifierSettingResult IdentifierState(string settingKey, int? fallbackValue) =>
+            Settings is IIdentifierSettingStateProvider stateProvider
+                ? stateProvider.GetIdentifierState(settingKey)
+                : IdentifierSettingParser.Parse(fallbackValue?.ToString(System.Globalization.CultureInfo.InvariantCulture));
+
+        private int? PositiveOptionalIdentifier(string settingKey, int? fallbackValue)
+        {
+            var result = IdentifierState(settingKey, fallbackValue);
+            if (result.IsInvalid)
+            {
+                logger.Error($"Skipping invalid registration setting {settingKey} ({result.State}).");
+            }
+            return result.IsPositive ? result.Value : null;
+        }
+
+        public bool HandleExpirationDate(PatronRegistrationParams registrationParams)
         {
             if (Settings.ExpirationDate.HasValue)
             {
                 registrationParams.ExpirationDate = Settings.ExpirationDate.Value;
             }
 
-            if (Settings.ExpirationDateYears.HasValue)
+            var expirationYears = Settings is IExpirationDateYearsSettingStateProvider stateProvider
+                ? stateProvider.GetExpirationDateYearsState()
+                : Settings.ExpirationDateYears.HasValue
+                    ? ExpirationDateYearsSettingParser.Parse(Settings.ExpirationDateYears.Value.ToString(CultureInfo.InvariantCulture))
+                    : new ExpirationDateYearsSettingResult(BoundedIntegerSettingState.Unconfigured, null);
+
+            if (expirationYears.State == BoundedIntegerSettingState.Invalid)
             {
-                registrationParams.ExpirationDate = DateTime.Now.AddYears(Settings.ExpirationDateYears.Value);
+                logger.Error("Registration expiration_date_years is outside the supported range.");
+                ModelErrors.Add(new("", "Registration expiration configuration is invalid."));
+                return false;
             }
+
+            if (expirationYears.State == BoundedIntegerSettingState.Valid)
+            {
+                var years = expirationYears.Value!.Value;
+                var now = DateTime.Now;
+                if (years < 0 || years > SettingDefinition.MaximumExpirationDateYears ||
+                    now.Year > DateTime.MaxValue.Year - years)
+                {
+                    logger.Error("Registration expiration_date_years is outside the supported range.");
+                    ModelErrors.Add(new("", "Registration expiration configuration is invalid."));
+                    return false;
+                }
+                registrationParams.ExpirationDate = now.AddYears(years);
+            }
+            return true;
         }
         public void NormalizeToUppercase()
         {
@@ -371,7 +529,8 @@ namespace Clc.PatronRegistration
         public Registration VerifyAndFixAddress(IMelissaRestClient melissa)
         {
             var status = AddressVerificationStatus.None;
-            var response = melissa.PersonatorRequest(new PersonatorRequestRecord
+
+            var request = new PersonatorRequest(new PersonatorRequestRecord
             {
                 FirstName = NameFirst,
                 LastName = NameLast,
@@ -380,7 +539,10 @@ namespace Clc.PatronRegistration
                 City = City,
                 State = State,
                 PostalCode = PostalCode
-            });
+            })
+            { Columns = "GrpCensus" };
+
+            var response = melissa.PersonatorRequest(request);
 
             MelissaResponse = response;
 
@@ -414,10 +576,19 @@ namespace Clc.PatronRegistration
                     City = textInfo.ToTitleCase(record.City);
                     State = record.State.Length == 2 ? record.State.ToUpper() : textInfo.ToTitleCase(record.State);
                     PostalCode = record.PostalCode.Split('-')[0];
+                    County = record.CountyName;
                 }
             }
 
-            if (PatronCode == null)
+            ApplyAddressVerificationPatronCode(status);
+
+            return this;
+        }
+
+        public Registration ApplyAddressVerificationPatronCode(AddressVerificationStatus status)
+        {
+            var defaultPatronCode = PositiveOptionalIdentifier("patron_code_id", Settings.PatronCodeId);
+            if (PatronCode == null || PatronCode == defaultPatronCode)
             {
                 switch (status)
                 {
@@ -441,13 +612,21 @@ namespace Clc.PatronRegistration
 
         public Registration HandleValidAddressPreReg()
         {
-            if (Settings.ValidAddressPatronCodeId > 0) { PatronCode = Settings.ValidAddressPatronCodeId; }
+            var configuredCode = PositiveOptionalIdentifier("valid_address_patron_code_id", Settings.ValidAddressPatronCodeId);
+            if (configuredCode.HasValue)
+            {
+                PatronCode = configuredCode;
+            }
             return this;
         }
 
         public Registration HandleValidAddressPlusNamePreReg()
         {
-            if (Settings.ValidAddressPlusNamePatronCodeId > 0) { PatronCode = Settings.ValidAddressPlusNamePatronCodeId; }
+            var configuredCode = PositiveOptionalIdentifier("valid_address_plus_name_patron_code_id", Settings.ValidAddressPlusNamePatronCodeId);
+            if (configuredCode.HasValue)
+            {
+                PatronCode = configuredCode;
+            }
             return this;
         }
 
@@ -486,7 +665,7 @@ namespace Clc.PatronRegistration
 
                     if (_papiResponse.Data?.PAPIErrorCode == -3528)
                     {
-                        logger.Info($"Patron {NameFirst} {NameLast} is a duplicate that cannot be bypassed");
+                        logger.Info("A duplicate patron registration could not be bypassed.");
 
                         return false;
                     }
@@ -506,7 +685,8 @@ namespace Clc.PatronRegistration
                 ZipMismatchRetry = true;
                 return new RegistrationAttempt { Status = RegistrationStatus.ZipMismatchRetry };
             }
-            logger.Error($"Error message: {papiResponse?.Data?.ErrorMessage}\r\nRegistration Data: {JsonConvert.SerializeObject(papiResponse)}");
+            logger.Error("Patron registration create returned PAPI error code {0}.",
+                papiResponse?.Data?.PAPIErrorCode);
 
             return new RegistrationAttempt { Status = RegistrationStatus.Error, Message = $"An error occurred during your registration. If this problem persists, please contact the library.\r\n\r\nError Code: {papiResponse?.Data?.PAPIErrorCode}\r\nError Message:{papiResponse?.Data?.ErrorMessage}" };
         }
@@ -525,7 +705,7 @@ namespace Clc.PatronRegistration
             return new RegistrationAttempt { Status = RegistrationStatus.Success, Message = GetRegistrationSuccessText(ip) };
         }
 
-        public void AddHistoryEntry(string ip, IRestResponse<PatronRegistrationCreateResult> papiResponse = null!, string status = "")
+        public void AddHistoryEntry(IDbHelper db, string ip, IRestResponse<PatronRegistrationCreateResult> papiResponse = null!, string status = "")
         {
             if (string.IsNullOrWhiteSpace(status))
             {
@@ -537,7 +717,7 @@ namespace Clc.PatronRegistration
             }
 
             var settingsSnapshot = "";
-            try { settingsSnapshot = Settings.ToJson(); }
+            try { settingsSnapshot = SettingsSnapshotSerializer.Serialize(Settings); }
             catch (JsonSerializationException) { settingsSnapshot = ""; }
 
             var papiResponseJson = "";
@@ -546,7 +726,7 @@ namespace Clc.PatronRegistration
 
 
             var entry = new RegistrationHistoryEntry(ip, status, this) { Result = status, SettingsSnapshot = settingsSnapshot, PapiResponse = papiResponseJson };
-            DbHelper.Global.AddRegistrationHistoryEntry(entry);
+            db.AddRegistrationHistoryEntry(entry);
         }
         string GetRegistrationSuccessText(string ip)
         {
@@ -567,25 +747,44 @@ namespace Clc.PatronRegistration
 
             registrationText = this.FormatTemplate(registrationText);
 
-            return registrationText;
+            return SafeHtmlPolicy.Sanitize(registrationText);
         }
         public bool ShouldAutoReset(string ip) => Settings.ResetForm && CheckIp(ip, Settings.DriversLicenseButtonEnabledIpAddresses);
 
         public static bool CheckIp(string ipToCheck, IEnumerable<string> whitelist)
         {
-            whitelist = whitelist.Concat(["127", "::1"]);
-            return whitelist.Any(i => ipToCheck.StartsWith(i));
+            var prefixes = (whitelist ?? [])
+                .Where(prefix => !string.IsNullOrWhiteSpace(prefix))
+                .Select(prefix => prefix.Trim())
+                .Concat(["127", "::1"]);
+            return prefixes.Any(prefix => ipToCheck.StartsWith(prefix, StringComparison.Ordinal));
         }
 
         public void HandleAddToMailingList(IPapiClient papi, int patronId)
         {
-            if (AddToMailingList && Settings.MailingListRecordSetId > 0)
+            var recordSetId = PositiveOptionalIdentifier("mailing_list_record_set_id", Settings.MailingListRecordSetId);
+            if (AddToMailingList && patronId > 0 && recordSetId.HasValue)
             {
-                papi.RecordSetContentAdd(Settings.MailingListRecordSetId, patronId);
+                papi.RecordSetContentAdd(recordSetId.Value, patronId);
+            }
+            else if (AddToMailingList && patronId <= 0)
+            {
+                logger.Error("Skipping mailing-list record-set update because a required identifier is invalid.");
             }
         }
 
-        public void AddToRecordSet(IPapiClient papi, int patronId) { if (Settings.AddToRecordSetId.HasValue) { papi.RecordSetContentAdd(Settings.AddToRecordSetId.Value, patronId); } }
+        public void AddToRecordSet(IPapiClient papi, int patronId)
+        {
+            var recordSetId = PositiveOptionalIdentifier("add_to_record_set_id", Settings.AddToRecordSetId);
+            if (patronId > 0 && recordSetId.HasValue)
+            {
+                papi.RecordSetContentAdd(recordSetId.Value, patronId);
+            }
+            else if (patronId <= 0)
+            {
+                logger.Error("Skipping configured record-set update because a required identifier is invalid.");
+            }
+        }
 
         public void AddPostRegistrationNote(IPapiClient papi)
         {
@@ -612,7 +811,7 @@ namespace Clc.PatronRegistration
             if (string.IsNullOrWhiteSpace(EmailAddress) || (string.IsNullOrWhiteSpace(textTemplate) && string.IsNullOrWhiteSpace(htmlTemplate))) return;
 
             var textBody = this.FormatTemplate(textTemplate);
-            var htmlBody = this.FormatTemplate(htmlTemplate);
+            var htmlBody = SafeHtmlPolicy.Sanitize(this.FormatTemplate(htmlTemplate));
             _ = Task.Run(() => { emailSender.Send(EmailAddress, $@"""{Settings.WelcomeEmailFromName}"" {Settings.WelcomeEmailFromAddress}", Settings.WelcomeEmailFromAddress, subject, htmlBody, textBody); });
         }
 
@@ -621,13 +820,16 @@ namespace Clc.PatronRegistration
             switch (AddressVerificationStatus)
             {
                 case AddressVerificationStatus.Valid:
-                    AddPatronToRecordSet(patronId, Settings.ValidAddressRecordSetId, papi);
+                    AddPatronToRecordSet(patronId,
+                        PositiveOptionalIdentifier("valid_address_record_set_id", Settings.ValidAddressRecordSetId).GetValueOrDefault(), papi);
                     break;
                 case AddressVerificationStatus.ValidPlusNameMatch:
-                    AddPatronToRecordSet(patronId, Settings.ValidAddressPlusNameRecordSetId, papi);
+                    AddPatronToRecordSet(patronId,
+                        PositiveOptionalIdentifier("valid_address_plus_name_record_set_id", Settings.ValidAddressPlusNameRecordSetId).GetValueOrDefault(), papi);
                     break;
                 case AddressVerificationStatus.Invalid:
-                    AddPatronToRecordSet(patronId, Settings.InvalidAddressRecordSetId, papi);
+                    AddPatronToRecordSet(patronId,
+                        PositiveOptionalIdentifier("invalid_address_record_set_id", Settings.InvalidAddressRecordSetId).GetValueOrDefault(), papi);
                     break;
                 case AddressVerificationStatus.None:
                     break;
@@ -635,12 +837,20 @@ namespace Clc.PatronRegistration
         }
         public void AddPatronToRecordSet(int patronId, int recordSetId, IPapiClient papi)
         {
-            if (patronId == 0 || recordSetId == 0) return;
+            if (patronId <= 0 || recordSetId <= 0)
+            {
+                if (patronId < 0 || recordSetId < 0)
+                {
+                    logger.Error("Skipping address-validation record-set update because a required identifier is invalid.");
+                }
+                return;
+            }
 
             var response = papi.RecordSetContentAdd(recordSetId, patronId);
             if (response.Data.PAPIErrorCode < 0)
             {
-                logger.Error($"Error adding patron {patronId} to record set {recordSetId}: {response.Data.PAPIErrorCode} - {response.Data.ErrorMessage}");
+                logger.Error("A post-registration record-set update returned PAPI error code {0}.",
+                    response.Data.PAPIErrorCode);
             }
         }
 
@@ -653,49 +863,106 @@ namespace Clc.PatronRegistration
             message = message.Replace("[branch_phone]", string.IsNullOrWhiteSpace(branchPhone) ? "" : $"at {branchPhone}")
                 .Replace("[branch_id]", PatronBranchID.ToString());
 
-            return message;
+            return SafeHtmlPolicy.Sanitize(message);
         }
 
-        public static Registration BuildBaseRegistration(int orgId, bool forceDl, string ip, ISettingProvider settings, IDbHelper db)
+        public static Registration BuildBaseRegistration(
+            int orgId,
+            bool forceDl,
+            string ip,
+            ISettingProvider settings,
+            IDbHelper db,
+            int? effectiveBranchId = null,
+            IEnumerable<OrganizationsGetRow>? branches = null,
+            Registration? submittedRegistration = null,
+            bool defaultAddToMailingList = true)
         {
-            var p = new Registration(settings)
+            var isNewRegistration = submittedRegistration is null;
+            var p = submittedRegistration ?? new Registration(settings);
+            p.UseSettings(settings);
+            if (isNewRegistration)
             {
-                State = "OH",
-                Genders = db.GetGendersToOrganizations(orgId).Select(g => new SelectListItem { Value = g.GenderID.ToString(), Text = g.Description }).ToList(),
-                ShowDlButton = forceDl || settings.EnableDriversLicenseSwipe && CheckIp(ip, settings.DriversLicenseButtonEnabledIpAddresses),
-                IsECard = settings.ForceEcardRemotely && !CheckIp(ip, settings.DriversLicenseButtonEnabledIpAddresses)
-            };
+                p.State = "OH";
+            }
 
-            if (settings.DisplayMailingListCheckbox) { p.AddToMailingList = true; }
-
-            var org = CacheHelper.OrganizationCache.Single(o => o.OrganizationID == orgId);
-
-            if (settings.EnablePatronBranchSelectOption)
+            var genderOrganizationId = effectiveBranchId ?? orgId;
+            p.Genders = db.GetGendersToOrganizations(genderOrganizationId)
+                .Select(g => new SelectListItem { Value = g.GenderID.ToString(), Text = g.Description })
+                .ToList();
+            p.ShowDlButton = forceDl || settings.EnableDriversLicenseSwipe && CheckIp(ip, settings.DriversLicenseButtonEnabledIpAddresses);
+            if (settings.ForceEcardRemotely)
             {
-                p.PatronBranchID = 0;
+                p.IsECard = !CheckIp(ip, settings.DriversLicenseButtonEnabledIpAddresses);
+            }
+            else if (isNewRegistration || !settings.DisplayECardCheckbox)
+            {
+                p.IsECard = false;
+            }
+
+            if (!settings.DisplayMailingListCheckbox)
+            {
+                p.AddToMailingList = false;
+            }
+            else if (defaultAddToMailingList)
+            {
+                p.AddToMailingList = true;
+            }
+
+            if (effectiveBranchId is int selectedBranchId)
+            {
+                p.PatronBranchID = selectedBranchId;
+                if (isNewRegistration && !settings.EnablePatronBranchSelectOption)
+                {
+                    p.RequestPickupBranchID = selectedBranchId;
+                }
             }
             else
             {
-                p.PatronBranchID = org.OrganizationCodeID == 3 ? org.OrganizationID : (db.GetSelfRegistrationBranches(org.OrganizationID).MinBy(b => b.OrganizationID)?.OrganizationID).GetValueOrDefault();
-                p.RequestPickupBranchID = p.PatronBranchID;
+                var org = CacheHelper.OrganizationCache.Single(o => o.OrganizationID == orgId);
+
+                if (settings.EnablePatronBranchSelectOption)
+                {
+                    p.PatronBranchID = 0;
+                }
+                else
+                {
+                    p.PatronBranchID = org.OrganizationCodeID == 3
+                        ? org.OrganizationID
+                        : (db.GetSelfRegistrationBranches(org.OrganizationID).MinBy(b => b.OrganizationID)?.OrganizationID).GetValueOrDefault();
+                    p.RequestPickupBranchID = p.PatronBranchID;
+                }
             }
 
-            p.LibraryId = org.OrganizationCodeID == 3 ? org.ParentOrganizationID.GetValueOrDefault(p.PatronBranchID) : org.OrganizationID;
+            p.LibraryId = settings.LibraryId;
 
-            p.Branches = new SelectList(db.GetSelfRegistrationBranches(p.LibraryId), "OrganizationID", "DisplayName");
-            p.PickupBranches = new SelectList(db.GetPickupBranches(p.LibraryId), "OrganizationID", "DisplayName");
+            p.Branches = new SelectList(
+                branches ?? db.GetSelfRegistrationBranches(p.LibraryId),
+                "OrganizationID",
+                "DisplayName",
+                p.PatronBranchID);
+            p.PickupBranches = settings.DisplayPreferredPickupLocation
+                ? new SelectList(db.GetPickupBranches(p.LibraryId), "OrganizationID", "DisplayName")
+                : new SelectList(Array.Empty<string>());
 
             return p;
         }
 
         public void ApplyForceEcardSetting(string ip)
         {
-            if (!Settings.ForceEcardRemotely)
+            if (Settings.ForceEcardRemotely)
             {
+                IsECard = !CheckIp(ip, Settings.DriversLicenseButtonEnabledIpAddresses);
                 return;
             }
 
-            IsECard = !CheckIp(ip, Settings.DriversLicenseButtonEnabledIpAddresses);
+            // The checkbox is a presentation affordance, not the authorization
+            // boundary for e-card registrations. A forged POST must not enable
+            // e-card-specific behavior when the effective form configuration
+            // does not expose that choice.
+            if (!Settings.DisplayECardCheckbox)
+            {
+                IsECard = false;
+            }
         }
     }
 }

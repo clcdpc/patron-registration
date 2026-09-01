@@ -1,6 +1,9 @@
 ﻿using Clc.PatronRegistration;
 using Clc.PatronRegistration.Helpers;
+using Clc.PatronRegistration.Security;
 using Clc.Polaris.Api.Models;
+using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.Extensions;
@@ -17,8 +20,11 @@ using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Encodings.Web;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 
@@ -154,13 +160,46 @@ namespace Clc.PatronRegistration
             return settings == null ? JsonConvert.SerializeObject(obj) : JsonConvert.SerializeObject(obj, settings);
         }
 
-        public static string ToJavascriptString(this string s) => JsonConvert.SerializeObject(s);
+        private static readonly JsonSerializerOptions javascriptStringOptions = new()
+        {
+            Encoder = JavaScriptEncoder.Default
+        };
+
+        public static string ToJavascriptString(this string s) =>
+            System.Text.Json.JsonSerializer.Serialize(s ?? string.Empty, javascriptStringOptions);
 
 
-        public static OrganizationsGetRow GetLibrary(this List<OrganizationsGetRow> orgs, int orgId)
+        public static OrganizationsGetRow GetLibrary(this IEnumerable<OrganizationsGetRow> orgs, int orgId)
         {
             var org = orgs.Single(o => o.OrganizationID == orgId);
             return org.OrganizationCodeID == 1 ? orgs.Single(o => o.OrganizationCodeID == 1) : org.OrganizationCodeID == 2 ? org : orgs.Single(o => o.OrganizationID == org.ParentOrganizationID);
+        }
+
+
+        public static bool IsAdmin(this ClaimsPrincipal user)
+        {
+            var ci = (ClaimsIdentity)user.Identity;
+            return ci.HasClaim(ci.RoleClaimType, "Admin");
+        }
+
+        public static List<Claim> GetGroups(this ClaimsIdentity ci)
+        {
+            return ci.FindAll("groups").ToList();
+        }
+
+        public static IServiceCollection AddRequireAuthenticatedClcUser(this IServiceCollection services)
+        {
+            services.AddAuthorization(options =>
+            {
+                options.DefaultPolicy = new AuthorizationPolicyBuilder()
+                   .RequireAuthenticatedUser()
+                   .AddRequirements(new IsClcUserRequirement())
+                   .Build();
+
+                options.FallbackPolicy = options.DefaultPolicy;
+            });
+
+            return services;
         }
     }
 }

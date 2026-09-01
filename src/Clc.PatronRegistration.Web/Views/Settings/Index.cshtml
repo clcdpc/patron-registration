@@ -1,0 +1,332 @@
+@using Clc.PatronRegistration.Administration
+@using Clc.PatronRegistration.Web.Settings
+@using System.Globalization
+@model Clc.PatronRegistration.Web.Models.SettingsIndexViewModel
+@{
+    ViewData["Title"] = "Registration settings";
+    bool ShowValidationMessageSettings = false;
+    var groups = new List<(SettingGroup Group, string Name)>
+    {
+        (SettingGroup.Label, "Field labels"),
+        (SettingGroup.Require, "Required fields")
+    };
+    if (ShowValidationMessageSettings)
+    {
+        groups.Insert(0, (SettingGroup.Alert, "Validation messages"));
+    }
+    var settingsError = TempData["SettingsError"] as string;
+    var settingsErrorGroup = TempData["SettingsErrorGroup"] as string;
+    var settingsStatus = TempData["SettingsStatus"] as string;
+    var formDisplayName = string.IsNullOrWhiteSpace(Model.FormDisplayName)
+        ? Model.FormCodes.FirstOrDefault(form => form.FormCode.Equals(Model.FormCode, StringComparison.OrdinalIgnoreCase))?.DisplayName
+            ?? (Model.FormCode.Length == 0 ? "Default form" : Model.FormCode)
+        : Model.FormDisplayName;
+    var draftChangeCount = Model.ActiveDraft?.Changes.Count ?? 0;
+    var nowUtc = DateTime.UtcNow;
+    var activePreviewCount = Model.PreviewLinks.Count(link => !link.RevokedAtUtc.HasValue && link.ExpiresAtUtc > nowUtc);
+    bool hasRestrictedDraftChanges = Model.HasRestrictedDraftChanges == true;
+    bool canManageRestrictedDraft = Model.CanManageRestrictedDraft == true;
+    bool canManageDraftLifecycle = !hasRestrictedDraftChanges || canManageRestrictedDraft;
+}
+
+<header class="settings-header">
+    <div class="settings-header-content">
+        <h1>Registration settings</h1>
+        <p>Choose a scope and form. Uncustomized values inherit from the next applicable level.</p>
+    </div>
+    <nav class="settings-navigation" aria-label="Settings administration">
+        <a asp-action="Index" asp-route-organizationId="@Model.OrganizationId" asp-route-formCode="@Model.FormCode" aria-current="page">Settings</a>
+        <a asp-action="Audit">Audit history</a>
+        <a asp-action="Forms" asp-route-libraryId="@Model.LibraryId">Form codes</a>
+        <a asp-action="Help" asp-route-organizationId="@Model.OrganizationId" asp-route-formCode="@Model.FormCode">Help</a>
+    </nav>
+</header>
+@if (!string.IsNullOrWhiteSpace(settingsStatus))
+{
+    <div class="settings-success" role="status" tabindex="-1" autofocus>@settingsStatus</div>
+}
+@if (!string.IsNullOrWhiteSpace(settingsError))
+{
+    <div class="validation-summary" role="alert">@settingsError</div>
+}
+
+<section class="settings-search settings-controls" aria-label="Settings controls">
+    <form method="get" class="settings-context" aria-label="Choose settings context">
+        <div class="settings-context-row settings-context-primary">
+            <div class="context-organization">
+                <label for="organization-scope">Scope <span class="visually-hidden">(system, library, or branch)</span></label>
+                <select id="organization-scope" name="organizationId">
+                    @foreach (var optionGroup in Enum.GetValues<Clc.PatronRegistration.Web.Models.ScopeOptionGroup>())
+                    {
+                        var options = Model.Scopes.Where(scope => scope.Group == optionGroup).ToList();
+                        @if (options.Count > 0)
+                        {
+                            <optgroup label="@optionGroup.ToString()">
+                            @foreach (var scope in options)
+                            {
+                                bool isSelectedScope = scope.OrganizationId == Model.OrganizationId;
+                                <option value="@scope.OrganizationId" selected="@isSelectedScope">@scope.DisplayName</option>
+                            }
+                            </optgroup>
+                        }
+                    }
+                </select>
+            </div>
+            <div class="context-form">
+                <label for="form-code-scope">Form</label>
+                <select id="form-code-scope" name="formCode">
+                    @foreach (var form in Model.FormCodes)
+                    {
+                        bool isSelectedForm = form.FormCode == Model.FormCode;
+                        <option value="@form.FormCode" selected="@isSelectedForm">@form.DisplayName</option>
+                    }
+                </select>
+            </div>
+            <div class="settings-filter-group" role="group" aria-label="Setting filters">
+                <label class="inline-check"><input id="customized-only-filter" type="checkbox" /> <span>Customized only</span></label>
+                @if (draftChangeCount > 0) { <label class="inline-check"><input id="draft-only-filter" type="checkbox" /> <span>Show shared draft changes only</span></label> }
+            </div>
+            <noscript><button type="submit">View settings</button></noscript>
+        </div>
+        <div class="settings-context-row settings-search-row">
+            <label id="search-label" for="setting-search">Search</label>
+            <input id="setting-search" type="search" autocomplete="off" placeholder="Search by setting name or description" />
+            <p id="search-status" aria-live="polite">@Model.Settings.Count settings</p>
+        </div>
+    </form>
+</section>
+
+@if (Model.ActiveDraft is not null)
+{
+<section class="draft-panel" aria-labelledby="draft-panel-title" data-has-draft="true">
+    <header class="draft-summary">
+        <h2 id="draft-panel-title">Shared draft #@Model.ActiveDraft.DraftId</h2>
+        <p class="draft-scope"><strong>@Model.OrganizationName</strong> — <strong>@formDisplayName</strong></p>
+        <p class="draft-counts">@draftChangeCount @(draftChangeCount == 1 ? "change" : "changes") · @activePreviewCount active preview @(activePreviewCount == 1 ? "link" : "links")</p>
+        @if (draftChangeCount == 0) { <p class="draft-empty"><strong>This shared draft has no changes.</strong></p> }
+        @if (hasRestrictedDraftChanges && !canManageRestrictedDraft) { <p class="validation-summary" role="status"><strong>Restricted draft:</strong> A global administrator must publish, discard, preview, or remove restricted changes.</p> }
+    </header>
+    <div class="draft-actions" role="group" aria-label="Draft lifecycle actions">
+    @if (draftChangeCount > 0) {
+        <button type="button" data-review-draft>Review @draftChangeCount shared draft @(draftChangeCount == 1 ? "change" : "changes")</button>
+    }
+    @if (canManageDraftLifecycle) {
+        <button type="button" data-open-dialog="publish-draft-review" disabled="@(draftChangeCount == 0)">Publish draft</button>
+        <button type="button" class="danger-button" data-open-dialog="discard-draft-confirm">Discard shared draft</button>
+    }
+    </div>
+    @if (Model.ActiveDraft is not null && canManageDraftLifecycle) {
+    <section class="preview-tools" aria-labelledby="preview-tools-title">
+      <h3 id="preview-tools-title">Preview tools</h3>
+      <form asp-action="CreatePreviewLink" asp-route-draftId="@Model.ActiveDraft.DraftId" method="post" data-preview-form data-guard-action>
+        @Html.AntiForgeryToken()<input type="hidden" name="OrganizationId" value="@Model.OrganizationId" /><input type="hidden" name="FormCode" value="@Model.FormCode" /><input type="hidden" name="ExpectedDraftRevision" value="@Model.ActiveDraft.Revision" />
+        <div class="preview-create-row">
+          <div class="preview-branch-field">
+            <label for="preview-operational-branch">Preview as branch</label>
+            <select id="preview-operational-branch" name="OperationalBranchId" required>
+                @if (Model.PreviewBranches.Count != 1)
+                {
+                    <option value="">Select a branch</option>
+                }
+                @foreach (var branch in Model.PreviewBranches)
+                {
+                    <option value="@branch.OrganizationId" selected="@(Model.PreviewBranches.Count == 1)">@branch.DisplayName</option>
+                }
+            </select>
+          </div>
+          <div class="preview-create-actions" role="group" aria-label="Create preview link">
+            <button type="submit" name="AllowLiveSubmission" value="false" class="preview-create-option preview-create-safe">
+              <strong>Create safe preview</strong>
+              <span>Cannot create patron records.</span>
+            </button>
+            <button type="submit" name="AllowLiveSubmission" value="true" class="preview-create-option preview-create-live">
+              <strong>Create live-submission preview</strong>
+              <span>Can create real patron records.</span>
+            </button>
+          </div>
+        </div>
+      </form>
+      @if (Model.PreviewLinks.Count > 0)
+      {
+        <section class="preview-links" aria-labelledby="preview-links-title">
+          <h4 id="preview-links-title">Existing preview links</h4>
+          <div class="preview-link-list">
+          @foreach (var link in Model.PreviewLinks.OrderBy(l => l.RevokedAtUtc.HasValue))
+          {
+            var branch = Model.PreviewBranches.FirstOrDefault(b => b.OrganizationId == link.OperationalBranchId);
+            var revoked = link.RevokedAtUtc.HasValue;
+            var expired = !link.ExpiresAtUtc.HasValue || link.ExpiresAtUtc.Value <= nowUtc;
+            var actions = PreviewLinkActionPolicy.For(link, nowUtc);
+            var expirationText = link.ExpiresAtUtc is { } expiration
+                ? expiration.ToString("MMM d, yyyy, h:mm tt 'UTC'", CultureInfo.InvariantCulture)
+                : null;
+            var expirationDateTime = link.ExpiresAtUtc?.ToString("o", CultureInfo.InvariantCulture);
+            var expirationLabel = expired ? "Expired" : "Expires";
+            <article class="preview-link-item" aria-labelledby="preview-link-@link.PreviewLinkId-title">
+              <h5 id="preview-link-@link.PreviewLinkId-title" class="preview-link-name">Preview link #@link.PreviewLinkId</h5>
+              <p class="preview-link-branch">Operational branch: @(branch?.DisplayName ?? $"branch {link.OperationalBranchId}")</p>
+              <p class="preview-link-status"><span class="status-badge">@(revoked ? "Revoked" : expired ? "Expired" : link.AllowLiveSubmission ? "Live" : "Safe")</span><span>— @(revoked ? "Revoked and unusable" : expired ? "Expired and unusable" : "Active")</span></p>
+              @if (expirationText is not null)
+              {
+                <span class="preview-link-expiration"><time datetime="@expirationDateTime">@expirationLabel @expirationText</time></span>
+              }
+              @if (actions.Replace)
+              {
+                <div class="preview-link-actions" role="group" aria-label="Actions for preview link @link.PreviewLinkId">
+                  <form asp-action="ReplacePreviewLinkMode" asp-route-previewLinkId="@link.PreviewLinkId" method="post" data-requires-live-confirm="@(!link.AllowLiveSubmission)" data-guard-action>@Html.AntiForgeryToken()<input type="hidden" name="allowLiveSubmission" value="@(!link.AllowLiveSubmission)"/><button type="submit">Replace with @(link.AllowLiveSubmission ? "safe" : "live") link</button></form>
+                  <form asp-action="RevokePreviewLink" asp-route-previewLinkId="@link.PreviewLinkId" method="post" data-guard-action>@Html.AntiForgeryToken()<button type="submit">Revoke preview link</button></form>
+                </div>
+              }
+              else
+              {
+                <div class="preview-link-actions" role="group" aria-label="Actions for preview link @link.PreviewLinkId">
+                  @if (actions.Restore)
+                  {
+                    <form asp-action="RestorePreviewLink" asp-route-previewLinkId="@link.PreviewLinkId" method="post" data-guard-action>@Html.AntiForgeryToken()<button type="submit">Restore</button></form>
+                  }
+                  <form asp-action="DeletePreviewLink" asp-route-previewLinkId="@link.PreviewLinkId" method="post" data-guard-action>@Html.AntiForgeryToken()<button type="submit">Remove</button></form>
+                </div>
+              }
+            </article>
+          }
+          </div>
+        </section>
+      }
+    </section>}
+</section>
+}
+<form asp-action="DirectSave" method="post" id="settings-form">
+    @Html.AntiForgeryToken()
+    <input type="hidden" name="OrganizationId" value="@Model.OrganizationId" />
+    <input type="hidden" name="FormCode" value="@Model.FormCode" />
+    <input type="hidden" name="ExpectedVersion" value="@Model.ScopeVersion" />
+    @if (Model.ActiveDraft is not null) {
+        <input type="hidden" name="ExpectedDraftId" value="@Model.ActiveDraft.DraftId" />
+        <input type="hidden" name="ExpectedDraftRevision" value="@Model.ActiveDraft.Revision" />
+    }
+    <p id="edit-session-status" class="validation-summary" role="alert" tabindex="-1" hidden></p>
+
+    @foreach (var category in SettingCategoryPresentation.Ordered)
+    {
+        var rows = Model.Settings.Where(row => row.Definition.Group == SettingGroup.Ordinary && row.Definition.Category == category)
+            .OrderBy(row => row.Definition.DisplayName, StringComparer.OrdinalIgnoreCase).ToList();
+        if (rows.Count == 0) { continue; }
+        bool categoryOpen = rows.Any(row => row.DraftOperation is not null);
+        <details class="setting-category" open="@categoryOpen">
+            <summary>@category.DisplayName() <span>(@rows.Count)</span></summary>
+            <div class="settings-column-headings"><span>Setting</span><span>Value</span><span>Status</span></div>
+            <div class="settings-list">
+            @foreach (var row in rows) { <partial name="_SettingRow" model="row" /> }
+            </div>
+        </details>
+    }
+
+    @foreach (var group in groups)
+    {
+        var rows = Model.Settings.Where(row => row.Definition.Group == group.Item1).ToList();
+        bool isDynamicGroupOpen = rows.Any(row => row.DraftOperation is not null) ||
+            string.Equals(group.Item1.ToString(), settingsErrorGroup, StringComparison.OrdinalIgnoreCase);
+        <details class="dynamic-settings" open="@isDynamicGroupOpen">
+            <summary>@group.Item2 <span>(@rows.Count)</span></summary>
+            @if (group.Item1 == SettingGroup.Alert)
+            {
+                <p class="group-introduction">These messages are saved for future use but are not currently shown on registration forms.</p>
+            }
+            <div class="settings-column-headings"><span>Setting</span><span>Value</span><span>Status</span></div>
+            <div class="settings-list">
+                @foreach (var row in rows)
+                {
+                    <partial name="_SettingRow" model="row" />
+                }
+            </div>
+        </details>
+    }
+
+    <div class="settings-actions" hidden>
+        <strong class="pending-changes-status" role="status" aria-live="polite"></strong>
+        <span class="settings-actions-context" aria-label="Editing">
+            <span class="settings-actions-context-label">Editing</span>
+            <strong>@Model.OrganizationName</strong><span aria-hidden="true"> · </span><strong>@formDisplayName</strong>
+        </span>
+        <div class="settings-action-buttons">
+            @if (Model.ActiveDraft is not null) {
+                <button type="submit" class="settings-primary-action" formaction="@Url.Action("SaveToSharedDraft")" data-submit-kind="draft" data-label-template="Add {count} {noun} to shared draft" data-review-title="Add changes to shared draft" data-confirm-label="Add to shared draft">Add changes to shared draft</button>
+                <button type="submit" class="settings-secondary-action" data-label-template="Save {count} {noun} live instead" data-review-title="Save changes live" data-confirm-label="Save live">Save changes live instead</button>
+                <small>Saving live applies only changes marked <strong>Unsaved in this browser</strong>. It does not publish or modify the existing shared draft.</small>
+            } else {
+                <button type="submit" formaction="@Url.Action("SaveToSharedDraft")" data-submit-kind="draft" data-label-template="Save {count} {noun} to shared draft" data-review-title="Save changes to shared draft" data-confirm-label="Save to shared draft">Save changes to shared draft</button>
+                <button type="submit" data-label-template="Save {count} {noun} live" data-review-title="Save changes live" data-confirm-label="Save live">Save changes live</button>
+            }
+            <button type="button" data-discard-pending>Discard unsaved changes</button>
+        </div>
+    </div>
+</form>
+
+<dialog id="save-confirm" aria-labelledby="save-confirm-title">
+    <h2 id="save-confirm-title">Review changes</h2>
+    <p>Target: <strong>@Model.OrganizationName</strong> · <strong>@formDisplayName</strong>.</p>
+    <ul></ul>
+    <div class="button-row">
+        <button id="confirm-save" type="button">Save changes</button>
+        <button id="cancel-save" type="button">Cancel</button>
+    </div>
+</dialog>
+
+<dialog id="unsaved-changes-dialog" aria-labelledby="unsaved-title">
+    <h2 id="unsaved-title">Unsaved changes</h2>
+    <p data-unsaved-message></p>
+    <p data-unsaved-explanation>
+        Continuing will revert changes made in this browser.
+        Changes already saved to the shared draft or live settings
+        will not be affected.
+    </p>
+    <div class="button-row">
+        <button type="button" class="danger-button" data-guard-discard>Discard changes and continue</button>
+        <button type="button" data-dialog-cancel>Keep editing</button>
+    </div>
+</dialog>
+@if (Model.ActiveDraft is not null)
+{
+    <dialog id="publish-draft-review" aria-labelledby="publish-title">
+        <h2 id="publish-title">Publish shared draft #@Model.ActiveDraft.DraftId</h2>
+        <p>Publishing makes all listed shared-draft changes live for <strong>@Model.OrganizationName</strong> · <strong>@formDisplayName</strong>.</p>
+        <ul>
+            @foreach (var row in Model.Settings.Where(row => row.DraftOperation.HasValue))
+            {
+                <li>
+                    <strong>@row.Definition.DisplayName</strong>:
+                    Live: @SettingReviewPresentation.Live(row);
+                    New shared draft value: @SettingReviewPresentation.Proposed(row)
+                </li>
+            }
+        </ul>
+        <p>@activePreviewCount active preview @(activePreviewCount == 1 ? "link" : "links") will become unusable.</p>
+        <form asp-action="CommitDraft" asp-route-draftId="@Model.ActiveDraft.DraftId" method="post" data-guard-action>
+            @Html.AntiForgeryToken()
+            <input type="hidden" name="organizationId" value="@Model.OrganizationId" />
+            <input type="hidden" name="formCode" value="@Model.FormCode" />
+            <input type="hidden" name="ExpectedDraftRevision" value="@Model.ActiveDraft.Revision" />
+            <button type="submit">Publish @draftChangeCount @(draftChangeCount == 1 ? "change" : "changes")</button>
+            <button type="button" data-dialog-cancel>Cancel</button>
+        </form>
+    </dialog>
+    <dialog id="discard-draft-confirm" aria-labelledby="discard-title">
+        <h2 id="discard-title">Discard shared draft #@Model.ActiveDraft.DraftId?</h2>
+        <p>@draftChangeCount draft @(draftChangeCount == 1 ? "change" : "changes") will be discarded and @activePreviewCount active preview @(activePreviewCount == 1 ? "link" : "links") will become unusable. <strong>This cannot be undone.</strong></p>
+        <form asp-action="DiscardDraft" asp-route-draftId="@Model.ActiveDraft.DraftId" method="post" data-guard-action>
+            @Html.AntiForgeryToken()
+            <input type="hidden" name="organizationId" value="@Model.OrganizationId" />
+            <input type="hidden" name="formCode" value="@Model.FormCode" />
+            <input type="hidden" name="ExpectedDraftRevision" value="@Model.ActiveDraft.Revision" />
+            <button type="submit" class="danger-button">Discard shared draft</button>
+            <button type="button" data-dialog-cancel>Cancel</button>
+        </form>
+    </dialog>
+}
+<dialog id="live-preview-confirm" aria-labelledby="live-preview-title">
+    <h2 id="live-preview-title">Create a live-submission preview?</h2>
+    <p>This generated bearer URL can create real patron records. Share it only with authorized staff.</p>
+    <button type="button" data-confirm-live-preview>Create live preview link</button>
+    <button type="button" data-dialog-cancel>Cancel</button>
+</dialog>
+<script src="~/js/settings.js" asp-append-version="true"></script>

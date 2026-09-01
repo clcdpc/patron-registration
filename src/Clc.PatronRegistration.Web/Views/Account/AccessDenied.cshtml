@@ -1,0 +1,13 @@
+@model string
+@{
+    ViewData["Title"] = "Access denied";
+}
+
+<main aria-labelledby="access-denied-heading">
+    <h1 id="access-denied-heading">Access denied</h1>
+    <p>You are signed in, but you do not have permission to access this page.</p>
+    @if (!string.IsNullOrWhiteSpace(Model))
+    {
+        <p>Requested page: <code>@Model</code></p>
+    }
+</main>

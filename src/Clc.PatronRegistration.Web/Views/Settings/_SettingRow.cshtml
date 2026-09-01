@@ -1,0 +1,326 @@
+@using Clc.PatronRegistration.Administration
+@model Clc.PatronRegistration.Web.Models.SettingRowViewModel
+@{
+    var definition = Model.Definition;
+    var resolution = Model.Resolution;
+    var token = Model.Token;
+    var inputId = $"{token}-value";
+    var operationId = $"{token}-operation";
+    bool isImage = definition.ValueType == SettingValueType.Image;
+    bool isHtml = SafeHtmlPolicy.IsHtmlExecutionContext(definition);
+    bool hasDraftOperation = Model.DraftOperation.HasValue;
+    bool isRemoveOverride = Model.DraftOperation == DraftOperation.RemoveOverride;
+    bool isDraftUpsert = Model.DraftOperation == DraftOperation.Upsert;
+    bool preservesFullValueFormatting = definition.ValueType is SettingValueType.LongString or SettingValueType.Html or SettingValueType.EmailTemplate;
+    bool hasCurrentHtmlValue = isHtml && resolution.SourceOrganizationId.HasValue && !string.IsNullOrEmpty(resolution.EffectiveValue);
+    bool hasDraftHtmlValue = isHtml && isDraftUpsert && !definition.IsSensitive && !string.IsNullOrEmpty(Model.DraftValue);
+    var editorValue = definition.IsSensitive ? string.Empty : isDraftUpsert
+        ? Model.DraftValue
+        : resolution.OwnsOverride ? resolution.CurrentOverrideValue : resolution.EffectiveValue;
+    editorValue = Clc.PatronRegistration.Web.Models.SettingEditorDefaults.ValueFor(definition, editorValue);
+    var safeEffective = definition.IsSensitive ? string.Empty : resolution.EffectiveValue;
+    var searchText = $"{definition.DisplayName} {definition.Key} {definition.Description} {safeEffective}".ToLowerInvariant();
+    var presentation = Clc.PatronRegistration.Web.Models.SettingValuePresentation.ForRow(Model);
+    var expandedCurrentValue = presentation.CurrentValue;
+    if (preservesFullValueFormatting && !definition.IsSensitive)
+    {
+        expandedCurrentValue = !resolution.SourceOrganizationId.HasValue
+            ? "Not configured"
+            : resolution.EffectiveValue is { Length: 0 } ? "Blank" : resolution.EffectiveValue ?? "Not configured";
+    }
+    var expandedDraftValue = string.Empty;
+    if (hasDraftOperation)
+    {
+        expandedDraftValue = isRemoveOverride
+            ? "Use inherited value"
+            : definition.IsSensitive
+                ? "Set a hidden value"
+                : preservesFullValueFormatting
+                    ? Model.DraftValue is { Length: 0 } ? "Blank" : Model.DraftValue ?? "Not configured"
+                    : Clc.PatronRegistration.Web.Models.SettingValuePresentation.Format(definition, Model.DraftValue, true);
+    }
+    var imageHasValue = Model.EffectiveAsset is not null || Model.EffectiveAssetMissing;
+    var imageHasStagedValue = Model.StagedAsset is not null || Model.StagedAssetMissing;
+    var imageSummary = !isImage
+        ? presentation.Value
+        : hasDraftOperation
+            ? isRemoveOverride
+                ? Model.HasInheritedValue ? "Use inherited image" : "Remove image"
+                : Model.StagedAsset?.FileName ?? (Model.StagedAssetMissing ? "Missing uploaded image" : "No image configured")
+            : Model.EffectiveAsset?.FileName ?? (Model.EffectiveAssetMissing ? "Missing uploaded image" : "No image configured");
+    var collapsedValue = hasDraftOperation && !isImage ? $"Shared draft: {imageSummary}" : imageSummary;
+    bool isNotSet = presentation.State == SettingPresentationState.NotSet;
+    bool canRemoveOverride = resolution.OwnsOverride;
+    var inheritanceMessage = Clc.PatronRegistration.Web.Models.SettingInheritancePresentation.MessageFor(Model);
+    var inheritanceMessageId = $"{token}-inheritance-message";
+    var imageActionLabel = imageHasValue || imageHasStagedValue ? "Replace image" : "Upload image";
+    var imageSource = Model.EffectiveAsset is null
+        ? Model.EffectiveAssetMissing ? "Missing uploaded image" : "No image configured"
+        : resolution.OwnsOverride ? "Customized here" : $"Inherited from {Model.SourceDescription}";
+    var imageCurrentClass = Model.EffectiveAsset is not null
+        ? "image-card image-current image-card-has-preview"
+        : "image-card image-current";
+    var liveState = resolution.OwnsOverride
+        ? "customized"
+        : resolution.SourceOrganizationId.HasValue ? "inherited" : "notset";
+    var liveSummary = Clc.PatronRegistration.Web.Models.SettingReviewPresentation.Live(Model);
+    var rowStatus = hasDraftOperation
+        ? "Draft change"
+        : resolution.OwnsOverride
+            ? "Customized here"
+            : resolution.SourceOrganizationId.HasValue ? "Inherited" : "Not configured";
+}
+<details class="setting-row"
+         data-search="@searchText"
+         data-display-name="@definition.DisplayName"
+         data-setting-key="@definition.Key"
+         data-old-value="@(definition.IsSensitive ? "••••••••" : definition.ValueType == SettingValueType.Image ? presentation.CurrentValue : resolution.EffectiveValue)"
+         data-sensitive="@definition.IsSensitive.ToString().ToLowerInvariant()"
+         data-server-operation="@(Model.DraftOperation?.ToString() ?? string.Empty)"
+         data-draft-change="@hasDraftOperation.ToString().ToLowerInvariant()"
+         data-customized-here="@resolution.OwnsOverride.ToString().ToLowerInvariant()"
+         data-applied-operation="@(isRemoveOverride ? "RemoveOverride" : "Upsert")"
+         data-value-type="@definition.ValueType.ToString().ToLowerInvariant()"
+         data-presentation-state="@presentation.State.ToString().ToLowerInvariant()"
+         data-live-state="@liveState"
+         data-live-summary="@liveSummary"
+         data-source-description="@Model.SourceDescription"
+         data-inherited-summary="@(Model.Definition.IsSensitive || !Model.HasInheritedValue ? string.Empty : SettingValuePresentation.Format(Model.Definition, Model.InheritedValue, true))"
+         data-inherited-source="@(Model.InheritedSourceDescription ?? string.Empty)"
+         data-has-inherited="@Model.HasInheritedValue.ToString().ToLowerInvariant()"
+         data-image-has-inherited="@Model.HasInheritedValue.ToString().ToLowerInvariant()"
+         data-image-inherited-missing="@Model.InheritedAssetMissing.ToString().ToLowerInvariant()"
+         data-image-inherited-preview-url="@(Model.InheritedAsset?.PreviewUrl ?? string.Empty)"
+         data-image-inherited-file-name="@(Model.InheritedAsset?.FileName ?? string.Empty)">
+    <input class="change-index" type="hidden" name="Changes.Index" value="@token" disabled />
+    <input class="change-key" type="hidden" name="Changes[@token].Key" value="@definition.Key" disabled />
+    <input id="@operationId" class="operation" type="hidden" name="Changes[@token].Operation"
+           value="@(isRemoveOverride ? "RemoveOverride" : "Upsert")" disabled />
+
+    <summary>
+        <span class="setting-summary-content">
+            <span class="setting-name">@definition.DisplayName</span>
+            <span class="summary-value" title="@collapsedValue">@collapsedValue</span>
+            <span class="setting-status">@rowStatus</span>
+        </span>
+    </summary>
+    <div class="setting-content">
+    <p class="setting-description">@definition.Description</p>
+
+    @if (!isImage)
+    {
+        <section class="setting-value-panel" aria-label="Current value">
+            <div class="setting-value-panel-heading">
+                <strong>Current value</strong>
+                <span class="setting-value-source">Source: @(isNotSet ? "Not configured" : Model.SourceDescription)</span>
+            </div>
+            @if (hasCurrentHtmlValue)
+            {
+                <iframe sandbox="" class="setting-html-value-preview" title="Formatted current value for @definition.DisplayName" srcdoc="@resolution.EffectiveValue"></iframe>
+            }
+            else if (preservesFullValueFormatting)
+            {
+                <pre class="setting-current-value setting-current-value-full">@expandedCurrentValue</pre>
+            }
+            else
+            {
+                <div class="setting-current-value">@expandedCurrentValue</div>
+            }
+        </section>
+
+        @if (hasDraftOperation)
+        {
+            <section class="setting-value-panel setting-draft-value-panel" aria-label="Shared draft value">
+                <div class="setting-value-panel-heading">
+                    <strong>Shared draft</strong>
+                </div>
+                @if (hasDraftHtmlValue)
+                {
+                    <iframe sandbox="" class="setting-html-value-preview" title="Formatted shared draft value for @definition.DisplayName" srcdoc="@Model.DraftValue"></iframe>
+                }
+                else if (preservesFullValueFormatting && !isRemoveOverride && !definition.IsSensitive)
+                {
+                    <pre class="setting-current-value setting-current-value-full">@expandedDraftValue</pre>
+                }
+                else
+                {
+                    <div class="setting-current-value">@expandedDraftValue</div>
+                }
+            </section>
+        }
+    }
+
+    @if (isImage)
+    {
+        <div class="image-setting" aria-labelledby="@inputId-label">
+            <span id="@inputId-label" class="visually-hidden">@definition.DisplayName image controls</span>
+            <div class="@imageCurrentClass" data-image-current>
+                @if (Model.EffectiveAsset is not null)
+                {
+                    <img class="setting-image-preview" src="@Model.EffectiveAsset.PreviewUrl" alt="Current header image" />
+                    <div class="image-card-copy">
+                        <strong>Current image</strong>
+                        <small>@Model.EffectiveAsset.FileName</small>
+                        <span class="image-source-status">@imageSource</span>
+                    </div>
+                }
+                else if (Model.EffectiveAssetMissing)
+                {
+                    <div class="image-card-copy">
+                        <strong>Current image</strong>
+                        <p class="setting-missing-asset" role="status">The configured uploaded image is missing.</p>
+                        <span class="image-source-status">@imageSource</span>
+                    </div>
+                }
+                else
+                {
+                    <div class="image-card-copy">
+                        <strong>Current image</strong>
+                        <span>No image configured.</span>
+                    </div>
+                }
+            </div>
+
+            @if (hasDraftOperation)
+            {
+                <div class="image-card image-draft" data-image-draft>
+                    <strong>Shared draft</strong>
+                    @if (isDraftUpsert && Model.StagedAsset is not null)
+                    {
+                        <img class="setting-image-preview" src="@Model.StagedAsset.PreviewUrl" alt="Shared draft header image" />
+                        <small>@Model.StagedAsset.FileName</small>
+                        <span>Replace with this uploaded image.</span>
+                    }
+                    else if (isDraftUpsert && Model.StagedAssetMissing)
+                    {
+                        <p class="setting-missing-asset" role="status">The staged uploaded image is missing.</p>
+                    }
+                    else if (!isDraftUpsert && Model.HasInheritedValue && Model.InheritedAssetMissing)
+                    {
+                        <p class="setting-missing-asset" role="status">The inherited uploaded image is missing.</p>
+                        <span>Use the inherited image setting.</span>
+                    }
+                    else if (Model.StagedAsset is not null)
+                    {
+                        <img class="setting-image-preview" src="@Model.StagedAsset.PreviewUrl" alt="Inherited shared draft header image" />
+                        <small>@Model.StagedAsset.FileName</small>
+                        <span>Use inherited image.</span>
+                    }
+                    else
+                    {
+                        <p>No image will be configured.</p>
+                        <span>@(Model.HasInheritedValue ? "Use inherited image." : "Remove image.")</span>
+                    }
+                </div>
+            }
+
+            <div class="image-card image-pending image-browser-pending" data-image-pending hidden>
+                <strong class="image-pending-heading">Unsaved replacement</strong>
+                <img class="setting-image-preview image-pending-preview" alt="Unsaved header image change" />
+                <small class="image-pending-file-name"></small>
+                <p class="image-upload-status" role="status" aria-live="polite"></p>
+                <div class="image-pending-actions">
+                    <button type="button" class="image-choose-another">Choose another image</button>
+                    <button type="button" class="image-undo-pending">Undo replacement</button>
+                </div>
+            </div>
+
+            <div class="image-actions">
+                <button type="button" class="image-upload-trigger">@imageActionLabel</button>
+                <input id="@inputId-file" class="image-file" type="file" accept="image/png,image/jpeg,image/webp"
+                       aria-label="Choose a header image"
+                       data-upload-url="@Url.Action("UploadHeaderImageAsset", "Settings")" />
+                @if (canRemoveOverride)
+                {
+                    <button type="button" class="image-inherit-action" hidden="@isRemoveOverride">@(Model.HasInheritedValue ? "Use inherited image" : "Remove image")</button>
+                }
+            </div>
+            <input id="@inputId" class="setting-value" name="Changes[@token].Value" type="hidden" value="@editorValue" disabled />
+            <small>PNG, JPEG, or WebP only; maximum size 2 MB. The image is uploaded when selected, then saved with the page changes.</small>
+        </div>
+    }
+    else
+    {
+        <div class="setting-editor">
+        <div class="value-editor" hidden>
+            <label for="@inputId">Value</label>
+            @if (definition.ValueType == SettingValueType.Boolean)
+            {
+                bool isTrueValue = editorValue.Equals("true", StringComparison.OrdinalIgnoreCase);
+                bool isFalseValue = editorValue.Equals("false", StringComparison.OrdinalIgnoreCase);
+                <select id="@inputId" class="setting-value" name="Changes[@token].Value" disabled>
+                    <option value="true" selected="@isTrueValue">Yes</option>
+                    <option value="false" selected="@isFalseValue">No</option>
+                </select>
+            }
+            else if (definition.ValueType == SettingValueType.Enumeration)
+            {
+                <select id="@inputId" class="setting-value" name="Changes[@token].Value" disabled>
+                    @foreach (var allowedValue in definition.AllowedValues ?? [])
+                    {
+                        <option value="@allowedValue" selected="@editorValue.Equals(allowedValue, StringComparison.OrdinalIgnoreCase)">@allowedValue</option>
+                    }
+                </select>
+            }
+            else if (definition.ValueType is SettingValueType.Integer or SettingValueType.NullableInteger or SettingValueType.Decimal)
+            {
+                <input id="@inputId" class="setting-value" name="Changes[@token].Value" type="number" step="@(definition.ValueType == SettingValueType.Decimal ? "any" : "1")" value="@editorValue" disabled />
+            }
+            else if (definition.ValueType is SettingValueType.Date or SettingValueType.NullableDate)
+            {
+                <input id="@inputId" class="setting-value" name="Changes[@token].Value" type="date" value="@editorValue" disabled />
+            }
+            else if (definition.ValueType == SettingValueType.EmailAddress)
+            {
+                <input id="@inputId" class="setting-value" name="Changes[@token].Value" type="email" value="@editorValue" disabled />
+            }
+            else if (definition.ValueType == SettingValueType.Uri)
+            {
+                <input id="@inputId" class="setting-value" name="Changes[@token].Value" type="url" value="@editorValue" disabled />
+            }
+            else if (definition.ValueType is SettingValueType.LongString or SettingValueType.Html or SettingValueType.EmailTemplate)
+            {
+                <textarea id="@inputId" class="setting-value" name="Changes[@token].Value" rows="4" disabled>@editorValue</textarea>
+                @if (isHtml || definition.ValueType == SettingValueType.EmailTemplate)
+                {
+                    <iframe sandbox="" title="Isolated preview for @definition.DisplayName" class="html-preview"></iframe>
+                }
+            }
+            else
+            {
+                <input id="@inputId" class="setting-value" name="Changes[@token].Value" type="@(definition.IsSensitive ? "password" : "text")" value="@(definition.IsSensitive ? string.Empty : editorValue)" placeholder="@(definition.IsSensitive ? "Enter a new value to replace the existing secret" : null)" autocomplete="@(definition.IsSensitive ? "new-password" : "off")" disabled />
+                @if (definition.IsSensitive)
+                {
+                    <button type="button" class="reveal-secret" aria-controls="@inputId" aria-expanded="false" aria-label="Reveal @definition.DisplayName">Reveal secret</button>
+                    <small>Existing values are write-only and cannot be revealed. Enter a complete replacement.</small>
+                }
+            }
+        </div>
+        <button type="button" class="edit-setting">Change</button>
+        @if (canRemoveOverride)
+        {
+            <button type="button" class="inherit-setting" hidden="@isRemoveOverride" aria-controls="@inheritanceMessageId" aria-expanded="false">Use inherited value</button>
+        }
+        <p id="@inheritanceMessageId" class="inheritance-message" hidden>
+            @inheritanceMessage
+        </p>
+        <span class="edit-actions" hidden>
+            <button type="button" class="apply-setting">Keep change</button>
+            <button type="button" class="cancel-setting">Cancel</button>
+        </span>
+        </div>
+    }
+    @if (hasDraftOperation && Model.DraftId.HasValue)
+    {
+        <button type="submit"
+                formaction="@Url.Action("RemoveDraftChange", new { draftId = Model.DraftId })"
+                name="settingKey"
+                value="@definition.Key"
+                data-submit-kind="guarded"
+                formnovalidate>
+            Remove shared draft change
+        </button>
+    }
+    <details class="technical-details"><summary>Technical details</summary><p>Setting key: <code>@definition.Key</code></p></details>
+    </div>
+</details>

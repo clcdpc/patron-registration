@@ -1,5 +1,3 @@
-using Clc.Auth.AzureAd.Security;
-using Clc.Configuration;
 using Clc.Melissa;
 using Clc.PatronRegistration.Configuration;
 using Clc.PatronRegistration.Data;
@@ -13,6 +11,9 @@ using Microsoft.AspNetCore.Mvc.DataAnnotations;
 using Microsoft.AspNetCore.Mvc.Infrastructure;
 using Microsoft.Extensions.Primitives;
 using Microsoft.Identity.Web;
+using Clc.PatronRegistration.Administration;
+using Clc.PatronRegistration.Web.Settings;
+using Clc.PatronRegistration.Security;
 
 namespace Clc.PatronRegistration.Web
 {
@@ -55,34 +56,52 @@ namespace Clc.PatronRegistration.Web
                 .AddSingleton<IDbHelper, DbHelper>();
 
             builder.Services.AddSingleton<ICache, MemoryCache>();
+            builder.Services.AddOptions<SettingsAdministrationOptions>()
+                .Bind(builder.Configuration.GetSection(SettingsAdministrationOptions.SectionName))
+                .Validate(options => SettingsAdministrationOptions.IsValidPreviewLinkLifetime(options.PreviewLinkLifetimeHours),
+                    $"PreviewLinkLifetimeHours must be from 1 through {SettingsAdministrationOptions.MaximumPreviewLinkLifetimeHours}.")
+                .ValidateOnStart();
+            builder.Services.AddSingleton<ISettingCatalog, SettingCatalog>();
+            builder.Services.AddSingleton<IRegistrationFormAssetRepository, RegistrationFormAssetRepository>();
+            builder.Services.AddSingleton<IRegistrationFormAssetAuthorization, RegistrationFormAssetAuthorization>();
+            builder.Services.AddSingleton<IPreviewTokenService, PreviewTokenService>();
+            builder.Services.AddSingleton<ISettingsAuthorizationService, SettingsAuthorizationService>();
+            builder.Services.AddSingleton<ISettingsAdministrationRepository, SettingsAdministrationRepository>();
+            builder.Services.AddSingleton<ISettingsCacheGenerationProvider>(service =>
+                (ISettingsCacheGenerationProvider)service.GetRequiredService<ISettingsAdministrationRepository>());
+            builder.Services.AddSingleton<ISettingsCacheInvalidator, SettingsCacheInvalidator>();
+            builder.Services.AddSingleton<IPreviewBranchEligibilityService, PreviewBranchEligibilityService>();
+            builder.Services.AddSingleton<IFormCodeAvailabilityService, FormCodeAvailabilityService>();
+            builder.Services.AddScoped<IPreviewRequestContextAccessor, PreviewRequestContextAccessor>();
+            builder.Services.AddScoped<ISettingsPageBrandingContextAccessor, SettingsPageBrandingContextAccessor>();
+            builder.Services.AddScoped<IRequestSettingProviderResolver, RequestSettingProviderResolver>();
+            builder.Services.AddScoped<IRegistrationScopeResolver, RegistrationScopeResolver>();
+            builder.Services.AddSingleton<IPreviewContextResolver, PreviewContextResolver>();
+            builder.Services.AddScoped<IEmailSenderFactory, EmailSenderFactory>();
+            builder.Services.AddScoped<IMelissaClientFactory, MelissaClientFactory>();
+            builder.Services.AddHostedService<SettingsCacheGenerationWorker>();
+            builder.Services.AddHostedService<RegistrationFormAssetCleanupWorker>();
 
             builder.Services
                 .AddSingleton<IActionContextAccessor, ActionContextAccessor>()
                 .AddSingleton<IHttpContextAccessor, HttpContextAccessor>()
-                .AddScoped<ISettingProvider>(s =>
-                {
-                    var actionContext = s.GetRequiredService<IActionContextAccessor>().ActionContext!;
-
-                    int id = int.TryParse(actionContext.RouteData.Values["orgId"]?.ToString(), out id) ? id : 1;
-                    var formCode = actionContext.RouteData.Values["formCode"] as string ?? "";
-
-                    if (string.IsNullOrWhiteSpace(formCode) && (actionContext.HttpContext.Request.IsFromPublicWebBrowser() || (config.ForceKioskModeLocally && actionContext.HttpContext.IsFromLocalOrOplinIp())))
-                    {
-                        formCode = "kiosk";
-                    }
-
-                    return s.ResolveWith<DbSettingProvider>(id, formCode);
-                });
+                .AddScoped<ISettingProvider>(s => s.GetRequiredService<IRequestSettingProviderResolver>()
+                    .Resolve(s.GetRequiredService<IHttpContextAccessor>().HttpContext!));
 
             builder.Services
-                .AddScoped<IEmailSender>(s => s.ResolveWith<PostmarkEmailSender>(s.GetRequiredService<ISettingProvider>().PostmarkApiKey ?? ""))
-                .AddScoped<IMelissaRestClient>(s => s.ResolveWith<MelissaRestClient>(s.GetRequiredService<ISettingProvider>().MelissaDataApiKey ?? ""));
+                .AddScoped<IEmailSender>(s => RegistrationClientProvider.CreateEmail(s.GetRequiredService<ISettingProvider>(), s.GetRequiredService<IEmailSenderFactory>()))
+                .AddScoped<IMelissaRestClient>(s => RegistrationClientProvider.CreateMelissa(s.GetRequiredService<ISettingProvider>(), s.GetRequiredService<IMelissaClientFactory>()));
 
-            builder.Services.ConfigureApplicationCookie(o => { o.LogoutPath = "/"; });
+            builder.Services.ConfigureApplicationCookie(o =>
+            {
+                o.AccessDeniedPath = "/Account/AccessDenied";
+                o.LogoutPath = "/";
+            });
 
             builder.Services.AddSingleton(x => builder.Configuration.GetSection("Clc").Get<AppSettings>()!);
             builder.Services.AddSingleton<IAuthorizationHandler, IsClcUserCheckHandler>();
-            builder.Services.AddSingleton<IClaimsTransformation, ClcAzureAdClaimsTransformer>();
+            builder.Services.AddSingleton<IClaimsTransformation>(service =>
+                new ClcAzureAdClaimsTransformer(service.GetRequiredService<AppSettings>()));
 
 
             var app = builder.Build();
@@ -97,12 +116,12 @@ namespace Clc.PatronRegistration.Web
 
             HttpContextHelper.Configure(app.Services.GetRequiredService<IHttpContextAccessor>());
             CacheHelper.Configure(app.Services.GetRequiredService<ICache>());
-            DbHelper.Global = app.Services.GetRequiredService<IDbHelper>();
-
             app.UseCors(MyAllowSpecificOrigins);
             app.UseHttpsRedirection();
             app.UseStaticFiles();
             app.UseRouting();
+            app.UseMiddleware<PreviewRequestContextMiddleware>();
+            app.UseAuthentication();
             app.UseAuthorization();
 
             app.MapControllers();

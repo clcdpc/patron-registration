@@ -1,6 +1,6 @@
-﻿using Clc.Auth.AzureAd.Security;
-using Clc.PatronRegistration.Data;
+﻿using Clc.PatronRegistration.Data;
 using Clc.PatronRegistration.Helpers;
+using Clc.PatronRegistration.Security;
 using Clc.PatronRegistration.Web.Models;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;

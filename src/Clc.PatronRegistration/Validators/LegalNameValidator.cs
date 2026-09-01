@@ -3,6 +3,7 @@ using System.ComponentModel.DataAnnotations;
 using Microsoft.Extensions.DependencyInjection;
 using Clc.PatronRegistration.Configuration;
 using Clc.PatronRegistration;
+using Clc.PatronRegistration.Helpers;
 using System.Diagnostics.CodeAnalysis;
 
 namespace Clc.PatronRegistration.Validators
@@ -11,20 +12,22 @@ namespace Clc.PatronRegistration.Validators
     {
         protected override ValidationResult IsValid(object? value, ValidationContext context)
         {
-            var settings = context.GetService<ISettingProvider>()!;
-
             if (context.ObjectInstance is not Registration reg) { return new ValidationResult("invalid model object"); }
+
+            var settings = reg.Settings ?? context.GetService<ISettingProvider>()!;
 
             if (!reg.UseLegalName) { return ValidationResult.Success!; }
 
-            return !string.IsNullOrWhiteSpace(value?.ToString())
+            return string.IsNullOrWhiteSpace(value?.ToString())
                 ? new ValidationResult($"{settings.GetFieldLabel(context.MemberName ?? "")} is required.")
                 : ValidationResult.Success!;
         }
 
         public void AddValidation(ClientModelValidationContext context)
         {
-            var settings = context.GetService<ISettingProvider>()!;
+            var settings = RegistrationSettingsContext.Get(
+                context.ActionContext.HttpContext,
+                context.GetService<ISettingProvider>()!);
 
             if (context == null)
             {

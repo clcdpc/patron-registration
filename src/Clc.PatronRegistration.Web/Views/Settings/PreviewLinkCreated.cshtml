@@ -1,0 +1,25 @@
+@model Clc.PatronRegistration.Web.Models.PreviewLinkCreatedViewModel
+@{
+    ViewData["Title"] = "Preview link created";
+}
+<main class="preview-link-created" data-preview-link-created>
+    <h1>Preview link created</h1>
+    <div class="preview-mode-banner @(Model.AllowLiveSubmission ? "preview-live" : "preview-safe")" role="status">
+        <strong>@(Model.AllowLiveSubmission ? "Live preview — this link can create real patron records" : "Safe preview — registrations cannot be submitted")</strong>
+    </div>
+    <p>This bearer URL is shown only once. Anyone who possesses it can access shared draft #@Model.DraftId.</p>
+    <dl>
+        <dt>Organization</dt><dd>@Model.OrganizationDisplayName (#@Model.OrganizationId)</dd>
+        <dt>Form</dt><dd>@Model.FormDisplayName</dd>
+        <dt>Operational branch</dt><dd>@Model.OperationalBranchDisplayName (#@Model.OperationalBranchId)</dd>
+    </dl>
+    <label for="preview-url">Preview URL</label>
+    <input id="preview-url" value="@Model.PreviewUrl" readonly select-on-focus />
+    <div class="button-row">
+        <a class="button" href="@Model.PreviewUrl" target="_blank" rel="noreferrer">Open preview</a>
+        <button type="button" data-copy-preview-url>Copy URL</button>
+    </div>
+    <p data-copy-status role="status" aria-live="polite"></p>
+    <p><a asp-action="Index" asp-route-organizationId="@Model.OrganizationId" asp-route-formCode="@Model.FormCode">Return to this shared draft</a></p>
+</main>
+<script src="~/js/settings.js" asp-append-version="true"></script>

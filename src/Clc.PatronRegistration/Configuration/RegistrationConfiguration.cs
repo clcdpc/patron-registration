@@ -1,4 +1,5 @@
 ﻿using Clc.Melissa;
+using Clc.Melissa.Configuration;
 using Clc.Polaris.Api.Configuration;
 using System;
 using System.Collections.Generic;

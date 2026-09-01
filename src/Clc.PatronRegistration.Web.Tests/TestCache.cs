@@ -4,18 +4,52 @@ using Clc.PatronRegistration.Helpers;
 
 namespace Clc.PatronRegistration.Tests
 {
-    public class TestCache : ICache
+    public class TestCache : ICache, ICacheSnapshotProvider
     {
-        public List<RegistrationFormSetting> SettingsCache { get; set; } = [];
+        public bool IsInitialized { get; set; } = true;
+        private List<RegistrationFormSetting> settings = [];
+        private long? generation = 1;
+        public long? Generation
+        {
+            get => generation;
+            set
+            {
+                generation = value;
+                snapshot = null;
+            }
+        }
+        private List<OrganizationsGetRow> organizations =
+        [
+            new() { OrganizationID = 1, Name = "System", OrganizationCodeID = 1, Abbreviation = "SYS" },
+            new() { OrganizationID = 2, Name = "Library", OrganizationCodeID = 2, Abbreviation = "LIB", ParentOrganizationID = 1 },
+            new() { OrganizationID = 3, Name = "Branch", OrganizationCodeID = 3, Abbreviation = "BRA", ParentOrganizationID = 2 }
+        ];
+
         public List<OrganizationsGetRow> OrganizationCache
         {
-            get
+            get => organizations;
+            set
             {
-                return [new() { OrganizationID = 1, Name = "System", OrganizationCodeID = 1, Abbreviation = "SYS" },
-                        new() { OrganizationID = 2, Name = "Library", OrganizationCodeID = 2, Abbreviation = "LIB", ParentOrganizationID = 1 },
-                        new() { OrganizationID = 3, Name = "Branch", OrganizationCodeID = 3, Abbreviation = "BRA", ParentOrganizationID = 2 }];
+                organizations = value;
+                snapshot = null;
             }
-            set { }
+        }
+
+        private CacheSnapshot? snapshot;
+
+        public CacheSnapshot GetSnapshot() => snapshot ??= new(
+            Array.AsReadOnly(SettingsCache.ToArray()),
+            Array.AsReadOnly(OrganizationCache.ToArray()),
+            Generation);
+
+        public List<RegistrationFormSetting> SettingsCache
+        {
+            get => settings;
+            set
+            {
+                settings = value;
+                snapshot = null;
+            }
         }
 
         public List<OrganizationsGetRow> GetBranches(int orgId) => OrganizationCache.Where(o => o.OrganizationCodeID == 3).ToList();

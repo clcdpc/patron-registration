@@ -1,47 +1,90 @@
 ﻿using Clc.PatronRegistration.Data;
+using Clc.PatronRegistration.Administration;
 using Clc.PatronRegistration.Helpers;
 using Clc.Polaris.Api;
 using Clc.Polaris.Api.Models;
 using Newtonsoft.Json;
+using System.Runtime.CompilerServices;
 using System.Xml.Linq;
+using System.Globalization;
 
 namespace Clc.PatronRegistration.Configuration
 {
-    public class DbSettingProvider : ISettingProvider
+    public class DbSettingProvider : ISettingProvider, IIdentifierSettingStateProvider, IExpirationDateYearsSettingStateProvider,
+        IResetSecondsSettingStateProvider, IDriversLicenseFormatSettingStateProvider
     {
-        public int LibraryId { get; }
+        public int LibraryId { get; protected set; }
         public int OrganizationId { get; }
         [JsonIgnore]
         public ICache Cache { get; }
         public string FormCode { get; } = string.Empty;
+        public int SystemOrganizationId { get; }
+        protected SettingsResolverSnapshot SettingsSnapshot { get; }
+        protected IReadOnlyList<OrganizationsGetRow> OrganizationSnapshot { get; }
+        [JsonIgnore]
+        public SettingsResolverSnapshot ResolutionSnapshot => SettingsSnapshot;
+        [JsonIgnore]
+        public long? SnapshotGeneration { get; }
 
-        public DbSettingProvider(int orgId, ICache cache) : this(orgId, cache, "") { }
+        public DbSettingProvider(int orgId, ICache cache) : this(orgId, cache, "", 1) { }
 
-        public DbSettingProvider(int orgId, ICache cache, string formCode = "")
+        public DbSettingProvider(int orgId, ICache cache, string formCode = "", int systemOrganizationId = 1, int? libraryId = null)
+            : this(orgId, cache, CacheSnapshot.Capture(cache), formCode, systemOrganizationId, libraryId)
+        {
+        }
+
+        public DbSettingProvider(int orgId, ICache cache, CacheSnapshot snapshot, string formCode = "", int systemOrganizationId = 1, int? libraryId = null)
         {
             OrganizationId = orgId;
             FormCode = formCode;
             Cache = cache;
-            var branch = cache.OrganizationCache.Single(o => o.OrganizationID == OrganizationId);
-            LibraryId = Cache.OrganizationCache.GetLibrary(orgId).OrganizationID;
+            SystemOrganizationId = systemOrganizationId;
+            SnapshotGeneration = snapshot.Generation;
+            SettingsSnapshot = snapshot.IndexedSettings;
+            OrganizationSnapshot = snapshot.Organizations;
+            _ = OrganizationSnapshot.Single(o => o.OrganizationID == OrganizationId);
+            LibraryId = libraryId ?? OrganizationSnapshot.GetLibrary(orgId).OrganizationID;
         }
 
-        public T GetSetting<T>(string name, T defaultValue = default!)
+        public virtual T GetSetting<T>(string name, T defaultValue = default!)
         {
-            bool filterSetting(RegistrationFormSetting s) =>
-                new[] { OrganizationId, LibraryId, 1 }.Contains(s.OrganizationID)
-                && s.Setting.Equals(name, StringComparison.OrdinalIgnoreCase)
-                && new[] { "", FormCode }.Contains(s.FormCode, StringComparer.OrdinalIgnoreCase);
-
-            var dbValue = Cache.SettingsCache.Where(filterSetting).OrderByDescending(s => s.OrganizationID).OrderByDescending(s => s.FormCode.Length).FirstOrDefault()?.Value;
+            var dbValue = new SettingsResolver().Resolve(SettingsSnapshot, name, OrganizationId, LibraryId, FormCode, SystemOrganizationId).EffectiveValue;
+            if (typeof(T) == typeof(string) && SafeHtmlPolicy.IsHtmlExecutionContext(name))
+            {
+                dbValue = SafeHtmlPolicy.SanitizeIfHtml(name, dbValue);
+            }
             return ConvertToType(dbValue, defaultValue);
         }
 
-        public static T ConvertToType<T>(string value, T defaultValue = default!)
+        /// <summary>Reads the database setting associated with the calling provider property.</summary>
+        protected T GetPropertySetting<T>([CallerMemberName] string propertyName = "")
+        {
+            var metadata = SettingPropertyMetadataCache.Get(propertyName);
+            return GetSetting<T>(metadata.DatabaseKey);
+        }
+
+        public virtual IdentifierSettingResult GetIdentifierState(string key) => IdentifierSettingParser.Parse(GetSetting<string>(key));
+        public virtual ExpirationDateYearsSettingResult GetExpirationDateYearsState() =>
+            ExpirationDateYearsSettingParser.Parse(GetSetting<string>(
+                SettingPropertyMetadataCache.Get(nameof(ExpirationDateYears)).DatabaseKey));
+        public virtual ResetSecondsSettingResult GetResetSecondsState() =>
+            ResetSecondsSettingParser.Parse(GetSetting<string>(
+                SettingPropertyMetadataCache.Get(nameof(ResetSeconds)).DatabaseKey));
+        public virtual DriversLicenseFormatSettingResult GetDriversLicenseFormatState() =>
+            DriversLicenseFormatSettingParser.Parse(GetSetting<string>(
+                SettingPropertyMetadataCache.Get(nameof(DriversLicenseFormat)).DatabaseKey));
+
+        private int GetLegacySafeInteger([CallerMemberName] string propertyName = "")
+        {
+            var metadata = SettingPropertyMetadataCache.Get(propertyName);
+            return GetIdentifierState(metadata.DatabaseKey).Value.GetValueOrDefault();
+        }
+
+        public static T ConvertToType<T>(string? value, T defaultValue = default!)
         {
             var t = typeof(T);
 
-            if (string.IsNullOrEmpty(value))
+            if (value is null)
             {
                 if (t == typeof(string))
                 {
@@ -51,18 +94,41 @@ namespace Clc.PatronRegistration.Configuration
                 return defaultValue;
             }
 
+            // Empty string is a meaningful configured value for strings, but legacy rows
+            // containing an empty scalar value are equivalent to an unconfigured scalar.
+            if (value.Length == 0 && t != typeof(string))
+            {
+                return defaultValue;
+            }
 
+            var isNullable = t.IsGenericType && t.GetGenericTypeDefinition().Equals(typeof(Nullable<>));
             if (t.IsGenericType && t.GetGenericTypeDefinition().Equals(typeof(Nullable<>)))
             {
                 t = Nullable.GetUnderlyingType(t);
             }
 
+            if (isNullable)
+            {
+                if (t == typeof(int))
+                {
+                    return int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var integer)
+                        ? (T)(object)integer
+                        : defaultValue;
+                }
+                if (t == typeof(DateTime))
+                {
+                    return DateTime.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var date)
+                        ? (T)(object)date
+                        : defaultValue;
+                }
+            }
+
             return Type.GetTypeCode(t) switch
             {
-                TypeCode.Int32 => (T)(object)int.Parse(value),
-                TypeCode.Decimal => (T)(object)decimal.Parse(value),
+                TypeCode.Int32 => (T)(object)int.Parse(value, NumberStyles.Integer, CultureInfo.InvariantCulture),
+                TypeCode.Decimal => (T)(object)decimal.Parse(value, NumberStyles.Number, CultureInfo.InvariantCulture),
                 TypeCode.Boolean => (T)(object)bool.Parse(value),
-                TypeCode.DateTime => (T)(object)DateTime.Parse(value),
+                TypeCode.DateTime => (T)(object)DateTime.Parse(value, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
                 TypeCode.String => (T)(object)value,
                 _ => throw new NotSupportedException($"Conversion to type {t!.Name} is not supported."),
             };
@@ -72,106 +138,107 @@ namespace Clc.PatronRegistration.Configuration
         public string GetFieldErrorMessage(string propertyName) => GetSetting<string>($"alert.{propertyName}");
         public bool GetFieldRequired(string propertyName) => GetSetting<bool>($"require.{propertyName}");
 
-        public List<string> GetRequiredFields()
+        public virtual List<string> GetRequiredFields()
         {
-            var fields = Cache.SettingsCache
-                .Where(s => new[] { OrganizationId, LibraryId, 1 }.Contains(s.OrganizationID) && s.Setting.StartsWith("require.", StringComparison.OrdinalIgnoreCase) && new[] { "", FormCode }.Contains(s.FormCode, StringComparer.OrdinalIgnoreCase))
-                .GroupBy(s => s.Setting)
-                .SelectMany(s => s.OrderByDescending(c => c.OrganizationID).OrderByDescending(c => c.FormCode).Select(c => c.Setting))
-                .Select(s => s.Split("require.")[1])
+            var resolver = new SettingsResolver();
+            return SettingsSnapshot.RequiredKeys
+                .Where(key => bool.TryParse(resolver.Resolve(SettingsSnapshot, key, OrganizationId, LibraryId, FormCode, SystemOrganizationId).EffectiveValue, out var required) && required)
+                .Select(key => key["require.".Length..])
                 .ToList();
-
-            return fields;
         }
-        public string HeaderImageUrl => GetSetting<string>("header_image_url");
-        public string CssFile => GetSetting<string>("css_file");
-        public string WarningText => GetSetting<string>("warning_text");
-        public string CustomFormFooterHtml => GetSetting<string>("custom_form_footer_html");
+        public int? HeaderImageAssetId => GetPropertySetting<int?>();
+        public string CssFile => GetPropertySetting<string>();
+        public string WarningText => GetPropertySetting<string>();
+        public string CustomFormFooterHtml => GetPropertySetting<string>();
 
         public IEnumerable<string> DriversLicenseButtonEnabledIpAddresses
         {
             get
             {
-                var value = GetSetting<string>("show_dl_ips");
-                return string.IsNullOrWhiteSpace(value) ? new List<string>() : value.Split(';').ToList();
+                var value = GetPropertySetting<string>();
+                return string.IsNullOrWhiteSpace(value)
+                    ? new List<string>()
+                    : value.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                        .Where(prefix => !string.IsNullOrWhiteSpace(prefix))
+                        .ToList();
             }
         }
 
-        public bool ResetForm => GetSetting<bool>("reset_form");
-        public bool EnableDriversLicenseSwipe => GetSetting<bool>("show_dl");
-        public bool HideGender => GetSetting<bool>("hide_gender");
-        public bool EnableAgeWarning => GetSetting<bool>("enable_age_warning");
-        public string AgeWarningText => GetSetting<string>("age_warning_text");
-        public bool HideEreceipt => GetSetting<bool>("hide_ereceipt");
-        public string NaGenderText => GetSetting<string>("na_gender_text");
-        public bool NormalizeToUppercase => GetSetting<bool>("normalize_to_uppercase");
-        public string DriversLicenseFormat => GetSetting<string>("dl_format");
-        public bool BypassDupeCheck => GetSetting<bool>("bypass_dupe_check");
-        public string RegistrationText => GetSetting<string>("registration_text");
-        public bool EnablePatronBranchSelectOption => GetSetting<bool>("enable_patron_branch_select_option");
-        public bool BlockOutOfStateRegistrations => GetSetting<bool>("block_out_of_state_registrations");
-        public string RegistrationHeader => GetSetting<string>("registration_form_header");
-        public string DuplicatePatronMessageHtml => GetSetting<string>("duplicate_patron_message_html");
-        public bool EnableLegalNameCheckbox => GetSetting<bool>("enable_legal_name_checkbox");
-        public string LegalNameCheckboxLabel => GetSetting<string>("legal_name_checkbox_label");
-        public bool UseLegalNameOnNotices => GetSetting<bool>("use_legal_name_on_notices");
-        public string DriversLicenseButtonText => GetSetting<string>("drivers_license_button_text");
-        public string DriversLicensePromptText => GetSetting<string>("drivers_license_prompt_text");
-        public string AgreementConfirmButtonText => GetSetting<string>("agreement_confirm_button_text");
-        public string AgreementCancelButtonText => GetSetting<string>("agreement_cancel_button_text");
-        public string KioskRegistrationText => GetSetting<string>("kiosk_registration_text");
-        public string KioskRegistrationHeader => GetSetting<string>("kiosk_registration_header");
-        public string SchoolInfoFieldLegend => GetSetting<string>("school_info_field_legend");
-        public bool DisplayECardCheckbox => GetSetting<bool>("display_ecard_checkbox");
-        public string ECardCheckboxLabel => GetSetting<string>("ecard_checkbox_label");
-        public string MailingListDescriptionHtml => GetSetting<string>("mailing_list_description_html");
-        public bool DisplayMailingListCheckbox => GetSetting<bool>("display_mailing_list_checkbox");
-        public string MailingListCheckboxLabel => GetSetting<string>("mailing_list_checkbox_label");
-        public int MailingListRecordSetId => GetSetting<int>("mailing_list_record_set_id");
-        public int RegistrationLogonUserId => GetSetting<int>("registration_logon_user_id");
-        public int EcardPatronCodeId => GetSetting<int>("ecard_patron_code_id");
-        public int TeacherPatronCodeId => GetSetting<int>("teacher_patron_code_id");
-        public int StudentPatronCodeId => GetSetting<int>("student_patron_code_id");
-        public string SchoolInfoFormat => GetSetting<string>("school_info_format");
-        public string ResponsiblePersonDisclaimer => GetSetting<string>("responsible_person_disclaimer");
-        public string EcardRegistrationText => GetSetting<string>("ecard_registration_text");
-        public string SmsNoticeInformationHtml => GetSetting<string>("sms_notice_information_html");
-        public bool DisplaySmsNoticeInformation => GetSetting<bool>("display_sms_notice_information");
-        public string EcardWelcomeEmailTemplateText => GetSetting<string>("ecard_welcome_email_template_text");
-        public string EcardWelcomeEmailTemplateHtml => GetSetting<string>("ecard_welcome_email_template_html");
-        public string WelcomeEmailTemplateText => GetSetting<string>("welcome_email_template_text");
-        public string WelcomeEmailTemplateHtml => GetSetting<string>("welcome_email_template_html");
-        public string WelcomeEmailFromName => GetSetting<string>("welcome_email_from_name");
-        public string WelcomeEmailSubject => GetSetting<string>("welcome_email_subject");
+        public bool ResetForm => GetPropertySetting<bool>();
+        public bool EnableDriversLicenseSwipe => GetPropertySetting<bool>();
+        public bool HideGender => GetPropertySetting<bool>();
+        public bool EnableAgeWarning => GetPropertySetting<bool>();
+        public string AgeWarningText => GetPropertySetting<string>();
+        public bool EnableAgeBlock => GetPropertySetting<bool>();
+        public string AgeBlockText => GetPropertySetting<string>();
+        public bool HideEreceipt => GetPropertySetting<bool>();
+        public string NaGenderText => GetPropertySetting<string>();
+        public bool NormalizeToUppercase => GetPropertySetting<bool>();
+        public string DriversLicenseFormat => GetPropertySetting<string>();
+        public bool BypassDupeCheck => GetPropertySetting<bool>();
+        public string RegistrationText => GetPropertySetting<string>();
+        public bool EnablePatronBranchSelectOption => GetPropertySetting<bool>();
+        public bool BlockOutOfStateRegistrations => GetPropertySetting<bool>();
+        public string RegistrationHeader => GetPropertySetting<string>();
+        public string DuplicatePatronMessageHtml => GetPropertySetting<string>();
+        public bool EnableLegalNameCheckbox => GetPropertySetting<bool>();
+        public bool UseLegalNameOnNotices => GetPropertySetting<bool>();
+        public string DriversLicenseButtonText => GetPropertySetting<string>();
+        public string DriversLicensePromptText => GetPropertySetting<string>();
+        public string AgreementConfirmButtonText => GetPropertySetting<string>();
+        public string AgreementCancelButtonText => GetPropertySetting<string>();
+        public string KioskRegistrationText => GetPropertySetting<string>();
+        public string KioskRegistrationHeader => GetPropertySetting<string>();
+        public string SchoolInfoFieldLegend => GetPropertySetting<string>();
+        public bool DisplayECardCheckbox => GetPropertySetting<bool>();
+        public string MailingListDescriptionHtml => GetPropertySetting<string>();
+        public bool DisplayMailingListCheckbox => GetPropertySetting<bool>();
+        public int MailingListRecordSetId => GetLegacySafeInteger();
+        public int RegistrationLogonUserId => GetLegacySafeInteger();
+        public int EcardPatronCodeId => GetLegacySafeInteger();
+        public int TeacherPatronCodeId => GetLegacySafeInteger();
+        public int StudentPatronCodeId => GetLegacySafeInteger();
+        public string SchoolInfoFormat => GetPropertySetting<string>();
+        public string ResponsiblePersonDisclaimer => GetPropertySetting<string>();
+        public string EcardRegistrationText => GetPropertySetting<string>();
+        public string SmsNoticeInformationHtml => GetPropertySetting<string>();
+        public bool DisplaySmsNoticeInformation => GetPropertySetting<bool>();
+        public string EcardWelcomeEmailTemplateText => GetPropertySetting<string>();
+        public string EcardWelcomeEmailTemplateHtml => GetPropertySetting<string>();
+        public string WelcomeEmailTemplateText => GetPropertySetting<string>();
+        public string WelcomeEmailTemplateHtml => GetPropertySetting<string>();
+        public string WelcomeEmailFromName => GetPropertySetting<string>();
+        public string WelcomeEmailSubject => GetPropertySetting<string>();
         public string WelcomeEmailAddress => GetSetting<string>("welcome_email_from_address");
-        public string EcardWelcomeEmailSubject => GetSetting<string>("ecard_welcome_email_subject");
-        public string PostmarkApiKey => GetSetting<string>("postmark_api_key");
-        public bool DisplayPreferredPickupLocation => GetSetting<bool>("display_preferred_pickup_location");
-        public bool RequirePreferredPickupLocation => GetSetting<bool>("require_preferred_pickup_location");
-        public bool DisplayResponsiblePersonField => GetSetting<bool>("display_responsible_person_field");
-        public bool PerformPapiDupeBypass => GetSetting<bool>("perform_papi_duplicate_bypass");
-        public bool UseFirstNameForDuplicateWorkaround => GetSetting<bool>("use_first_name_for_duplicate_workaround");
-        public bool UpdatePatronRecordWithMelissaAddress => GetSetting<bool>("update_patron_record_with_melissa_address");
-        public string WelcomeEmailFromAddress => GetSetting<string>("welcome_email_from_address");
-        public string MelissaDataApiKey => GetSetting<string>("melissa_data_api_key");
-        public string ValidAddressRegistrationText => GetSetting<string>("valid_address_registration_text");
-        public string ValidAddressPlusNameRegistrationText => GetSetting<string>("valid_address_plus_name_registration_text");
-        public string OutOfStateBlockMessage => GetSetting<string>("out_of_state_block_message");
-        public string EcardBarcodePrefix => GetSetting<string>("ecard_barcode_prefix");
-        public int ValidAddressPatronCodeId => GetSetting<int>("valid_address_patron_code_id");
-        public int ValidAddressPlusNamePatronCodeId => GetSetting<int>("valid_address_plus_name_patron_code_id");
-        public int ValidAddressRecordSetId => GetSetting<int>("valid_address_record_set_id");
-        public int ValidAddressPlusNameRecordSetId => GetSetting<int>("valid_address_plus_name_record_set_id");
-        public int InvalidAddressRecordSetId => GetSetting<int>("invalid_address_record_set_id");
-        public int? AddToRecordSetId => GetSetting<int>("add_to_record_set_id");
-        public string PostRegistrationNoteText => GetSetting<string>("post_registration_note_text");
-        public DateTime? ExpirationDate => GetSetting<DateTime?>("expiration_date");
-        public int? ExpirationDateYears => GetSetting<int?>("expiration_date_years");
-        public int? PatronCodeId => GetSetting<int?>("patron_code_id");
-        public bool HideBranchSelectIfOnlyOneBranch => GetSetting<bool>("hide_branch_select_if_only_one_option");
-        public bool DisableBranch => GetSetting<bool>("disable_branch");
-        public int ResetSeconds => GetSetting<int>("reset_seconds");
-        public string PhoneNumberFormat => GetSetting<string>("phone_number_format");
-        public bool ForceEcardRemotely => GetSetting<bool>("force_ecard_remotely");
+        public string EcardWelcomeEmailSubject => GetPropertySetting<string>();
+        [JsonIgnore]
+        public string PostmarkApiKey => GetPropertySetting<string>();
+        public bool DisplayPreferredPickupLocation => GetPropertySetting<bool>();
+        public bool DisplayResponsiblePersonField => GetPropertySetting<bool>();
+        public bool PerformPapiDupeBypass => GetPropertySetting<bool>();
+        public bool UseFirstNameForDuplicateWorkaround => GetPropertySetting<bool>();
+        public bool UpdatePatronRecordWithMelissaAddress => GetPropertySetting<bool>();
+        public string WelcomeEmailFromAddress => GetPropertySetting<string>();
+        [JsonIgnore]
+        public string MelissaDataApiKey => GetPropertySetting<string>();
+        public string ValidAddressRegistrationText => GetPropertySetting<string>();
+        public string ValidAddressPlusNameRegistrationText => GetPropertySetting<string>();
+        public string OutOfStateBlockMessage => GetPropertySetting<string>();
+        public string EcardBarcodePrefix => GetPropertySetting<string>();
+        public int ValidAddressPatronCodeId => GetLegacySafeInteger();
+        public int ValidAddressPlusNamePatronCodeId => GetLegacySafeInteger();
+        public int ValidAddressRecordSetId => GetLegacySafeInteger();
+        public int ValidAddressPlusNameRecordSetId => GetLegacySafeInteger();
+        public int InvalidAddressRecordSetId => GetLegacySafeInteger();
+        public int? AddToRecordSetId => GetPropertySetting<int?>();
+        public string PostRegistrationNoteText => GetPropertySetting<string>();
+        public DateTime? ExpirationDate => GetPropertySetting<DateTime?>();
+        public int? ExpirationDateYears => GetPropertySetting<int?>();
+        public int? PatronCodeId => GetPropertySetting<int?>();
+        public bool HideBranchSelectIfOnlyOneBranch => GetPropertySetting<bool>();
+        public bool DisableBranch => GetPropertySetting<bool>();
+        public int ResetSeconds => GetResetSecondsState().Value.GetValueOrDefault();
+        public string PhoneNumberFormat => GetPropertySetting<string>();
+        public bool ForceEcardRemotely => GetPropertySetting<bool>();
     }
 }
