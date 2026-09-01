@@ -25,6 +25,7 @@ class NodeStub {
         this.children = [];
         this.parentElement = null;
         this.tagName = "DIV";
+        this.type = "text";
         this.classList = {
             values: new Set(),
             toggle: (name, force) => {
@@ -42,6 +43,7 @@ class NodeStub {
 
     emit(name, event = {}) {
         const current = { type: name, target: this, currentTarget: this, ...event };
+        if (!current.preventDefault) current.preventDefault = () => { current.defaultPrevented = true; };
         for (const callback of this.listeners[name] || []) callback(current);
         return !current.defaultPrevented;
     }
@@ -68,6 +70,8 @@ class NodeStub {
     }
     remove() { this.parentElement?.removeChild(this); }
     replaceChildren(...nodes) { this.children = []; this.append(...nodes); }
+    close() { this.open = false; this.closeCount = (this.closeCount || 0) + 1; }
+    showModal() { this.open = true; }
     querySelector() { return null; }
     querySelectorAll() { return []; }
     closest() { return null; }
@@ -88,7 +92,7 @@ function createDocument(overrides = {}) {
     return document;
 }
 
-function loadSettings(document = createDocument()) {
+function loadSettings(document = createDocument(), overrides = {}) {
     const context = {
         document,
         window: { addEventListener() {} },
@@ -98,6 +102,7 @@ function loadSettings(document = createDocument()) {
         clearTimeout,
         FormData: class { append() {} },
         fetch: async () => ({ ok: false, json: async () => ({}) }),
+        ...overrides,
         globalThis: null
     };
     context.globalThis = context;
@@ -180,7 +185,13 @@ function makeRow({
     }
     const visible = new NodeStub(value);
     visible.disabled = false;
-    visible.type = "text";
+    visible.type = sensitive ? "password" : "text";
+    const reveal = sensitive ? new NodeStub() : null;
+    if (reveal) {
+        reveal.textContent = "Reveal secret";
+        reveal.setAttribute("aria-expanded", "false");
+        reveal.setAttribute("aria-label", `Reveal ${key}`);
+    }
     const binding = new NodeStub(baselineValue);
     binding.disabled = true;
     const operation = new NodeStub(baselineMode === "inherit" ? "RemoveOverride" : "Upsert");
@@ -242,6 +253,7 @@ function makeRow({
         ".setting-status > span": null,
         ".setting-status": status,
         ".batch-browser-status": batchStatus,
+        ".reveal-secret": reveal,
         "[data-ip-prefix-editor]": prefixEditor,
         ".ip-prefix-add": addPrefix
     };
@@ -285,6 +297,7 @@ function makeRow({
         summary,
         status,
         batchStatus,
+        reveal,
         prefixes,
         addPrefix,
         removeButtons,
@@ -304,8 +317,8 @@ function chooseMode(fixture, desiredMode, desiredValue) {
     return selected;
 }
 
-function makeImageRow({ localAssetValue = "", localAssetMissing = false } = {}) {
-    const fixture = makeRow({ key: "header_image_asset_id", valueType: "image", baselineMode: "inherit", baselineValue: "", value: localAssetValue || "10" });
+function makeImageRow({ baselineMode = "inherit", baselineValue = "", localAssetValue = "", localAssetMissing = false } = {}) {
+    const fixture = makeRow({ key: "header_image_asset_id", valueType: "image", baselineMode, baselineValue, value: baselineValue || localAssetValue || "10" });
     const uploadTrigger = new NodeStub();
     const chooseAnother = new NodeStub();
     const undo = new NodeStub();
@@ -314,6 +327,8 @@ function makeImageRow({ localAssetValue = "", localAssetMissing = false } = {}) 
     const pendingPreview = new NodeStub();
     const pendingFileName = new NodeStub();
     const uploadStatus = new NodeStub();
+    imageFile.files = [];
+    imageFile.dataset.uploadUrl = "/settings/assets/upload";
     pending.querySelector = (selector) => ({
         ".image-pending-preview": pendingPreview,
         ".image-pending-file-name": pendingFileName,
@@ -325,7 +340,7 @@ function makeImageRow({ localAssetValue = "", localAssetMissing = false } = {}) 
     fixture.row.dataset.imageLocalFileName = localAssetValue ? "local-header.png" : "";
     fixture.row.dataset.imageLocalPreviewUrl = localAssetValue ? `/settings/assets/${localAssetValue}` : "";
     fixture.row.dataset.liveSummary = localAssetValue ? "local-header.png" : "No image configured";
-    fixture.binding.value = localAssetValue || "10";
+    fixture.binding.value = baselineValue || localAssetValue || "10";
     const originalQuery = fixture.row.querySelector;
     fixture.row.querySelector = (selector) => ({
         ".image-upload-trigger": uploadTrigger,
@@ -338,6 +353,13 @@ function makeImageRow({ localAssetValue = "", localAssetMissing = false } = {}) 
         ".setting-value-binding": fixture.binding
     }[selector] || originalQuery(selector));
     return { ...fixture, uploadTrigger, chooseAnother, undo, imageFile, pending, pendingPreview, pendingFileName, uploadStatus };
+}
+
+const flush = () => new Promise((resolve) => setImmediate(resolve));
+
+function startImageUpload(fixture, fileName = "replacement.png") {
+    fixture.imageFile.files = [{ name: fileName }];
+    fixture.imageFile.emit("change");
 }
 
 test("ordinary settings use direct semantic dirty state and no candidate edit session", () => {
@@ -414,6 +436,53 @@ test("inheritance modes compare semantically and preserve explicit blank customi
     assert.equal(blank.row.dataset.dirty, "true", "inheritance is distinct from an explicit blank");
     chooseMode(blank, "customize");
     assert.equal(blank.row.dataset.dirty, "false");
+});
+
+test("returning an inherited sensitive setting to inheritance clears and conceals the replacement", () => {
+    const api = loadSettings();
+    const secret = makeRow({ key: "postmark_api_key", baselineMode: "inherit", baselineValue: "", value: "", sensitive: true, inherited: true });
+    const form = makeForm([secret.row]);
+    api.SettingsEditor.initializeStandardRow(secret.row, form);
+
+    chooseMode(secret, "customize");
+    secret.visible.value = "browser-only replacement";
+    secret.visible.emit("input");
+    secret.reveal.click();
+    assert.equal(secret.visible.type, "text");
+
+    chooseMode(secret, "inherit");
+
+    assert.equal(secret.visible.value, "");
+    assert.equal(secret.visible.type, "password");
+    assert.equal(secret.reveal.textContent, "Reveal secret");
+    assert.equal(secret.reveal.getAttribute("aria-expanded"), "false");
+    assert.equal(secret.reveal.getAttribute("aria-label"), "Reveal postmark_api_key");
+    assert.equal(secret.row.dataset.dirty, "false");
+    chooseMode(secret, "customize");
+    assert.equal(secret.visible.value, "", "customizing again must not resurrect the discarded secret");
+});
+
+test("explicit discard clears a revealed inherited sensitive replacement", () => {
+    const api = loadSettings();
+    const secret = makeRow({ key: "postmark_api_key", baselineMode: "inherit", baselineValue: "", value: "", sensitive: true, inherited: true });
+    const form = makeForm([secret.row]);
+    api.SettingsEditor.initializeStandardRow(secret.row, form);
+    chooseMode(secret, "customize");
+    secret.visible.value = "discard me";
+    secret.visible.emit("input");
+    secret.reveal.click();
+
+    api.SettingsWorkflow.discardPendingChanges(form);
+
+    assert.equal(secret.visible.value, "");
+    assert.equal(secret.visible.type, "password");
+    assert.equal(secret.reveal.textContent, "Reveal secret");
+    assert.equal(secret.reveal.getAttribute("aria-expanded"), "false");
+    assert.equal(secret.reveal.getAttribute("aria-label"), "Reveal postmark_api_key");
+    assert.equal(secret.inherit.checked, true);
+    assert.equal(secret.row.dataset.dirty, "false");
+    chooseMode(secret, "customize");
+    assert.equal(secret.visible.value, "");
 });
 
 test("boolean rows provide inherit, yes, and no choices", () => {
@@ -556,6 +625,183 @@ test("image chooser keeps focus on the visible initiating button", () => {
     image.chooseAnother.click();
     assert.equal(chooserClicks, 2);
     assert.equal(focused, image.chooseAnother);
+});
+
+test("unresolved image uploads block navigation and guarded lifecycle submissions", () => {
+    const image = makeImageRow({ baselineMode: "customize", baselineValue: "12" });
+    const form = makeForm([image.row]);
+    const status = new NodeStub();
+    const link = new NodeStub();
+    link.href = "/settings/other";
+    const guardedForm = new NodeStub();
+    guardedForm.matches = () => false;
+    guardedForm.requestSubmit = () => { guardedForm.submissions = (guardedForm.submissions || 0) + 1; };
+    const document = createDocument({
+        querySelector(selector) {
+            return { "#settings-form": form, "#settings-status": status }[selector] || null;
+        },
+        querySelectorAll(selector) {
+            if (selector === ".setting-row") return [image.row];
+            if (selector === ".settings-navigation a") return [link];
+            if (selector === "form[data-guard-action]") return [guardedForm];
+            return [];
+        }
+    });
+    const location = { href: "/settings/current" };
+    loadSettings(document, { fetch: () => new Promise(() => {}), location });
+    startImageUpload(image);
+
+    assert.equal(link.emit("click"), false);
+    assert.equal(location.href, "/settings/current");
+    assert.equal(guardedForm.emit("submit", { submitter: new NodeStub() }), false);
+    assert.equal(guardedForm.submissions || 0, 0);
+    assert.match(status.textContent, /image upload/);
+    assert.equal(focused, image.undo);
+});
+
+test("discard ignores a late image-upload response", async () => {
+    let resolveResponse;
+    const api = loadSettings(createDocument(), {
+        fetch: () => new Promise((resolve) => { resolveResponse = resolve; })
+    });
+    const image = makeImageRow({ baselineMode: "customize", baselineValue: "12" });
+    const form = makeForm([image.row]);
+    api.SettingsEditor.initializeImageRow(image.row, form);
+    startImageUpload(image);
+    assert.equal(image.row.dataset.imageUploading, "true");
+
+    api.SettingsWorkflow.discardPendingChanges(form);
+    resolveResponse({ ok: true, async json() { return { assetId: 91, fileName: "late.png", previewUrl: "/settings/assets/91" }; } });
+    await flush();
+    await flush();
+
+    assert.equal(image.binding.value, "12");
+    assert.equal(image.row.dataset.imageUploading, undefined);
+    assert.equal(image.row.dataset.dirty, "false");
+    assert.equal(image.pending.hidden, true);
+});
+
+test("undo ignores a late image-upload response", async () => {
+    let resolveResponse;
+    const api = loadSettings(createDocument(), {
+        fetch: () => new Promise((resolve) => { resolveResponse = resolve; })
+    });
+    const image = makeImageRow({ baselineMode: "customize", baselineValue: "12" });
+    const form = makeForm([image.row]);
+    api.SettingsEditor.initializeImageRow(image.row, form);
+    startImageUpload(image);
+
+    image.undo.click();
+    resolveResponse({ ok: true, async json() { return { assetId: 92, fileName: "late.png", previewUrl: "/settings/assets/92" }; } });
+    await flush();
+    await flush();
+
+    assert.equal(image.binding.value, "12");
+    assert.equal(image.row.dataset.dirty, "false");
+    assert.equal(image.pending.hidden, true);
+});
+
+test("a first image-upload failure restores a safe clean baseline", async () => {
+    const api = loadSettings(createDocument(), {
+        fetch: async () => ({ ok: false, async json() { return { error: "The image is invalid." }; } })
+    });
+    const image = makeImageRow({ baselineMode: "customize", baselineValue: "12" });
+    const form = makeForm([image.row]);
+    api.SettingsEditor.initializeImageRow(image.row, form);
+    startImageUpload(image, "bad.png");
+    await flush();
+    await flush();
+
+    assert.equal(image.binding.value, "12");
+    assert.equal(image.row.dataset.imageUploading, undefined);
+    assert.equal(image.row.dataset.dirty, "false");
+    assert.equal(image.uploadStatus.classList.contains("image-upload-error"), true);
+    assert.match(image.uploadStatus.textContent, /image is invalid/);
+    image.undo.click();
+    assert.equal(image.pending.hidden, true);
+    assert.equal(image.uploadStatus.classList.contains("image-upload-error"), false);
+});
+
+test("a failed replacement upload preserves the previous pending image", async () => {
+    let requestCount = 0;
+    const api = loadSettings(createDocument(), {
+        fetch: async () => {
+            requestCount++;
+            if (requestCount === 1) return { ok: true, async json() { return { assetId: 91, fileName: "first.png", previewUrl: "/settings/assets/91" }; } };
+            return { ok: false, async json() { return { error: "The image is invalid." }; } };
+        }
+    });
+    const image = makeImageRow({ baselineMode: "customize", baselineValue: "12" });
+    const form = makeForm([image.row]);
+    api.SettingsEditor.initializeImageRow(image.row, form);
+    startImageUpload(image, "first.png");
+    await flush();
+    await flush();
+    startImageUpload(image, "bad.png");
+    await flush();
+    await flush();
+
+    assert.equal(image.binding.value, "91");
+    assert.equal(image.pendingFileName.textContent, "first.png");
+    assert.equal(image.pendingPreview.src, "/settings/assets/91");
+    assert.match(image.uploadStatus.textContent, /first\.png remains selected/);
+    assert.equal(image.uploadStatus.classList.contains("image-upload-error"), true);
+    assert.equal(image.row.dataset.dirty, "true");
+});
+
+test("beforeunload protects unresolved uploads and ordinary pending browser work", () => {
+    let beforeUnload;
+    const ordinary = makeRow({ baselineValue: "saved", value: "saved" });
+    const image = makeImageRow({ baselineMode: "customize", baselineValue: "12" });
+    const form = makeForm([ordinary.row, image.row]);
+    const document = createDocument({
+        querySelector: (selector) => selector === "#settings-form" ? form : null,
+        querySelectorAll: (selector) => selector === ".setting-row" ? [ordinary.row, image.row] : []
+    });
+    const api = loadSettings(document, {
+        fetch: () => new Promise(() => {}),
+        window: { addEventListener(name, callback) { if (name === "beforeunload") beforeUnload = callback; } }
+    });
+
+    ordinary.visible.value = "browser change";
+    ordinary.visible.emit("input");
+    const dirtyEvent = { preventDefault() { this.prevented = true; }, returnValue: undefined };
+    beforeUnload(dirtyEvent);
+    assert.equal(dirtyEvent.prevented, true);
+    assert.equal(dirtyEvent.returnValue, "");
+
+    ordinary.visible.value = "saved";
+    ordinary.visible.emit("input");
+    startImageUpload(image);
+    const uploadEvent = { preventDefault() { this.prevented = true; }, returnValue: undefined };
+    beforeUnload(uploadEvent);
+    assert.equal(uploadEvent.prevented, true);
+    assert.equal(uploadEvent.returnValue, "");
+
+    api.SettingsWorkflow.setWorkflowState({ pending: null, submitting: true, approved: false });
+    const submittingEvent = { preventDefault() { this.prevented = true; }, returnValue: undefined };
+    beforeUnload(submittingEvent);
+    assert.equal(submittingEvent.prevented, undefined);
+});
+
+test("native dialog cancellation restores workflow and trigger focus", () => {
+    const api = loadSettings();
+    const trigger = new NodeStub("changed");
+    trigger.dataset.committedValue = "saved";
+    const dialog = new NodeStub();
+    dialog.open = true;
+    dialog._trigger = trigger;
+    api.SettingsWorkflow.bindDialogCancellation(dialog);
+    api.SettingsWorkflow.setWorkflowState({ pending: { action: true }, submitting: true, approved: true });
+
+    const allowed = dialog.emit("cancel");
+
+    assert.equal(allowed, false);
+    assert.equal(dialog.open, false);
+    assert.equal(trigger.value, "saved");
+    assert.equal(focused, trigger);
+    assert.equal(api.SettingsWorkflow.workflowState().pending, null);
+    assert.equal(api.SettingsWorkflow.workflowState().submitting, false);
 });
 
 test("status filter options compose with search and restore category disclosure state", () => {
@@ -724,7 +970,10 @@ test("settings markup removes ordinary Change/Keep/Cancel sessions and keeps exp
     assert.match(settingRowMarkup, /boolean-mode-group/);
     assert.match(batchRowMarkup, /class="batch-setting-name"/);
     assert.match(batchRowMarkup, /name="Changes\[@token\]\.Key"/);
+    assert.match(batchRowMarkup, /Model\.DraftOperation\.HasValue && Model\.DraftId\.HasValue/);
+    assert.match(batchRowMarkup, /class="batch-remove-draft-change"[^>]+RemoveDraftChange[^>]+data-submit-kind="guarded"[^>]+formnovalidate/);
     assert.match(settingsCss, /\.setting-mode-group/);
+    assert.match(settingsCss, /\.batch-remove-draft-change/);
     assert.doesNotMatch(settingsCss, /\.edit-actions|\.inheritance-message/);
 });
 

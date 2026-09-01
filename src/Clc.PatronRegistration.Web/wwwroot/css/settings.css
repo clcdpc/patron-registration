@@ -161,6 +161,7 @@ body.settings-administration-page #regFormContainer {
 .batch-mode-group label { display: inline-flex; margin: .12rem .7rem .12rem 0; }
 .batch-label-input { display: block !important; margin-top: .3rem !important }
 .batch-label-input input { box-sizing: border-box; min-height: 2.2rem; max-width: 100%; width: min(100%, 24rem) }
+.batch-remove-draft-change { margin-top: .45rem; max-width: 100%; white-space: normal }
 
 /* Comparison reviews remain readable when a dialog is narrow. */
 .review-table-wrap { max-width: 100%; overflow-x: auto }

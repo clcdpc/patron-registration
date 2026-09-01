@@ -87,5 +87,9 @@
                 <label class="batch-label-input"><span class="visually-hidden">Custom label</span><input class="setting-value" type="text" value="@editorValue" maxlength="200" aria-describedby="@validationErrorId" /></label>
             }
         </fieldset>
+        @if (Model.DraftOperation.HasValue && Model.DraftId.HasValue)
+        {
+            <button type="submit" class="batch-remove-draft-change" formaction="@Url.Action("RemoveDraftChange", new { draftId = Model.DraftId })" name="settingKey" value="@definition.Key" data-submit-kind="guarded" formnovalidate aria-label="Remove shared draft change for @definition.DisplayName">Remove shared draft change</button>
+        }
     </td>
 </tr>

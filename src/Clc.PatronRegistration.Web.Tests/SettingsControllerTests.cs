@@ -1982,6 +1982,29 @@ public class SettingsControllerTests
         Assert.IsInstanceOfType<RedirectToActionResult>(controller.DiscardDraft(draft.DraftId, 3, expectedDraftRevision: draft.Revision));
     }
 
+    [DataTestMethod]
+    [DataRow("label.NameFirst", "Draft first name")]
+    [DataRow("require.PhoneVoice1", "true")]
+    public void RemoveDraftChange_BatchSettingUsesGuardedRevision(string settingKey, string draftValue)
+    {
+        var repository = new Mock<ISettingsAdministrationRepository>();
+        var draft = new SettingDraft(25, 3, string.Empty, 7, DraftStatus.Active,
+            [new SettingMutation(settingKey, DraftOperation.Upsert, draftValue)]);
+        repository.Setup(service => service.GetDraft(draft.DraftId)).Returns(draft);
+        var controller = CreateController(repository, LibraryAuthorization());
+
+        var result = controller.RemoveDraftChange(draft.DraftId, 3, string.Empty, settingKey, draft.Revision);
+
+        Assert.IsInstanceOfType<RedirectToActionResult>(result);
+        repository.Verify(service => service.RemoveDraftChange(
+            draft.DraftId,
+            settingKey,
+            It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(),
+            false,
+            It.IsAny<AuditContext>(),
+            draft.Revision), Times.Once);
+    }
+
     [TestMethod]
     public void RemoveDraftChange_ConcurrencyRedirectsWithContext()
     {

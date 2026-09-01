@@ -223,6 +223,21 @@
         controlsAll(row, ".ip-prefix-add, .ip-prefix-remove").forEach((control) => { control.disabled = inherited; });
     }
 
+    function resetSensitiveEditor(row) {
+        if (row?.dataset?.sensitive !== "true") return;
+        const input = controls(row, ".setting-value:not(.setting-value-binding)") || controls(row, ".setting-value");
+        const reveal = controls(row, ".reveal-secret");
+        if (input) {
+            input.value = "";
+            input.type = "password";
+        }
+        if (reveal) {
+            reveal.textContent = "Reveal secret";
+            reveal.setAttribute("aria-expanded", "false");
+            reveal.setAttribute("aria-label", `Reveal ${row.dataset.displayName || "secret"}`);
+        }
+    }
+
     function updatePendingActions(settingsForm = form) {
         if (!settingsForm) return;
         const actions = settingsForm.querySelector?.(".settings-actions");
@@ -289,10 +304,22 @@
             status: status?.textContent || ""
         };
 
-        controlsAll(row, ".setting-mode").forEach((mode) => mode.addEventListener("change", () => updateStandardRow(row, settingsForm)));
+        controlsAll(row, ".setting-mode").forEach((mode) => mode.addEventListener("change", () => {
+            if (mode.checked && modeFromRow(row) === "inherit") resetSensitiveEditor(row);
+            updateStandardRow(row, settingsForm);
+        }));
         const value = controls(row, ".setting-value:not(.setting-value-binding)") || controls(row, ".setting-value");
         value?.addEventListener("input", () => updateStandardRow(row, settingsForm));
         value?.addEventListener("change", () => updateStandardRow(row, settingsForm));
+        const reveal = controls(row, ".reveal-secret");
+        reveal?.addEventListener("click", () => {
+            if (!value) return;
+            const revealing = value.type === "password";
+            value.type = revealing ? "text" : "password";
+            reveal.setAttribute("aria-expanded", revealing.toString());
+            reveal.textContent = revealing ? "Hide secret" : "Reveal secret";
+            reveal.setAttribute("aria-label", `${revealing ? "Hide" : "Reveal"} ${row.dataset.displayName || "secret"}`);
+        });
         controlsAll(row, ".ip-prefix-input").forEach((input) => {
             input.addEventListener("input", () => updateStandardRow(row, settingsForm));
             input.addEventListener("change", () => updateStandardRow(row, settingsForm));
@@ -333,7 +360,8 @@
             const baseline = baselineState(row);
             setSelectedMode(row, baseline.mode, baseline.value);
             const valueEditor = controls(row, ".setting-value:not(.setting-value-binding)") || controls(row, ".setting-value");
-            if (valueEditor && baseline.mode === "customize" && !controls(row, "[data-ip-prefix-editor]")) valueEditor.value = baseline.value;
+            if (row.dataset?.sensitive === "true") resetSensitiveEditor(row);
+            else if (valueEditor && baseline.mode === "customize" && !controls(row, "[data-ip-prefix-editor]")) valueEditor.value = baseline.value;
             if (controls(row, "[data-ip-prefix-editor]")) {
                 const values = baseline.value.split(";").filter(Boolean);
                 const desiredValues = values.length ? values : [""];
@@ -842,16 +870,6 @@
         source.addEventListener("input", render);
         render();
     });
-
-    document.querySelectorAll(".reveal-secret").forEach((button) => button.addEventListener("click", () => {
-        const input = document.getElementById(button.getAttribute("aria-controls"));
-        if (!input) return;
-        const revealing = input.type === "password";
-        input.type = revealing ? "text" : "password";
-        button.setAttribute("aria-expanded", revealing.toString());
-        button.textContent = revealing ? "Hide secret" : "Reveal secret";
-        button.setAttribute("aria-label", `${revealing ? "Hide" : "Reveal"} ${button.closest?.(".setting-row")?.dataset?.displayName || "secret"}`);
-    }));
 
     const dirtyCount = () => form?.querySelectorAll?.('.setting-row[data-dirty="true"]')?.length || 0;
     function restoreContextControl(trigger) {
