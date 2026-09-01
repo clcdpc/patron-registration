@@ -53,7 +53,7 @@
 
     <section id="current-value">
         <h2>Understand the current value</h2>
-        <p>A branch can use a value from its library, and a library can use a system value, unless that level has its own customization. After you expand a setting, <strong>Comes from</strong> identifies where the displayed value was supplied.</p>
+        <p>A branch can use a value from its library, and a library can use a system value, unless that level has its own customization. The collapsed row shows <strong>Inherited</strong> together with its source, and the expanded editor identifies the source beside <strong>Effective now</strong>.</p>
         <table class="settings-help-status-table">
             <caption>Setting statuses</caption>
             <thead>
@@ -83,17 +83,15 @@
         <h2>Find and open a setting</h2>
         <p>Ordinary settings are organized into staff-facing categories by purpose. <strong>Field labels</strong> changes the wording shown beside supported registration fields, while <strong>Required fields</strong> controls the fields whose required behavior is currently configurable. Validation-message settings are planned but are not currently shown.</p>
         <p>The number beside a category or group is the number of settings it contains, and each section can be expanded or collapsed. <strong>Search settings</strong> searches setting names and descriptions across the visible catalog.</p>
-        <p>Select a setting row to expand its description, current value, source, and editing controls. A collapsed row shows its name, current value, and status. <strong>Technical details</strong> can normally be ignored unless support staff request the setting key.</p>
+        <p>Select a setting row to expand its description, effective value, source, and editing controls. A collapsed row shows its name, effective value, and status. <strong>Technical details</strong> can normally be ignored unless support staff request the setting key.</p>
     </section>
 
     <section id="change-setting">
         <h2>Change a setting</h2>
         <ol>
             <li>Expand the setting.</li>
-            <li>Select <strong>Change</strong>.</li>
-            <li>Choose the appropriate action.</li>
-            <li>Enter or select the new value.</li>
-            <li>Select <strong>Keep change</strong>. This closes the editor and marks the row <strong>Unsaved in this browser</strong>; it does not send a request.</li>
+            <li>Choose <strong>Use inherited value</strong> or <strong>Customize here</strong> under <strong>At this scope</strong>.</li>
+            <li>Enter or select the value when customizing. The row is marked <strong>Unsaved in this browser</strong> as soon as its semantic state differs from the loaded state.</li>
             <li>Save immediately or add the change to the shared draft.</li>
         </ol>
         <h3>Set a value here</h3>
@@ -112,7 +110,7 @@
     <section id="shared-draft">
         <h2>Work with a shared draft</h2>
         <p>A shared draft begins when the first changes marked <strong>Unsaved in this browser</strong> are saved with <strong>Save N changes to shared draft</strong>. Once it exists, <strong>Add N changes to shared draft</strong> stores further changes marked <strong>Unsaved in this browser</strong> without making them live. Shared draft changes are visible to other authorized staff.</p>
-        <p>Use <strong>Review N shared draft changes</strong> or <strong>Show shared draft changes only</strong> to find stored changes. <strong>Show customized settings only</strong> means the selected organization/form owns a live override right now; it does not include inherited settings or changes marked <strong>Unsaved in this browser</strong>. The filters compose with search and with each other.</p>
+        <p>Use <strong>Review N shared draft changes</strong> or choose <strong>Shared draft changes</strong> in the status filter to find stored changes. <strong>Customized here</strong> means the selected organization/form owns a live override right now; it does not include inherited settings. The status filter composes with search, and <strong>Unsaved changes</strong> reflects only changes made in this browser.</p>
         <p>An active draft can be reviewed, previewed, published, or discarded. <strong>Remove shared draft change</strong> removes one stored change. <strong>Publish draft</strong> makes all remaining shared-draft changes live. <strong>Discard shared draft</strong> removes the entire draft without publishing it. Saving changes marked <strong>Unsaved in this browser</strong> live does not create a draft.</p>
         <p class="settings-help-note"><strong>Remember:</strong> Discarding changes made in this browser does not alter the shared draft. Review every shared draft change before publishing because another authorized staff member may have contributed to it.</p>
     </section>
@@ -148,23 +146,20 @@
         <ol>
             <li>Select the branch and form.</li>
             <li>Find and expand the setting.</li>
-            <li>Select <strong>Change</strong>.</li>
-            <li>Choose <strong>Set a value here</strong>.</li>
-            <li>Enter the value.</li>
+            <li>Choose <strong>Customize here</strong> and enter the value.</li>
             <li>Use <strong>Save N changes live</strong>, or <strong>Add N changes to shared draft</strong>.</li>
         </ol>
         <h3>Return a branch setting to the library value</h3>
         <ol>
             <li>Select the branch and form.</li>
             <li>Expand the customized setting.</li>
-            <li>Select <strong>Change</strong>.</li>
             <li>Choose <strong>Use inherited value</strong>.</li>
             <li>Save immediately or add the change to the draft.</li>
         </ol>
         <h3>Test several changes before publishing</h3>
         <ol>
             <li>Select the organization and form.</li>
-            <li>Make changes and keep them marked <strong>Unsaved in this browser</strong>, then use <strong>Save N changes to shared draft</strong>.</li>
+            <li>Make changes; each changed row is marked <strong>Unsaved in this browser</strong>. Then use <strong>Save N changes to shared draft</strong>.</li>
             <li>Create a safe preview link.</li>
             <li>Review the registration form.</li>
             <li>Publish the draft when ready, or discard it.</li>

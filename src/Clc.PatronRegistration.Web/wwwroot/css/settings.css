@@ -16,7 +16,7 @@ body.settings-administration-page #regFormContainer {
     width: 100%
 }
 
-.settings-header, .scope-form, .setting-editor, .button-row, .settings-actions, .settings-action-buttons {
+.settings-header, .button-row, .settings-actions, .settings-action-buttons {
     display: flex;
     align-items: center;
     gap: .65rem;
@@ -101,6 +101,107 @@ body.settings-administration-page #regFormContainer {
     .settings-help a { color: inherit; text-decoration: underline }
 }
 
+/* Direct setting editors */
+.setting-content {
+    display: grid;
+    gap: .7rem 1rem;
+    grid-template-columns: minmax(15rem, .8fr) minmax(20rem, 1.2fr);
+}
+.setting-content > .setting-description,
+.setting-content > .technical-details,
+.setting-content > .image-setting,
+.setting-content > button { grid-column: 1 / -1 }
+.setting-content > .setting-editor { grid-column: 2 }
+.setting-content > .setting-draft-value-panel { grid-column: 1 }
+.setting-content > .setting-editor[data-editor-kind="longstring"],
+.setting-content > .setting-editor[data-editor-kind="html"],
+.setting-content > .setting-editor[data-editor-kind="emailtemplate"] { grid-column: 1 / -1 }
+.setting-description { grid-row: 1 }
+.setting-value-panel { background: #f8fafb; border: 1px solid #c8d2da; border-radius: .3rem; min-width: 0; padding: .6rem .7rem }
+.setting-value-panel-heading { align-items: baseline; display: flex; flex-wrap: wrap; gap: .35rem .75rem; justify-content: space-between; margin-bottom: .35rem }
+.setting-value-source, .setting-status-source, .batch-effective small { color: #555; font-size: .86rem }
+.setting-current-value { overflow-wrap: anywhere; white-space: pre-wrap }
+.setting-current-value-full { background: #fff; border: 1px solid #d3d3d3; margin: 0; max-height: 18rem; overflow: auto; padding: .45rem; white-space: pre-wrap }
+.setting-html-value-preview { background: #fff; border: 1px solid #777; box-sizing: border-box; min-height: 8rem; width: 100% }
+.setting-draft-value-panel { background: #f4f8fc; border-color: #9bb8d1 }
+.setting-editor { align-items: start; display: grid; gap: .65rem 1rem; grid-template-columns: minmax(13rem, .65fr) minmax(16rem, 1.35fr); min-width: 0 }
+.setting-mode-group { border: 1px solid #ccd4da; display: grid; gap: .3rem; margin: 0; min-width: 0; padding: .55rem .7rem }
+.setting-mode-group legend { font-weight: 700; padding-inline: .25rem }
+.setting-mode-group label { align-items: baseline; display: flex; flex-wrap: wrap; gap: .3rem .45rem; line-height: 1.35; min-width: 0 }
+.setting-mode-group label small { color: #555; flex-basis: 100%; margin-left: 1.45rem }
+.setting-mode-group input[type="radio"] { flex: 0 0 auto; margin: 0 }
+.boolean-mode-group label small { flex-basis: auto; margin-left: .2rem }
+.value-editor { display: grid; gap: .3rem; min-width: 0 }
+.value-editor > label { font-weight: 600 }
+.value-editor .setting-value { box-sizing: border-box; max-width: 100%; min-height: 2.3rem; width: 100% }
+.value-editor textarea.setting-value { min-height: 8rem; resize: vertical }
+.unit-editor { align-items: center; display: flex; gap: .45rem; max-width: 28rem }
+.unit-editor .setting-value { width: min(100%, 16rem) }
+.setting-unit { color: #454545; white-space: nowrap }
+.blank-inheritance-note { color: #454545; display: block }
+.plain-text-preview { background: #fff; border: 1px solid #777; box-sizing: border-box; max-height: 18rem; min-height: 8rem; overflow: auto; padding: .55rem; white-space: pre-wrap; word-break: break-word }
+.image-mode-group { max-width: 38rem }
+.image-mode-group label small { flex-basis: auto }
+.setting-status { align-items: center; display: inline-flex; flex-direction: column; gap: .08rem; line-height: 1.2; }
+.setting-status-source { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+
+/* Purpose-built homogeneous groups */
+.batch-settings { border-collapse: collapse; table-layout: fixed; width: 100% }
+.batch-settings caption { text-align: left }
+.batch-settings th, .batch-settings td { border-top: 1px solid #d1d1d1; padding: .55rem .65rem; text-align: left; vertical-align: top }
+.batch-settings thead th { background: #e8eef3; border-top: 0; font-size: .85rem }
+.batch-settings th:first-child, .batch-settings td:first-child { width: 27% }
+.batch-settings th:nth-child(2), .batch-settings td:nth-child(2) { width: 25% }
+.batch-setting-name, .batch-effective { overflow-wrap: anywhere }
+.batch-setting-name small, .batch-effective small { display: block; margin-top: .2rem }
+.batch-browser-status { color: #8a5700; font-weight: 600 }
+.batch-scope { min-width: 0 }
+.batch-mode-group { border: 0; padding: 0 }
+.batch-mode-group label { display: inline-flex; margin: .12rem .7rem .12rem 0; }
+.batch-label-input { display: block !important; margin-top: .3rem !important }
+.batch-label-input input { box-sizing: border-box; min-height: 2.2rem; max-width: 100%; width: min(100%, 24rem) }
+
+/* Comparison reviews remain readable when a dialog is narrow. */
+.review-table-wrap { max-width: 100%; overflow-x: auto }
+.review-table { border-collapse: collapse; min-width: 34rem; width: 100% }
+.review-table th, .review-table td { border: 1px solid #c8c8c8; padding: .5rem .6rem; text-align: left; vertical-align: top; }
+.review-table thead { background: #e8eef3 }
+.review-table th[scope="row"] { background: #fafafa }
+.review-table td { overflow-wrap: anywhere }
+
+/* Preview management stays available without pushing the setting list down. */
+.preview-tools { border-top: 0; padding-top: 0; }
+.preview-tools > summary { cursor: pointer; font-weight: 700; padding: .35rem 0; }
+.preview-tools-content { border-top: 1px solid #aaa; margin-top: .3rem; padding-top: .65rem; }
+
+@media (max-width: 60rem) {
+    .setting-content { grid-template-columns: minmax(0, 1fr) }
+    .setting-content > .setting-description, .setting-content > .technical-details,
+    .setting-content > .image-setting, .setting-content > .setting-editor,
+    .setting-content > button { grid-column: 1 }
+    .setting-editor { grid-template-columns: minmax(0, 1fr) }
+}
+@media (max-width: 42rem) {
+    .batch-settings { display: block; overflow: visible }
+    .batch-settings thead { display: none }
+    .batch-settings tbody, .batch-settings tr, .batch-settings td { display: block; width: auto !important }
+    .batch-settings tr { border-top: 1px solid #d1d1d1; padding: .45rem 0 }
+    .batch-settings tr:first-child { border-top: 0 }
+    .batch-settings td { border: 0; padding: .3rem .65rem }
+    .batch-settings td::before { color: #555; display: block; font-size: .75rem; font-weight: 700; margin-bottom: .15rem; text-transform: uppercase }
+    .batch-settings td:nth-child(2)::before { content: "Effective now" }
+    .batch-settings td:nth-child(3)::before { content: "At this scope" }
+    .review-table { min-width: 0 }
+    .review-table thead { display: none }
+    .review-table, .review-table tbody, .review-table tr, .review-table th, .review-table td { display: block; width: auto }
+    .review-table tr { border-top: 1px solid #c8c8c8; padding: .45rem 0 }
+    .review-table tr:first-child { border-top: 0 }
+    .review-table th, .review-table td { border: 0; padding: .25rem .5rem }
+    .review-table td::before { color: #555; display: inline-block; font-size: .75rem; font-weight: 700; margin-right: .35rem; text-transform: uppercase }
+    .review-table td:nth-child(2)::before { content: "Live now:" }
+    .review-table td:nth-child(3)::before { content: "Proposed:" }
+}
+
 .settings-header {
     align-items: flex-start;
     justify-content: space-between;
@@ -173,16 +274,16 @@ body.settings-administration-page #regFormContainer {
     margin-block: .35rem .5rem
 }
 
-.scope-form > div, .setting-editor > div {
+.setting-editor > div {
     display: grid;
     gap: .2rem
 }
 
-.scope-summary, .draft-panel p {
+.draft-panel p {
     margin: .4rem 0
 }
 
-.scope-form select, .settings-search input[type="search"], .setting-editor input, .setting-editor select, .setting-editor textarea {
+.settings-search input[type="search"], .setting-editor input, .setting-editor select, .setting-editor textarea {
     box-sizing: border-box;
     max-width: 100%;
     min-height: 2.25rem;
@@ -199,28 +300,6 @@ body.settings-administration-page #regFormContainer {
     flex-wrap: wrap;
     gap: .25rem 1rem;
     margin-top: .35rem
-}
-
-.settings-search .inline-check {
-    align-items: center;
-    display: inline-flex;
-    gap: .4rem;
-    margin-top: .5rem;
-    max-width: 100%;
-    vertical-align: middle
-}
-
-.settings-search .inline-check input[type="checkbox"] {
-    flex: 0 0 auto;
-    height: auto;
-    margin: 0;
-    min-height: 0;
-    width: auto
-}
-
-.settings-search .inline-check input[type="checkbox"]:focus-visible {
-    outline: 3px solid #1b65a7;
-    outline-offset: 2px
 }
 
 .settings-search .settings-filter-empty { font-weight: 700 }
@@ -328,35 +407,6 @@ body.settings-administration-page #regFormContainer {
         margin: .4rem 0
     }
 
-.setting-source {
-    color: #454545;
-    display: grid;
-    gap: .2rem;
-    margin: .5rem 0
-}
-
-    .setting-source div {
-        display: grid;
-        grid-template-columns: minmax(7rem,10rem) 1fr
-    }
-
-    .setting-source dt {
-        font-weight: 600
-    }
-
-    .setting-source dd {
-        margin: 0;
-        overflow-wrap: anywhere
-    }
-
-.setting-editor {
-    align-items: end
-}
-
-.value-editor {
-    flex: 1 1 24rem
-}
-
 .image-setting {
     display: grid;
     gap: .65rem;
@@ -430,17 +480,6 @@ body.settings-administration-page #regFormContainer {
     color: #8a1c1c
 }
 
-.edit-actions {
-    align-items: center;
-    display: inline-flex;
-    gap: .65rem
-}
-
-.inheritance-message {
-    flex: 1 1 24rem;
-    margin: .35rem 0
-}
-
 .technical-details {
     margin-top: .5rem
 }
@@ -449,15 +488,6 @@ body.settings-administration-page #regFormContainer {
         cursor: pointer;
         font-weight: 600
     }
-
-.html-preview {
-    background: white;
-    border: 1px solid #777;
-    box-sizing: border-box;
-    margin-top: .5rem;
-    min-height: 10rem;
-    width: 100%
-}
 
 .group-introduction {
     margin: .6rem .7rem
@@ -615,10 +645,6 @@ body.settings-administration-page #regFormContainer {
         padding-inline: .7rem
     }
 
-    .setting-source div {
-        grid-template-columns: 1fr
-    }
-
     .settings-actions {
         align-items: stretch;
         flex-direction: column;
@@ -699,29 +725,6 @@ body.settings-administration-page #regFormContainer {
     gap: .3rem .8rem;
     margin: 0;
     min-width: 0
-}
-
-.settings-controls .inline-check {
-    align-items: center;
-    display: inline-flex;
-    gap: .35rem;
-    margin: 0;
-    max-width: 100%;
-    white-space: normal;
-    vertical-align: middle
-}
-
-.settings-controls .inline-check input[type="checkbox"] {
-    flex: 0 0 auto;
-    height: auto;
-    margin: 0;
-    min-height: 0;
-    width: auto
-}
-
-.settings-controls .inline-check input[type="checkbox"]:focus-visible {
-    outline: 3px solid #1b65a7;
-    outline-offset: 2px
 }
 
 .settings-search-row {
@@ -910,7 +913,7 @@ body.settings-administration-page #regFormContainer {
     padding-top: var(--draft-section-gap)
 }
 
-.preview-tools > h3, .preview-links > h4 { margin: 0 0 .4rem }
+.preview-tools > summary, .preview-links > h4 { margin: 0 0 .4rem }
 .preview-tools > form { display: grid; gap: .5rem; min-width: 0 }
 .preview-create-row { align-items: stretch; display: flex; flex-wrap: wrap; gap: var(--draft-control-gap); max-width: 100%; width: fit-content }
 .preview-branch-field { align-items: center; display: flex; flex: 0 1 auto; gap: .4rem .5rem }
@@ -993,3 +996,11 @@ dialog::backdrop { background:rgb(0 0 0 / .55) }
     .preview-link-actions { align-items: stretch; flex-direction: column }
     .preview-link-actions form, .preview-link-actions button { width: 100% }
 }
+
+/* Final settings-page overrides for the direct editor and compact preview disclosure. */
+.preview-tools { border-top: 0; padding-top: 0; }
+.preview-tools > summary { cursor: pointer; font-weight: 700; padding: .35rem 0; }
+.preview-tools-content { border-top: 1px solid #aaa; margin-top: .3rem; padding-top: .65rem; }
+.settings-filter-group { align-items: center; display: flex; gap: .45rem; margin: 0; }
+.settings-filter-group label { white-space: nowrap; }
+.settings-filter-group select { min-height: 2.3rem; min-width: 13rem; }
