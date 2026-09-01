@@ -1046,7 +1046,7 @@ update dbo.RegistrationSettingsCacheGeneration set Generation=0,ModifiedAtUtc=SY
             })
             .Returns(response);
         var melissa = new Mock<IMelissaRestClient>();
-        melissa.Setup(service => service.PersonatorRequest(It.IsAny<Clc.Melissa.Models.PersonatorRequestRecord>()))
+        melissa.Setup(service => service.PersonatorRequest(It.IsAny<Clc.Melissa.Models.PersonatorRequest>()))
             .Returns(new RestResponse<Clc.Melissa.Models.PersonatorResponse>
             {
                 Data = new Clc.Melissa.Models.PersonatorResponse

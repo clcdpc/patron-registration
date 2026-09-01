@@ -43,7 +43,7 @@ public sealed class RegistrationBranchScopeTests
         var routeSettings = Settings(requiredUser5: true);
         var selectedSettings = Settings(requiredUser5: false);
         var melissa = new Mock<IMelissaRestClient>();
-        melissa.Setup(client => client.PersonatorRequest(It.IsAny<PersonatorRequestRecord>()))
+        melissa.Setup(client => client.PersonatorRequest(It.IsAny<PersonatorRequest>()))
             .Throws(new InvalidOperationException("selected branch workflow reached"));
         var melissaFactory = new Mock<IMelissaClientFactory>();
         melissaFactory.Setup(factory => factory.Create(It.IsAny<string>())).Returns(melissa.Object);
@@ -64,7 +64,7 @@ public sealed class RegistrationBranchScopeTests
         var routeSettings = Settings(requiredUser5: false, melissaKey: "route-melissa");
         var selectedSettings = Settings(requiredUser5: false, melissaKey: "branch-melissa");
         var melissa = new Mock<IMelissaRestClient>();
-        melissa.Setup(client => client.PersonatorRequest(It.IsAny<PersonatorRequestRecord>()))
+        melissa.Setup(client => client.PersonatorRequest(It.IsAny<PersonatorRequest>()))
             .Throws(new InvalidOperationException("selected branch Melissa client used"));
         var melissaFactory = new Mock<IMelissaClientFactory>();
         melissaFactory.Setup(factory => factory.Create("branch-melissa")).Returns(melissa.Object);
@@ -86,7 +86,7 @@ public sealed class RegistrationBranchScopeTests
         var routeSettings = Settings(requiredUser5: false, postmarkKey: "route-postmark");
         var selectedSettings = Settings(requiredUser5: false, postmarkKey: "branch-postmark");
         var melissa = new Mock<IMelissaRestClient>();
-        melissa.Setup(client => client.PersonatorRequest(It.IsAny<PersonatorRequestRecord>()))
+        melissa.Setup(client => client.PersonatorRequest(It.IsAny<PersonatorRequest>()))
             .Throws(new InvalidOperationException("selected branch workflow reached"));
         var melissaFactory = new Mock<IMelissaClientFactory>();
         melissaFactory.Setup(factory => factory.Create(It.IsAny<string>())).Returns(melissa.Object);
@@ -110,7 +110,7 @@ public sealed class RegistrationBranchScopeTests
         var selectedSettings = Settings(requiredUser5: false, melissaKey: "branch-melissa",
             postmarkKey: "branch-postmark", organizationId: 3, libraryId: 2);
         var melissa = new Mock<IMelissaRestClient>();
-        melissa.Setup(client => client.PersonatorRequest(It.IsAny<PersonatorRequestRecord>()))
+        melissa.Setup(client => client.PersonatorRequest(It.IsAny<PersonatorRequest>()))
             .Throws(new InvalidOperationException("selected branch Melissa client used"));
         var melissaFactory = new Mock<IMelissaClientFactory>();
         melissaFactory.Setup(factory => factory.Create("branch-melissa")).Returns(melissa.Object);

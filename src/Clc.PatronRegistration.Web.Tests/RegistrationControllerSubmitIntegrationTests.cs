@@ -1,11 +1,15 @@
 using System.Reflection;
 using System.Text;
 using Clc.Melissa;
+using Clc.Melissa.Models;
 using Clc.PatronRegistration.Configuration;
 using Clc.PatronRegistration.Data;
 using Clc.PatronRegistration.Web.Controllers;
 using Clc.PatronRegistration.Web.Settings;
 using Clc.Polaris.Api;
+using Clc.Polaris.Api.Models;
+using Clc.Rest;
+using Clc.Rest.Models;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Abstractions;
@@ -23,6 +27,101 @@ namespace Clc.PatronRegistration.Tests;
 [TestClass]
 public sealed class RegistrationControllerSubmitIntegrationTests
 {
+    [TestMethod]
+    public async Task Submit_StandardRegistration_UsesFinalPatronPayloadAndSucceeds()
+    {
+        using var harness = SubmitHarness.Create();
+        var values = FormValues();
+        values[nameof(Registration.PhoneVoice1)] = "614-555-1212";
+        values[nameof(Registration.AddToMailingList)] = "false";
+
+        var registration = await harness.BindAsync(values);
+        var result = harness.Controller.Submit(registration);
+
+        Assert.AreEqual(RegistrationStatus.Success, result.Status);
+        Assert.IsNotNull(harness.CapturedParams);
+        Assert.AreEqual("JANE", harness.CapturedParams!.NameFirst);
+        Assert.AreEqual("DOE", harness.CapturedParams.NameLast);
+        Assert.AreEqual("123 MAIN STREET", harness.CapturedParams.StreetOne);
+        Assert.AreEqual("COLUMBUS", harness.CapturedParams.City);
+        Assert.AreEqual("OH", harness.CapturedParams.State);
+        Assert.AreEqual("43215", harness.CapturedParams.PostalCode);
+        Assert.AreEqual("(614) 555-1212", harness.CapturedParams.PhoneVoice1);
+        Assert.AreEqual(3, harness.CapturedParams.PatronBranchID);
+        Assert.AreEqual(17, harness.CapturedParams.PatronCode);
+        Assert.AreEqual(1, harness.CapturedParams.LogonUserID);
+        harness.Papi.Verify(value => value.PatronRegistrationCreate(It.IsAny<PatronRegistrationParams>()), Times.Once);
+    }
+
+    [TestMethod]
+    public async Task Submit_SchoolEnabledEmptyUser1_WhenNeitherStudentNorTeacher_Succeeds()
+    {
+        using var harness = SubmitHarness.Create(schoolInfoFormat: "uapl");
+        var registration = await harness.BindAsync(FormValues(user1: string.Empty));
+
+        var result = harness.Controller.Submit(registration);
+
+        Assert.AreEqual(RegistrationStatus.Success, result.Status);
+        Assert.IsFalse(HasErrors(harness.Controller.ModelState, nameof(Registration.User1)));
+        Assert.IsNotNull(harness.CapturedParams);
+        Assert.IsTrue(string.IsNullOrEmpty(harness.CapturedParams!.User1));
+        harness.Papi.Verify(value => value.PatronRegistrationCreate(It.IsAny<PatronRegistrationParams>()), Times.Once);
+    }
+
+    [TestMethod]
+    public async Task Submit_UaplEcard_ClearsUser1AndUsesReturnedPayloadBarcode()
+    {
+        using var harness = SubmitHarness.Create(schoolInfoFormat: "uapl");
+        var registration = await harness.BindAsync(FormValues(
+            user1: "Hidden school", isECard: true));
+
+        var result = harness.Controller.Submit(registration);
+
+        Assert.AreEqual(RegistrationStatus.Success, result.Status);
+        Assert.IsNotNull(harness.CapturedParams);
+        StringAssert.StartsWith(harness.CapturedParams!.Barcode, "ECARD-");
+        Assert.AreEqual(harness.CapturedParams.Barcode, registration.Barcode);
+        Assert.AreEqual(string.Empty, harness.CapturedParams.User1);
+        Assert.AreEqual(42, harness.CapturedParams.PatronCode);
+        harness.Papi.Verify(value => value.PatronRegistrationCreate(It.IsAny<PatronRegistrationParams>()), Times.Once);
+    }
+
+    [DataTestMethod]
+    [DataRow(true, false, "Selected school", 41)]
+    [DataRow(false, true, "Selected school", 43)]
+    public async Task Submit_SchoolRegistration_UsesSelectedSchoolAndRolePatronCode(
+        bool isStudent, bool isTeacher, string school, int expectedPatronCode)
+    {
+        using var harness = SubmitHarness.Create(schoolInfoFormat: "uapl");
+        var registration = await harness.BindAsync(FormValues(
+            user1: school, isStudent: isStudent, isTeacher: isTeacher));
+
+        var result = harness.Controller.Submit(registration);
+
+        Assert.AreEqual(RegistrationStatus.Success, result.Status);
+        Assert.IsNotNull(harness.CapturedParams);
+        Assert.AreEqual(school, harness.CapturedParams!.User1);
+        Assert.AreEqual(expectedPatronCode, harness.CapturedParams.PatronCode);
+        harness.Papi.Verify(value => value.PatronRegistrationCreate(It.IsAny<PatronRegistrationParams>()), Times.Once);
+    }
+
+    [TestMethod]
+    public async Task Submit_Ecard_UsesEcardCodeExpirationAndOutboundBarcode()
+    {
+        using var harness = SubmitHarness.Create();
+        var registration = await harness.BindAsync(FormValues(isECard: true));
+
+        var result = harness.Controller.Submit(registration);
+
+        Assert.AreEqual(RegistrationStatus.Success, result.Status);
+        Assert.IsNotNull(harness.CapturedParams);
+        StringAssert.StartsWith(harness.CapturedParams!.Barcode, "ECARD-");
+        Assert.AreEqual(42, harness.CapturedParams.PatronCode);
+        Assert.IsNotNull(harness.CapturedParams.ExpirationDate);
+        Assert.AreEqual(harness.CapturedParams.Barcode, registration.Barcode);
+        harness.Papi.Verify(value => value.PatronRegistrationCreate(It.IsAny<PatronRegistrationParams>()), Times.Once);
+    }
+
     [TestMethod]
     public async Task SchoolInfoFormat_EmptyHiddenUser1_WhenNeitherStudentNorTeacher_IsValidForUser1()
     {
@@ -42,28 +141,18 @@ public sealed class RegistrationControllerSubmitIntegrationTests
         bool isStudent, bool isTeacher)
     {
         using var harness = SubmitHarness.Create(schoolInfoFormat: "uapl");
-        var previousGlobal = DbHelper.Global;
-        DbHelper.Global = harness.Db.Object;
+        var registration = await harness.BindAsync(FormValues(
+            user1: string.Empty, isStudent: isStudent, isTeacher: isTeacher));
 
-        try
-        {
-            var registration = await harness.BindAsync(FormValues(
-                user1: string.Empty, isStudent: isStudent, isTeacher: isTeacher));
+        var result = harness.Controller.Submit(registration);
 
-            var result = harness.Controller.Submit(registration);
-
-            Assert.IsTrue(result.Errors.Any(error => error.Value == "Please select a school"),
-                $"Errors: {string.Join(" | ", result.Errors.Select(error => $"{error.Key}={error.Value}"))}");
-            Assert.IsFalse(HasErrors(harness.Controller.ModelState, nameof(Registration.User1)));
-            harness.Melissa.VerifyNoOtherCalls();
-            harness.Papi.VerifyNoOtherCalls();
-            harness.Email.VerifyNoOtherCalls();
-            harness.Db.Verify(db => db.AddRegistrationHistoryEntry(It.IsAny<RegistrationHistoryEntry>()), Times.Once);
-        }
-        finally
-        {
-            DbHelper.Global = previousGlobal;
-        }
+        Assert.IsTrue(result.Errors.Any(error => error.Value == "Please select a school"),
+            $"Errors: {string.Join(" | ", result.Errors.Select(error => $"{error.Key}={error.Value}"))}");
+        Assert.IsFalse(HasErrors(harness.Controller.ModelState, nameof(Registration.User1)));
+        harness.Melissa.VerifyNoOtherCalls();
+        harness.Papi.VerifyNoOtherCalls();
+        harness.Email.VerifyNoOtherCalls();
+        harness.Db.Verify(db => db.AddRegistrationHistoryEntry(It.IsAny<RegistrationHistoryEntry>()), Times.Once);
     }
 
     [DataTestMethod]
@@ -90,35 +179,25 @@ public sealed class RegistrationControllerSubmitIntegrationTests
         string deliveryOptionId)
     {
         using var harness = SubmitHarness.Create();
-        var previousGlobal = DbHelper.Global;
-        DbHelper.Global = harness.Db.Object;
+        var registration = await harness.BindAsync(FormValues(deliveryOptionId: deliveryOptionId));
+        var bindingErrorsBeforeSubmit = harness.Controller.ModelState[nameof(Registration.DeliveryOptionId)]!
+            .Errors.Select(error => error.ErrorMessage).ToArray();
 
-        try
-        {
-            var registration = await harness.BindAsync(FormValues(deliveryOptionId: deliveryOptionId));
-            var bindingErrorsBeforeSubmit = harness.Controller.ModelState[nameof(Registration.DeliveryOptionId)]!
-                .Errors.Select(error => error.ErrorMessage).ToArray();
+        var result = harness.Controller.Submit(registration);
 
-            var result = harness.Controller.Submit(registration);
-
-            Assert.IsFalse(harness.Controller.ModelState.IsValid);
-            Assert.IsTrue(HasErrors(harness.Controller.ModelState, nameof(Registration.DeliveryOptionId)));
-            CollectionAssert.AreEqual(bindingErrorsBeforeSubmit,
-                harness.Controller.ModelState[nameof(Registration.DeliveryOptionId)]!.Errors
-                    .Select(error => error.ErrorMessage).ToArray());
-            Assert.IsTrue(result.Errors.Any(error => error.Key == nameof(Registration.DeliveryOptionId)));
-            harness.MelissaFactory.Verify(factory => factory.Create(It.IsAny<string>()), Times.Never);
-            harness.EmailFactory.Verify(factory => factory.Create(It.IsAny<string>()), Times.Never);
-            harness.Melissa.VerifyNoOtherCalls();
-            harness.Papi.VerifyNoOtherCalls();
-            harness.Email.VerifyNoOtherCalls();
-            harness.Db.Verify(db => db.AddRegistrationHistoryEntry(It.IsAny<RegistrationHistoryEntry>()), Times.Never);
-            harness.Db.VerifyNoOtherCalls();
-        }
-        finally
-        {
-            DbHelper.Global = previousGlobal;
-        }
+        Assert.IsFalse(harness.Controller.ModelState.IsValid);
+        Assert.IsTrue(HasErrors(harness.Controller.ModelState, nameof(Registration.DeliveryOptionId)));
+        CollectionAssert.AreEqual(bindingErrorsBeforeSubmit,
+            harness.Controller.ModelState[nameof(Registration.DeliveryOptionId)]!.Errors
+                .Select(error => error.ErrorMessage).ToArray());
+        Assert.IsTrue(result.Errors.Any(error => error.Key == nameof(Registration.DeliveryOptionId)));
+        harness.MelissaFactory.Verify(factory => factory.Create(It.IsAny<string>()), Times.Never);
+        harness.EmailFactory.Verify(factory => factory.Create(It.IsAny<string>()), Times.Never);
+        harness.Melissa.VerifyNoOtherCalls();
+        harness.Papi.VerifyNoOtherCalls();
+        harness.Email.VerifyNoOtherCalls();
+        harness.Db.Verify(db => db.AddRegistrationHistoryEntry(It.IsAny<RegistrationHistoryEntry>()), Times.Never);
+        harness.Db.VerifyNoOtherCalls();
     }
 
     [TestMethod]
@@ -146,7 +225,8 @@ public sealed class RegistrationControllerSubmitIntegrationTests
         bool isStudent = false,
         bool isTeacher = false,
         string deliveryOptionId = "1",
-        string user5 = "") => new(StringComparer.OrdinalIgnoreCase)
+        string user5 = "",
+        bool isECard = false) => new(StringComparer.OrdinalIgnoreCase)
         {
             [nameof(Registration.PatronBranchID)] = "3",
             [nameof(Registration.NameFirst)] = "Jane",
@@ -163,7 +243,8 @@ public sealed class RegistrationControllerSubmitIntegrationTests
             [nameof(Registration.User1)] = user1,
             [nameof(Registration.User5)] = user5,
             [nameof(Registration.IsStudent)] = isStudent.ToString(),
-            [nameof(Registration.IsTeacher)] = isTeacher.ToString()
+            [nameof(Registration.IsTeacher)] = isTeacher.ToString(),
+            [nameof(Registration.IsECard)] = isECard.ToString()
         };
 
     private static bool HasErrors(ModelStateDictionary modelState, string key) =>
@@ -180,6 +261,7 @@ public sealed class RegistrationControllerSubmitIntegrationTests
         public readonly Mock<IEmailSender> Email;
         public readonly Mock<IMelissaClientFactory> MelissaFactory;
         public readonly Mock<IEmailSenderFactory> EmailFactory;
+        public PatronRegistrationParams? CapturedParams { get; private set; }
 
         private SubmitHarness(
             ServiceProvider provider,
@@ -226,7 +308,26 @@ public sealed class RegistrationControllerSubmitIntegrationTests
             var emailFactory = new Mock<IEmailSenderFactory>();
             melissaFactory.Setup(factory => factory.Create(It.IsAny<string>())).Returns(melissa.Object);
             emailFactory.Setup(factory => factory.Create(It.IsAny<string>())).Returns(email.Object);
-
+            var melissaResponse = new RestResponse<PersonatorResponse>
+            {
+                Data = new PersonatorResponse
+                {
+                    Records =
+                    [
+                        new Record
+                        {
+                            Results = "AS01",
+                            AddressLine1 = "123 Main Street",
+                            AddressLine2 = "",
+                            City = "Columbus",
+                            State = "OH",
+                            PostalCode = "43215"
+                        }
+                    ]
+                }
+            };
+            melissa.Setup(client => client.PersonatorRequest(It.IsAny<PersonatorRequest>()))
+                .Returns(melissaResponse);
             var services = new ServiceCollection();
             services.AddLogging();
             services.AddControllersWithViews()
@@ -257,8 +358,21 @@ public sealed class RegistrationControllerSubmitIntegrationTests
                 }
             };
 
-            return new SubmitHarness(provider, httpContext, controller, db, papi, melissa, email,
+            var harness = new SubmitHarness(provider, httpContext, controller, db, papi, melissa, email,
                 melissaFactory, emailFactory);
+            papi.Setup(client => client.PatronRegistrationCreate(It.IsAny<PatronRegistrationParams>()))
+                .Callback<PatronRegistrationParams>(parameters => harness.CapturedParams = parameters)
+                .Returns((PatronRegistrationParams parameters) => new RestResponse<PatronRegistrationCreateResult>
+                {
+                    Data = new PatronRegistrationCreateResult
+                    {
+                        PatronID = 123,
+                        Barcode = parameters.Barcode,
+                        PAPIErrorCode = 0,
+                        ErrorMessage = string.Empty
+                    }
+                });
+            return harness;
         }
 
         public async Task<Registration> BindAsync(IReadOnlyDictionary<string, string> values)
@@ -342,6 +456,25 @@ public sealed class RegistrationControllerSubmitIntegrationTests
             settings.SetupGet(value => value.LibraryId).Returns(2);
             settings.SetupGet(value => value.OrganizationId).Returns(3);
             settings.SetupGet(value => value.PhoneNumberFormat).Returns("($1) $2-$3");
+            settings.SetupGet(value => value.PatronCodeId).Returns(17);
+            settings.SetupGet(value => value.RegistrationLogonUserId).Returns(19);
+            settings.SetupGet(value => value.EcardPatronCodeId).Returns(42);
+            settings.SetupGet(value => value.StudentPatronCodeId).Returns(41);
+            settings.SetupGet(value => value.TeacherPatronCodeId).Returns(43);
+            settings.SetupGet(value => value.EcardBarcodePrefix).Returns("ECARD-");
+            settings.SetupGet(value => value.ExpirationDateYears).Returns(1);
+            settings.SetupGet(value => value.RegistrationText).Returns("Registration complete");
+            settings.SetupGet(value => value.DriversLicenseButtonEnabledIpAddresses).Returns(Array.Empty<string>());
+            settings.SetupGet(value => value.DisplayECardCheckbox).Returns(true);
+            settings.SetupGet(value => value.ForceEcardRemotely).Returns(false);
+            settings.SetupGet(value => value.BypassDupeCheck).Returns(false);
+            settings.SetupGet(value => value.NormalizeToUppercase).Returns(true);
+            settings.SetupGet(value => value.UpdatePatronRecordWithMelissaAddress).Returns(true);
+            settings.SetupGet(value => value.AddToRecordSetId).Returns((int?)null);
+            settings.SetupGet(value => value.MailingListRecordSetId).Returns(0);
+            settings.SetupGet(value => value.ValidAddressRecordSetId).Returns(0);
+            settings.SetupGet(value => value.ValidAddressPlusNameRecordSetId).Returns(0);
+            settings.SetupGet(value => value.InvalidAddressRecordSetId).Returns(0);
             settings.SetupGet(value => value.FormCode).Returns(string.Empty);
             settings.SetupGet(value => value.SchoolInfoFormat).Returns(schoolInfoFormat);
             settings.SetupGet(value => value.MelissaDataApiKey).Returns(string.Empty);

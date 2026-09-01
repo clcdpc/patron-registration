@@ -31,7 +31,7 @@ public sealed class DisableBranchRegistrationTests
         db.Setup(value => value.CheckPatronIsDuplicate(It.IsAny<int>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<DateTime>()))
             .Returns(false);
         var melissa = new Mock<IMelissaRestClient>();
-        melissa.Setup(value => value.PersonatorRequest(It.IsAny<PersonatorRequestRecord>()))
+        melissa.Setup(value => value.PersonatorRequest(It.IsAny<PersonatorRequest>()))
             .Throws(new InvalidOperationException("normal workflow reached"));
         var registration = ValidRegistration(settings.Object);
 
@@ -40,7 +40,7 @@ public sealed class DisableBranchRegistrationTests
             Mock.Of<IPapiClient>(), melissa.Object, Mock.Of<IEmailSender>()));
 
         Assert.AreEqual("normal workflow reached", exception.Message);
-        melissa.Verify(value => value.PersonatorRequest(It.IsAny<PersonatorRequestRecord>()), Times.Once);
+        melissa.Verify(value => value.PersonatorRequest(It.IsAny<PersonatorRequest>()), Times.Once);
     }
 
     [TestMethod]
@@ -68,7 +68,7 @@ public sealed class DisableBranchRegistrationTests
 
             Assert.AreEqual(RegistrationStatus.Disabled, result.Status);
             Assert.AreEqual(Registration.RegistrationUnavailableMessage, result.Message);
-            melissa.Verify(value => value.PersonatorRequest(It.IsAny<PersonatorRequestRecord>()), Times.Never);
+            melissa.Verify(value => value.PersonatorRequest(It.IsAny<PersonatorRequest>()), Times.Never);
             papi.Verify(value => value.PatronRegistrationCreate(It.IsAny<PatronRegistrationParams>()), Times.Never);
             papi.Verify(value => value.RecordSetContentAdd(It.IsAny<int>(), It.IsAny<int>(), It.IsAny<int>(), It.IsAny<int>()), Times.Never);
             papi.Verify(value => value.UpdatePatronNotesData(
@@ -101,7 +101,7 @@ public sealed class DisableBranchRegistrationTests
             Mock.Of<IPapiClient>(), melissa.Object, Mock.Of<IEmailSender>());
 
         Assert.AreEqual(RegistrationStatus.Disabled, result.Status);
-        melissa.Verify(value => value.PersonatorRequest(It.IsAny<PersonatorRequestRecord>()), Times.Never);
+        melissa.Verify(value => value.PersonatorRequest(It.IsAny<PersonatorRequest>()), Times.Never);
         db.VerifyNoOtherCalls();
     }
 
@@ -254,7 +254,7 @@ public sealed class DisableBranchRegistrationTests
         var attempt = (RegistrationAttempt)result.Value!;
 
         Assert.AreEqual(RegistrationStatus.Disabled, attempt.Status);
-        melissa.Verify(value => value.PersonatorRequest(It.IsAny<PersonatorRequestRecord>()), Times.Never);
+        melissa.Verify(value => value.PersonatorRequest(It.IsAny<PersonatorRequest>()), Times.Never);
         papi.Verify(value => value.PatronRegistrationCreate(It.IsAny<PatronRegistrationParams>()), Times.Never);
         papi.Verify(value => value.RecordSetContentAdd(It.IsAny<int>(), It.IsAny<int>(), It.IsAny<int>(), It.IsAny<int>()), Times.Never);
         papi.Verify(value => value.UpdatePatronNotesData(
@@ -292,7 +292,7 @@ public sealed class DisableBranchRegistrationTests
         db.Setup(value => value.CheckPatronIsDuplicate(It.IsAny<int>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<DateTime>()))
             .Returns(false);
         var melissa = new Mock<IMelissaRestClient>();
-        melissa.Setup(value => value.PersonatorRequest(It.IsAny<PersonatorRequestRecord>()))
+        melissa.Setup(value => value.PersonatorRequest(It.IsAny<PersonatorRequest>()))
             .Throws(new InvalidOperationException("preview workflow reached"));
         var repository = new Mock<ISettingsAdministrationRepository>();
         repository.Setup(service => service.TryAdmitLivePreviewSubmission(It.IsAny<long>(), It.IsAny<long>()))
@@ -308,7 +308,7 @@ public sealed class DisableBranchRegistrationTests
         var exception = Assert.ThrowsException<InvalidOperationException>(() => controller.Submit("ignored", ValidRegistration(settings)));
 
         Assert.AreEqual("preview workflow reached", exception.Message);
-        melissa.Verify(value => value.PersonatorRequest(It.IsAny<PersonatorRequestRecord>()), Times.Once);
+        melissa.Verify(value => value.PersonatorRequest(It.IsAny<PersonatorRequest>()), Times.Once);
     }
 
     [TestMethod]

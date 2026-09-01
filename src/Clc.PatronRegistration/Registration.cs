@@ -218,7 +218,7 @@ namespace Clc.PatronRegistration
 
             if (!ValidateRegistration(db, papi))
             {
-                AddHistoryEntry(ip);
+                AddHistoryEntry(db, ip);
                 return new RegistrationAttempt { Status = RegistrationStatus.Error, Errors = ModelErrors };
             }
 
@@ -246,7 +246,7 @@ namespace Clc.PatronRegistration
 
             if (!ValidateRegistration(db, papi))
             {
-                AddHistoryEntry(ip);
+                AddHistoryEntry(db, ip);
                 return new RegistrationAttempt { Status = RegistrationStatus.Error, Errors = ModelErrors };
             }
 
@@ -263,21 +263,22 @@ namespace Clc.PatronRegistration
             }
 
             var papiResponse = papi.PatronRegistrationCreate(registrationParams);
-            logger.Trace(papiResponse.Data.ToJson());
+            logger.Trace("Patron registration create returned PAPI error code {0}.",
+                papiResponse?.Data?.PAPIErrorCode);
 
             if (!BypassPapiDupeCheck(registrationParams, papiResponse, papi, out papiResponse))
             {
-                AddHistoryEntry(ip, papiResponse, "duplicate that cannot be bypassed");
+                AddHistoryEntry(db, ip, papiResponse, "duplicate that cannot be bypassed");
                 return new RegistrationAttempt { Status = RegistrationStatus.Duplicate, Message = DuplicateMessage(papi) };
             }
 
             if ((papiResponse?.Data?.PatronID).GetValueOrDefault(0) <= 0)
             {
-                AddHistoryEntry(ip, papiResponse, $"{papiResponse.Data?.PAPIErrorCode} - {papiResponse.Data?.ErrorMessage}");
+                AddHistoryEntry(db, ip, papiResponse, $"{papiResponse.Data?.PAPIErrorCode} - {papiResponse.Data?.ErrorMessage}");
                 return HandlePapiRegistrationCreateError(papiResponse);
             }
 
-            AddHistoryEntry(ip, papiResponse);
+            AddHistoryEntry(db, ip, papiResponse);
             return FinalizeRegistration(ip, papiResponse, db, papi, emailSender);
         }
 
@@ -664,7 +665,7 @@ namespace Clc.PatronRegistration
 
                     if (_papiResponse.Data?.PAPIErrorCode == -3528)
                     {
-                        logger.Info($"Patron {NameFirst} {NameLast} is a duplicate that cannot be bypassed");
+                        logger.Info("A duplicate patron registration could not be bypassed.");
 
                         return false;
                     }
@@ -684,7 +685,8 @@ namespace Clc.PatronRegistration
                 ZipMismatchRetry = true;
                 return new RegistrationAttempt { Status = RegistrationStatus.ZipMismatchRetry };
             }
-            logger.Error($"Error message: {papiResponse?.Data?.ErrorMessage}\r\nRegistration Data: {JsonConvert.SerializeObject(papiResponse)}");
+            logger.Error("Patron registration create returned PAPI error code {0}.",
+                papiResponse?.Data?.PAPIErrorCode);
 
             return new RegistrationAttempt { Status = RegistrationStatus.Error, Message = $"An error occurred during your registration. If this problem persists, please contact the library.\r\n\r\nError Code: {papiResponse?.Data?.PAPIErrorCode}\r\nError Message:{papiResponse?.Data?.ErrorMessage}" };
         }
@@ -703,7 +705,7 @@ namespace Clc.PatronRegistration
             return new RegistrationAttempt { Status = RegistrationStatus.Success, Message = GetRegistrationSuccessText(ip) };
         }
 
-        public void AddHistoryEntry(string ip, IRestResponse<PatronRegistrationCreateResult> papiResponse = null!, string status = "")
+        public void AddHistoryEntry(IDbHelper db, string ip, IRestResponse<PatronRegistrationCreateResult> papiResponse = null!, string status = "")
         {
             if (string.IsNullOrWhiteSpace(status))
             {
@@ -724,7 +726,7 @@ namespace Clc.PatronRegistration
 
 
             var entry = new RegistrationHistoryEntry(ip, status, this) { Result = status, SettingsSnapshot = settingsSnapshot, PapiResponse = papiResponseJson };
-            DbHelper.Global.AddRegistrationHistoryEntry(entry);
+            db.AddRegistrationHistoryEntry(entry);
         }
         string GetRegistrationSuccessText(string ip)
         {
@@ -847,7 +849,8 @@ namespace Clc.PatronRegistration
             var response = papi.RecordSetContentAdd(recordSetId, patronId);
             if (response.Data.PAPIErrorCode < 0)
             {
-                logger.Error($"Error adding patron {patronId} to record set {recordSetId}: {response.Data.PAPIErrorCode} - {response.Data.ErrorMessage}");
+                logger.Error("A post-registration record-set update returned PAPI error code {0}.",
+                    response.Data.PAPIErrorCode);
             }
         }
 
