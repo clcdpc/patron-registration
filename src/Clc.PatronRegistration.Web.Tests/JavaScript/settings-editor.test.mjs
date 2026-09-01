@@ -539,6 +539,25 @@ test("customizing a remove-override image reuses the live local asset", () => {
     assert.equal(missingLocal.row.dataset.imageNeedsUpload, "true");
 });
 
+test("image chooser keeps focus on the visible initiating button", () => {
+    const api = loadSettings();
+    const image = makeImageRow({ localAssetValue: "41" });
+    const form = makeForm([image.row]);
+    api.SettingsEditor.initializeImageRow(image.row, form);
+    let chooserClicks = 0;
+    image.imageFile.click = () => { chooserClicks++; };
+
+    focused = image.uploadTrigger;
+    image.uploadTrigger.click();
+    assert.equal(chooserClicks, 1);
+    assert.equal(focused, image.uploadTrigger);
+
+    focused = image.chooseAnother;
+    image.chooseAnother.click();
+    assert.equal(chooserClicks, 2);
+    assert.equal(focused, image.chooseAnother);
+});
+
 test("status filter options compose with search and restore category disclosure state", () => {
     const search = new NodeStub();
     search.value = "";

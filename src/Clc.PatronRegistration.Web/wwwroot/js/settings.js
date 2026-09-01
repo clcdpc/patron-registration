@@ -596,8 +596,8 @@
             return imageState.uploadPromise;
         }
 
-        uploadTrigger?.addEventListener("click", () => { imageFile?.focus?.(); imageFile?.click?.(); });
-        chooseAnother?.addEventListener("click", () => { imageFile?.focus?.(); imageFile?.click?.(); });
+        uploadTrigger?.addEventListener("click", () => { imageFile?.click?.(); });
+        chooseAnother?.addEventListener("click", () => { imageFile?.click?.(); });
         undo?.addEventListener("click", () => restoreBaseline());
         inheritedMode?.addEventListener("change", chooseInherited);
         customizeMode?.addEventListener("change", chooseCustomize);
