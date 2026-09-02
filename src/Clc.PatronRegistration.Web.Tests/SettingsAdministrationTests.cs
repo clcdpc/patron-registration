@@ -1819,21 +1819,25 @@ public class SettingsAdministrationTests
         var batch = File.ReadAllText(Path.Combine(root, "src/Clc.PatronRegistration.Web/Views/Settings/_BatchSettingRow.cshtml"));
         var script = File.ReadAllText(Path.Combine(root, "src/Clc.PatronRegistration.Web/wwwroot/js/settings.js"));
         var css = File.ReadAllText(Path.Combine(root, "src/Clc.PatronRegistration.Web/wwwroot/css/settings.css"));
+        var normalizedCss = css.Replace("\r\n", "\n", StringComparison.Ordinal);
 
         Assert.IsFalse(partial.Contains("<select id=\"@operationId\"", StringComparison.Ordinal));
         StringAssert.Contains(partial, "class=\"operation\" type=\"hidden\"");
         StringAssert.Contains(partial, "class=\"image-setting\"");
-        StringAssert.Contains(partial, "class=\"image-upload-trigger\"");
+        StringAssert.Contains(partial, "class=\"setting-change image-upload-trigger\"");
         StringAssert.Contains(partial, "class=\"image-choose-another\"");
-        StringAssert.Contains(partial, "class=\"image-undo-pending\"");
+        StringAssert.Contains(partial, "class=\"setting-comparison\"");
+        StringAssert.Contains(partial, "class=\"setting-scope-header\"");
+        StringAssert.Contains(partial, "class=\"setting-change\"");
+        StringAssert.Contains(partial, "class=\"setting-revert\"");
         StringAssert.Contains(partial, "data-image-local-value=");
         StringAssert.Contains(partial, "data-image-local-missing=");
         StringAssert.Contains(partial, "data-image-local-preview-url=");
         StringAssert.Contains(partial, "data-image-local-file-name=");
-        StringAssert.Contains(partial, "class=\"setting-mode-group\"");
-        StringAssert.Contains(partial, "value=\"inherit\" data-mode=\"inherit\"");
-        StringAssert.Contains(partial, "value=\"customize\" data-mode=\"customize\"");
-        StringAssert.Contains(partial, "boolean-mode-group");
+        Assert.IsFalse(partial.Contains("setting-mode", StringComparison.Ordinal));
+        Assert.IsFalse(partial.Contains("image-mode", StringComparison.Ordinal));
+        Assert.IsFalse(partial.Contains("batch-mode", StringComparison.Ordinal));
+        StringAssert.Contains(partial, "boolean-value-group");
         StringAssert.Contains(partial, "class=\"plain-text-preview\"");
         StringAssert.Contains(index, "class=\"batch-settings");
         StringAssert.Contains(index, "id=\"batch-@batchHeadingPrefix-field\"");
@@ -1848,8 +1852,8 @@ public class SettingsAdministrationTests
         StringAssert.Contains(partial, "aria-describedby=\"@validationErrorId\"");
         StringAssert.Contains(batch, "setting-validation-error");
         StringAssert.Contains(batch, "aria-describedby=\"@validationErrorId\"");
-        StringAssert.Contains(partial, "bool.TryParse(Model.InheritedValue");
-        StringAssert.Contains(batch, "bool.TryParse(Model.InheritedValue");
+        StringAssert.Contains(partial, "Model.HasInheritedValue");
+        StringAssert.Contains(batch, "Model.HasInheritedValue");
         StringAssert.Contains(partial, "Model.InheritedSourceDescription");
         StringAssert.Contains(batch, "Model.InheritedSourceDescription");
         StringAssert.Contains(css, "clip-path: inset(50%)");
@@ -1857,11 +1861,13 @@ public class SettingsAdministrationTests
         Assert.AreEqual(1, css.Split(".preview-tools > summary", StringSplitOptions.None).Length - 1);
         Assert.IsFalse(css.Contains(".preview-tools > form", StringComparison.Ordinal));
         Assert.IsFalse(css.Contains(".review-table thead { display: none", StringComparison.Ordinal));
-        StringAssert.Contains(css, ".review-table thead {\n        clip: rect(0 0 0 0)");
+        StringAssert.Contains(normalizedCss, ".review-table thead {\n        clip: rect(0 0 0 0)");
         Assert.IsFalse(css.Contains(".batch-settings thead { display: none", StringComparison.Ordinal));
 
         Assert.IsFalse(partial.Contains("data-candidate-operation", StringComparison.Ordinal));
         Assert.IsFalse(partial.Contains("Keep change", StringComparison.Ordinal));
+        Assert.IsFalse(partial.Contains("Cancel edit", StringComparison.Ordinal));
+        Assert.IsFalse(index.Contains("choose Inherit", StringComparison.OrdinalIgnoreCase));
         Assert.IsFalse(partial.Contains("class=\"edit-setting\"", StringComparison.Ordinal));
         Assert.IsFalse(script.Contains("data-candidate-operation", StringComparison.Ordinal));
         Assert.IsFalse(script.Contains("function beginEdit", StringComparison.Ordinal));
@@ -1890,7 +1896,9 @@ public class SettingsAdministrationTests
         StringAssert.Contains(script, "image-pending-file-name");
         StringAssert.Contains(script, "Use inherited image");
         StringAssert.Contains(partial, "data-image-inherited-missing=");
-        StringAssert.Contains(script, "mode === \"inherit\" ? \"RemoveOverride\" : \"Upsert\"");
+        StringAssert.Contains(script, "operationName = mode === \"inherit\" ? \"RemoveOverride\" : \"Upsert\"");
+        StringAssert.Contains(script, "Replacement entered");
+        Assert.IsFalse(script.Contains("image-undo-pending", StringComparison.Ordinal));
     }
 
     [TestMethod]

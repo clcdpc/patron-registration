@@ -435,9 +435,11 @@ public sealed class RegistrationFormAssetTests
         StringAssert.Contains(row, "The configured uploaded image is missing.");
         StringAssert.Contains(row, "The staged uploaded image is missing.");
         StringAssert.Contains(row, "class=\"image-setting\"");
-        StringAssert.Contains(row, "class=\"image-upload-trigger\"");
+        StringAssert.Contains(row, "class=\"setting-change image-upload-trigger\"");
         StringAssert.Contains(row, "class=\"image-choose-another\"");
-        StringAssert.Contains(row, "class=\"image-undo-pending\"");
+        StringAssert.Contains(row, "class=\"setting-change\"");
+        StringAssert.Contains(row, "class=\"setting-revert\"");
+        Assert.IsFalse(row.Contains("image-undo-pending", StringComparison.Ordinal));
         StringAssert.Contains(row, "data-image-inherited-missing=");
         Assert.IsFalse(row.Contains("image-value-editor", StringComparison.Ordinal));
         Assert.IsFalse(row.Contains("image-edit-current", StringComparison.Ordinal));

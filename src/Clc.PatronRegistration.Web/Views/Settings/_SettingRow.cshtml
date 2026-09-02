@@ -7,8 +7,6 @@
     var token = Model.Token;
     var inputId = $"{token}-value";
     var operationId = $"{token}-operation";
-    var inheritedModeId = $"{token}-inherit";
-    var customizeModeId = $"{token}-customize";
     bool isImage = definition.ValueType == SettingValueType.Image;
     bool isHtml = SafeHtmlPolicy.IsHtmlExecutionContext(definition);
     bool hasDraftOperation = Model.DraftOperation.HasValue;
@@ -27,10 +25,11 @@
         _ => resolution.OwnsOverride ? "Upsert" : "RemoveOverride"
     };
     var baselineMode = baselineOperation == "Upsert" ? "customize" : "inherit";
-    var customValue = isDraftUpsert ? Model.DraftValue : resolution.OwnsOverride ? resolution.CurrentOverrideValue : resolution.EffectiveValue;
+    var customValue = isDraftUpsert ? Model.DraftValue : resolution.OwnsOverride ? resolution.CurrentOverrideValue : null;
     var baselineValue = baselineOperation == "Upsert" ? customValue ?? string.Empty : string.Empty;
-    var editorValue = definition.IsSensitive ? string.Empty : customValue;
-    editorValue = Clc.PatronRegistration.Web.Models.SettingEditorDefaults.ValueFor(definition, editorValue);
+    var inheritedValue = Model.HasInheritedValue ? Model.InheritedValue : null;
+    var editorValue = baselineMode == "customize" ? customValue : inheritedValue;
+    editorValue = definition.IsSensitive ? string.Empty : Clc.PatronRegistration.Web.Models.SettingEditorDefaults.ValueFor(definition, editorValue);
     var safeEffective = definition.IsSensitive ? string.Empty : resolution.EffectiveValue;
     var searchText = $"{definition.DisplayName} {definition.Key} {definition.Description} {safeEffective}".ToLowerInvariant();
     var presentation = Clc.PatronRegistration.Web.Models.SettingValuePresentation.ForRow(Model);
@@ -52,8 +51,6 @@
                     ? Model.DraftValue is { Length: 0 } ? "Blank" : Model.DraftValue ?? "Not configured"
                     : Clc.PatronRegistration.Web.Models.SettingValuePresentation.FriendlyValue(definition, Model.DraftValue, true);
     }
-    var imageHasValue = Model.EffectiveAsset is not null || Model.EffectiveAssetMissing;
-    var imageHasStagedValue = Model.StagedAsset is not null || Model.StagedAssetMissing;
     var imageSummary = !isImage
         ? presentation.Value
         : hasDraftOperation
@@ -63,7 +60,7 @@
             : Model.EffectiveAsset?.FileName ?? (Model.EffectiveAssetMissing ? "Missing uploaded image" : "No image configured");
     var collapsedValue = hasDraftOperation && !isImage ? $"Shared draft: {imageSummary}" : imageSummary;
     bool isNotSet = presentation.State == SettingPresentationState.NotSet;
-    var imageActionLabel = imageHasValue || imageHasStagedValue ? "Replace image" : "Upload image";
+    var imageActionLabel = "Change image";
     var imageSource = Model.EffectiveAsset is null
         ? Model.EffectiveAssetMissing ? "Missing uploaded image" : "No image configured"
         : resolution.OwnsOverride ? "Customized here" : $"Inherited from {Model.SourceDescription}";
@@ -76,7 +73,7 @@
     var liveSummary = Clc.PatronRegistration.Web.Models.SettingReviewPresentation.Live(Model);
     var rowStatus = hasDraftOperation
         ? "Shared draft"
-        : resolution.OwnsOverride
+        : baselineMode == "customize"
             ? "Customized here"
             : resolution.SourceOrganizationId.HasValue ? "Inherited" : "Not configured";
     var inheritedSummary = Model.Definition.IsSensitive || !Model.HasInheritedValue
@@ -95,15 +92,12 @@
         : definition.Key.Equals("reset_seconds", StringComparison.OrdinalIgnoreCase)
             ? SettingDefinition.MaximumResetSeconds.ToString(CultureInfo.InvariantCulture)
             : null;
-    var inheritedBoolean = Model.HasInheritedValue && bool.TryParse(Model.InheritedValue, out var parsedInheritedBoolean)
-        ? parsedInheritedBoolean ? "Yes" : "No"
-        : "Not configured";
     var settingsError = ViewData["SettingsError"] as string;
     var settingsErrorKey = ViewData["SettingsErrorKey"] as string;
-    var validationError = string.Equals(definition.Key, settingsErrorKey, StringComparison.OrdinalIgnoreCase)
-        ? settingsError
-        : null;
+    var validationError = string.Equals(definition.Key, settingsErrorKey, StringComparison.OrdinalIgnoreCase) ? settingsError : null;
     var validationErrorId = string.IsNullOrWhiteSpace(validationError) ? null : $"{token}-validation-error";
+    var scopeStatus = hasDraftOperation ? "Shared draft" : rowStatus;
+    var revertLabel = Model.HasInheritedValue ? (isImage ? "Revert to inherited image" : "Revert to inherited value") : "Remove customization";
 }
 <details class="setting-row"
          open="@(validationErrorId is not null)"
@@ -119,6 +113,7 @@
          data-live-state="@liveState"
          data-live-summary="@liveSummary"
          data-inherited-summary="@inheritedSummary"
+         data-inherited-value="@(definition.IsSensitive ? string.Empty : inheritedValue ?? string.Empty)"
          data-inherited-source="@(Model.InheritedSourceDescription ?? string.Empty)"
          data-has-inherited="@Model.HasInheritedValue.ToString().ToLowerInvariant()"
          data-baseline-mode="@baselineMode"
@@ -130,7 +125,7 @@
          data-image-has-inherited="@Model.HasInheritedValue.ToString().ToLowerInvariant()"
          data-image-inherited-missing="@Model.InheritedAssetMissing.ToString().ToLowerInvariant()"
          data-image-inherited-preview-url="@(Model.InheritedAsset?.PreviewUrl ?? string.Empty)"
-          data-image-inherited-file-name="@(Model.InheritedAsset?.FileName ?? string.Empty)">
+         data-image-inherited-file-name="@(Model.InheritedAsset?.FileName ?? string.Empty)">
     <input class="change-index" type="hidden" name="Changes.Index" value="@token" disabled />
     <input class="change-key" type="hidden" name="Changes[@token].Key" value="@definition.Key" disabled />
     <input id="@operationId" class="operation" type="hidden" name="Changes[@token].Operation" value="@baselineOperation" disabled />
@@ -155,207 +150,205 @@
         }
         <p class="setting-description">@definition.Description</p>
 
-        @if (!isImage)
-        {
-            <div class="setting-baseline-column">
-            <section class="setting-value-panel" aria-label="Effective now">
-                <div class="setting-value-panel-heading">
-                    <strong>Effective now</strong>
-                    <span class="setting-value-source">Source: @(isNotSet ? "Not configured" : Model.SourceDescription)</span>
-                </div>
-                @if (hasCurrentHtmlValue)
-                {
-                    <iframe sandbox="" class="setting-html-value-preview" title="Formatted effective value for @definition.DisplayName" srcdoc="@resolution.EffectiveValue"></iframe>
-                }
-                else if (preservesFullValueFormatting)
-                {
-                    <pre class="setting-current-value setting-current-value-full">@expandedCurrentValue</pre>
-                }
-                else
-                {
-                    <div class="setting-current-value">@(definition.ValueType == SettingValueType.Enumeration ? Clc.PatronRegistration.Web.Models.SettingValuePresentation.FriendlyValue(definition, resolution.EffectiveValue, resolution.SourceOrganizationId.HasValue) : expandedCurrentValue)</div>
-                }
-            </section>
-
-            @if (hasDraftOperation)
-            {
-                <section class="setting-value-panel setting-draft-value-panel" aria-label="Shared draft value">
-                    <div class="setting-value-panel-heading"><strong>Shared draft</strong></div>
-                    @if (hasDraftHtmlValue)
-                    {
-                        <iframe sandbox="" class="setting-html-value-preview" title="Formatted shared draft value for @definition.DisplayName" srcdoc="@Model.DraftValue"></iframe>
-                    }
-                    else if (preservesFullValueFormatting && !isRemoveOverride && !definition.IsSensitive)
-                    {
-                        <pre class="setting-current-value setting-current-value-full">@expandedDraftValue</pre>
-                    }
-                    else
-                    {
-                        <div class="setting-current-value">@expandedDraftValue</div>
-                    }
-                </section>
-            }
-            </div>
-        }
-
         @if (isImage)
         {
-            <div class="image-setting" aria-labelledby="@inputId-label">
-                <span id="@inputId-label" class="visually-hidden">@definition.DisplayName controls</span>
-                <div class="@imageCurrentClass">
-                    @if (Model.EffectiveAsset is not null)
-                    {
-                        <img class="setting-image-preview" src="@Model.EffectiveAsset.PreviewUrl" alt="Current header image" />
-                        <div class="image-card-copy"><strong>Effective now</strong><small>@Model.EffectiveAsset.FileName</small><span class="image-source-status">@imageSource</span></div>
-                    }
-                    else if (Model.EffectiveAssetMissing)
-                    {
-                        <div class="image-card-copy"><strong>Effective now</strong><p class="setting-missing-asset" role="status">The configured uploaded image is missing.</p><span class="image-source-status">@imageSource</span></div>
-                    }
-                    else
-                    {
-                        <div class="image-card-copy"><strong>Effective now</strong><span>No image configured.</span></div>
-                    }
-                </div>
-
-                @if (hasDraftOperation)
-                {
-                    <div class="image-card image-draft">
-                        <strong>Shared draft</strong>
-                        @if (isDraftUpsert && Model.StagedAsset is not null)
+            <div class="setting-comparison image-comparison">
+                <section class="setting-value-panel" aria-label="Effective now">
+                    <div class="setting-value-panel-heading"><strong>Effective now</strong><span class="setting-value-source">Source: @(isNotSet ? "Not configured" : Model.SourceDescription)</span></div>
+                    <div class="@imageCurrentClass">
+                        @if (Model.EffectiveAsset is not null)
                         {
-                            <img class="setting-image-preview" src="@Model.StagedAsset.PreviewUrl" alt="Shared draft header image" /><small>@Model.StagedAsset.FileName</small><span>Replace with this uploaded image.</span>
+                            <img class="setting-image-preview" src="@Model.EffectiveAsset.PreviewUrl" alt="Current header image" />
+                            <div class="image-card-copy"><strong>@Model.EffectiveAsset.FileName</strong><span class="image-source-status">@imageSource</span></div>
                         }
-                        else if (isDraftUpsert && Model.StagedAssetMissing)
+                        else if (Model.EffectiveAssetMissing)
                         {
-                            <p class="setting-missing-asset" role="status">The staged uploaded image is missing.</p>
-                        }
-                        else if (!isDraftUpsert && Model.HasInheritedValue && Model.InheritedAssetMissing)
-                        {
-                            <p class="setting-missing-asset" role="status">The inherited uploaded image is missing.</p><span>Use the inherited image setting.</span>
-                        }
-                        else if (Model.StagedAsset is not null)
-                        {
-                            <img class="setting-image-preview" src="@Model.StagedAsset.PreviewUrl" alt="Inherited shared draft header image" /><small>@Model.StagedAsset.FileName</small><span>Use inherited image.</span>
+                            <p class="setting-missing-asset" role="status">The configured uploaded image is missing.</p><span class="image-source-status">@imageSource</span>
                         }
                         else
                         {
-                            <p>No image will be configured.</p><span>@(Model.HasInheritedValue ? "Use inherited image." : "Remove image.")</span>
+                            <span>No image configured.</span>
                         }
                     </div>
-                }
-
-                <div class="image-card image-pending image-browser-pending" data-image-pending hidden>
-                    <strong class="image-pending-heading">Unsaved image change</strong>
-                    <img class="setting-image-preview image-pending-preview" alt="Unsaved header image change" />
-                    <small class="image-pending-file-name"></small>
-                    <p class="image-upload-status" role="status" aria-live="polite"></p>
-                    <div class="image-pending-actions"><button type="button" class="image-choose-another">Choose another image</button><button type="button" class="image-undo-pending">Undo image change</button></div>
-                </div>
-
-                <fieldset class="setting-mode-group image-mode-group" aria-describedby="@validationErrorId">
-                    <legend>At this scope</legend>
-                    <label for="@inheritedModeId"><input id="@inheritedModeId" class="setting-mode image-mode-inherit" type="radio" name="@token-mode" value="inherit" data-mode="inherit" checked="@(baselineMode == "inherit")" /> <span>Use inherited image</span><small>@(Model.HasInheritedValue ? $"From {Model.InheritedSourceDescription ?? "the inherited scope"}" : "No inherited image is configured")</small></label>
-                    <label for="@customizeModeId"><input id="@customizeModeId" class="setting-mode image-mode-customize" type="radio" name="@token-mode" value="customize" data-mode="customize" checked="@(baselineMode == "customize")" /> <span>Customize here</span></label>
-                </fieldset>
-                <div class="image-actions">
-                    <button type="button" class="image-upload-trigger" aria-describedby="@validationErrorId">@imageActionLabel</button>
-                    <input id="@inputId-file" class="image-file" type="file" accept="image/png,image/jpeg,image/webp" aria-label="Choose a header image" aria-describedby="@validationErrorId" data-upload-url="@Url.Action("UploadHeaderImageAsset", "Settings")" />
-                </div>
-                <input id="@inputId" class="setting-value setting-value-binding" name="Changes[@token].Value" type="hidden" value="@(definition.IsSensitive ? string.Empty : editorValue)" disabled />
-                <small>PNG, JPEG, or WebP only; maximum size 2 MB. The image is uploaded when selected, then saved with the page changes.</small>
+                    @if (hasDraftOperation)
+                    {
+                        <div class="image-card image-draft">
+                            <strong>Shared draft</strong>
+                            @if (isDraftUpsert && Model.StagedAsset is not null)
+                            {
+                                <img class="setting-image-preview" src="@Model.StagedAsset.PreviewUrl" alt="Shared draft header image" /><small>@Model.StagedAsset.FileName</small><span>Replace with this uploaded image.</span>
+                            }
+                            else if (isDraftUpsert && Model.StagedAssetMissing)
+                            {
+                                <p class="setting-missing-asset" role="status">The staged uploaded image is missing.</p>
+                            }
+                            else if (!isDraftUpsert && Model.HasInheritedValue && Model.InheritedAssetMissing)
+                            {
+                                <p class="setting-missing-asset" role="status">The inherited uploaded image is missing.</p><span>Use the inherited image setting.</span>
+                            }
+                            else if (Model.StagedAsset is not null)
+                            {
+                                <img class="setting-image-preview" src="@Model.StagedAsset.PreviewUrl" alt="Inherited shared draft header image" /><small>@Model.StagedAsset.FileName</small><span>Use inherited image.</span>
+                            }
+                            else
+                            {
+                                <p>No image will be configured.</p><span>@(Model.HasInheritedValue ? "Use inherited image." : "Remove image.")</span>
+                            }
+                        </div>
+                    }
+                </section>
+                <section class="setting-scope-panel" aria-label="At this scope">
+                    <div class="setting-scope-header">
+                        <div class="setting-scope-heading"><strong>At this scope</strong><span class="setting-scope-status">@scopeStatus</span></div>
+                        <div class="setting-scope-actions">
+                            <button type="button" class="setting-change image-upload-trigger" aria-label="@imageActionLabel for @definition.DisplayName" aria-describedby="@validationErrorId">@imageActionLabel</button>
+                            <button type="button" class="setting-revert" aria-label="@revertLabel for @definition.DisplayName" aria-describedby="@validationErrorId" hidden="@(baselineMode == "customize" ? null : "hidden")">@revertLabel</button>
+                        </div>
+                    </div>
+                    <div class="image-setting" aria-labelledby="@inputId-label">
+                        <span id="@inputId-label" class="visually-hidden">@definition.DisplayName controls</span>
+                        <div class="image-card image-pending image-browser-pending" data-image-pending hidden>
+                            <strong class="image-pending-heading">Unsaved image change</strong>
+                            <img class="setting-image-preview image-pending-preview" alt="Unsaved header image change" />
+                            <small class="image-pending-file-name"></small>
+                            <p class="image-upload-status" role="status" aria-live="polite"></p>
+                            <div class="image-pending-actions"><button type="button" class="image-choose-another">Choose another image</button></div>
+                        </div>
+                        <div class="image-actions">
+                            <input id="@inputId-file" class="image-file" type="file" accept="image/png,image/jpeg,image/webp" aria-label="Choose a header image" aria-describedby="@validationErrorId" data-upload-url="@Url.Action("UploadHeaderImageAsset", "Settings")" disabled />
+                        </div>
+                        <input id="@inputId" class="setting-value setting-value-binding" name="Changes[@token].Value" type="hidden" value="@(definition.IsSensitive || baselineMode != "customize" ? string.Empty : editorValue)" disabled />
+                        <small>PNG, JPEG, or WebP only; maximum size 2 MB. The image is uploaded when selected, then saved with the page changes.</small>
+                    </div>
+                </section>
             </div>
         }
         else
         {
-            <div class="setting-editor" data-editor-kind="@(definition.Key.Equals("show_dl_ips", StringComparison.OrdinalIgnoreCase) ? "ip-prefixes" : definition.ValueType.ToString().ToLowerInvariant())">
-                @if (definition.ValueType == SettingValueType.Boolean)
-                {
-                    <fieldset class="setting-mode-group boolean-mode-group" aria-describedby="@validationErrorId">
-                        <legend>At this scope</legend>
-                        <label><input class="setting-mode" type="radio" name="@token-mode" value="inherit" data-mode="inherit" checked="@(baselineMode == "inherit")" /> Inherit — @inheritedBoolean <small>@(Model.HasInheritedValue ? $"from {Model.InheritedSourceDescription ?? "the inherited scope"}" : "not configured")</small></label>
-                        <label><input class="setting-mode" type="radio" name="@token-mode" value="true" data-mode="customize" data-custom-value="true" checked="@(baselineMode == "customize" && (editorValue ?? string.Empty).Equals("true", StringComparison.OrdinalIgnoreCase))" /> Yes</label>
-                        <label><input class="setting-mode" type="radio" name="@token-mode" value="false" data-mode="customize" data-custom-value="false" checked="@(baselineMode == "customize" && (editorValue ?? string.Empty).Equals("false", StringComparison.OrdinalIgnoreCase))" /> No</label>
-                    </fieldset>
-                }
-                else
-                {
-                    <fieldset class="setting-mode-group" aria-describedby="@validationErrorId">
-                        <legend>At this scope</legend>
-                        <label for="@inheritedModeId"><input id="@inheritedModeId" class="setting-mode" type="radio" name="@token-mode" value="inherit" data-mode="inherit" checked="@(baselineMode == "inherit")" /> <span>Use inherited value</span><small>@(Model.HasInheritedValue ? $"{(definition.IsSensitive ? "Configured value" : SettingValuePresentation.FriendlyValue(definition, Model.InheritedValue, true))} from {Model.InheritedSourceDescription ?? "the inherited scope"}" : "No inherited value is configured")</small></label>
-                        <label for="@customizeModeId"><input id="@customizeModeId" class="setting-mode" type="radio" name="@token-mode" value="customize" data-mode="customize" checked="@(baselineMode == "customize")" /> <span>Customize here</span></label>
-                    </fieldset>
-                }
-
-                <div class="value-editor" aria-describedby="@validationErrorId">
-                    @if (definition.Key.Equals("show_dl_ips", StringComparison.OrdinalIgnoreCase))
+            <div class="setting-comparison">
+                <div class="setting-baseline-column">
+                    <section class="setting-value-panel" aria-label="Effective now">
+                        <div class="setting-value-panel-heading"><strong>Effective now</strong><span class="setting-value-source">Source: @(isNotSet ? "Not configured" : Model.SourceDescription)</span></div>
+                        @if (hasCurrentHtmlValue)
+                        {
+                            <iframe sandbox="" class="setting-html-value-preview" title="Formatted effective value for @definition.DisplayName" srcdoc="@resolution.EffectiveValue"></iframe>
+                        }
+                        else if (preservesFullValueFormatting)
+                        {
+                            <pre class="setting-current-value setting-current-value-full">@expandedCurrentValue</pre>
+                        }
+                        else
+                        {
+                            <div class="setting-current-value">@(definition.ValueType == SettingValueType.Enumeration ? Clc.PatronRegistration.Web.Models.SettingValuePresentation.FriendlyValue(definition, resolution.EffectiveValue, resolution.SourceOrganizationId.HasValue) : expandedCurrentValue)</div>
+                        }
+                    </section>
+                    @if (hasDraftOperation)
                     {
-                        <label>On-site IP address prefixes</label>
-                        <div class="ip-prefix-editor" data-ip-prefix-editor>
-                            @foreach (var prefix in ipPrefixes.DefaultIfEmpty(string.Empty))
+                        <section class="setting-value-panel setting-draft-value-panel" aria-label="Shared draft value">
+                            <div class="setting-value-panel-heading"><strong>Shared draft</strong></div>
+                            @if (hasDraftHtmlValue)
                             {
-                                <div class="ip-prefix-row"><input class="ip-prefix-input" type="text" value="@prefix" aria-label="On-site IP prefix" aria-describedby="@validationErrorId" /><button type="button" class="ip-prefix-remove">Remove</button></div>
+                                <iframe sandbox="" class="setting-html-value-preview" title="Formatted shared draft value for @definition.DisplayName" srcdoc="@Model.DraftValue"></iframe>
                             }
-                            <button type="button" class="ip-prefix-add">+ Add prefix</button>
-                        </div>
-                        <small>Each prefix is saved using the existing semicolon-separated setting.</small>
-                    }
-                    else if (definition.ValueType == SettingValueType.Enumeration)
-                    {
-                        <label for="@inputId">Value</label>
-                        <select id="@inputId" class="setting-value" aria-describedby="@validationErrorId">
-                            @foreach (var allowedValue in definition.AllowedValues ?? [])
+                            else if (preservesFullValueFormatting && !isRemoveOverride && !definition.IsSensitive)
                             {
-                                <option value="@allowedValue" selected="@(editorValue ?? string.Empty).Equals(allowedValue, StringComparison.OrdinalIgnoreCase)">@Clc.PatronRegistration.Web.Models.SettingValuePresentation.FriendlyValue(definition, allowedValue)</option>
+                                <pre class="setting-current-value setting-current-value-full">@expandedDraftValue</pre>
                             }
-                        </select>
-                    }
-                    else if (definition.ValueType is SettingValueType.Integer or SettingValueType.NullableInteger or SettingValueType.Decimal)
-                    {
-                        <label for="@inputId">Value</label>
-                        <div class="unit-editor"><input id="@inputId" class="setting-value" type="number" step="@(definition.ValueType == SettingValueType.Decimal ? "any" : "1")" min="@numberMin" max="@numberMax" value="@editorValue" aria-describedby="@validationErrorId" /><span class="setting-unit">@(definition.Key.Equals("reset_seconds", StringComparison.OrdinalIgnoreCase) ? "seconds" : null)</span></div>
-                    }
-                    else if (definition.ValueType is SettingValueType.Date or SettingValueType.NullableDate)
-                    {
-                        <label for="@inputId">Value</label><input id="@inputId" class="setting-value" type="date" value="@editorValue" aria-describedby="@validationErrorId" />
-                    }
-                    else if (definition.ValueType == SettingValueType.EmailAddress)
-                    {
-                        <label for="@inputId">Value</label><input id="@inputId" class="setting-value" type="email" value="@editorValue" aria-describedby="@validationErrorId" />
-                    }
-                    else if (definition.ValueType == SettingValueType.Uri)
-                    {
-                        <label for="@inputId">Value</label><input id="@inputId" class="setting-value" type="url" value="@editorValue" aria-describedby="@validationErrorId" />
-                    }
-                    else if (definition.ValueType is SettingValueType.LongString or SettingValueType.Html or SettingValueType.EmailTemplate)
-                    {
-                        <label for="@inputId">@(definition.ValueType == SettingValueType.EmailTemplate ? "Source" : "Value")</label>
-                        <textarea id="@inputId" class="setting-value" rows="@(definition.ValueType == SettingValueType.EmailTemplate ? 12 : definition.ValueType == SettingValueType.Html ? 9 : 6)" aria-describedby="@validationErrorId">@editorValue</textarea>
-                        @if (isHtml)
-                        {
-                            <iframe sandbox="" title="Formatted preview for @definition.DisplayName" class="setting-html-value-preview html-preview" data-preview-kind="html"></iframe>
-                        }
-                        else if (definition.ValueType == SettingValueType.EmailTemplate)
-                        {
-                            <pre class="plain-text-preview" data-preview-kind="plain" aria-label="Plain-text preview for @definition.DisplayName"></pre>
-                        }
-                    }
-                    else
-                    {
-                        <label for="@inputId">Value</label>
-                        <input id="@inputId" class="setting-value" type="@(definition.IsSensitive ? "password" : "text")" value="@(definition.IsSensitive ? string.Empty : editorValue)" placeholder="@(definition.IsSensitive ? "Enter a new value to replace the existing secret" : null)" autocomplete="@(definition.IsSensitive ? "new-password" : "off")" aria-describedby="@validationErrorId" />
-                        @if (definition.IsSensitive)
-                        {
-                            <button type="button" class="reveal-secret" aria-controls="@inputId" aria-expanded="false" aria-label="Reveal @definition.DisplayName">Reveal secret</button>
-                            <small>Existing values are write-only and cannot be revealed. Enter a complete replacement.</small>
-                        }
-                    }
-                    @if (!definition.IsSensitive && definition.AllowEmpty && Model.HasInheritedValue && definition.ValueType is not SettingValueType.Boolean and not SettingValueType.Image)
-                    {
-                        <small class="blank-inheritance-note">Blank will override the inherited value. Choose “Use inherited value” to remove this customization.</small>
+                            else
+                            {
+                                <div class="setting-current-value">@expandedDraftValue</div>
+                            }
+                        </section>
                     }
                 </div>
-                <input class="setting-value-binding" name="Changes[@token].Value" type="hidden" value="@(definition.IsSensitive ? string.Empty : editorValue)" disabled />
+                <section class="setting-scope-panel" aria-label="At this scope">
+                    <div class="setting-scope-header">
+                        <div class="setting-scope-heading"><strong>At this scope</strong><span class="setting-scope-status">@scopeStatus</span></div>
+                        <div class="setting-scope-actions">
+                            <button type="button" class="setting-change" aria-label="Change @definition.DisplayName" aria-describedby="@validationErrorId">Change</button>
+                            <button type="button" class="setting-revert" aria-label="@revertLabel for @definition.DisplayName" aria-describedby="@validationErrorId" hidden="@(baselineMode == "customize" ? null : "hidden")">@revertLabel</button>
+                        </div>
+                    </div>
+                    <div class="setting-editor" data-editor-kind="@(definition.Key.Equals("show_dl_ips", StringComparison.OrdinalIgnoreCase) ? "ip-prefixes" : definition.ValueType.ToString().ToLowerInvariant())">
+                        <div class="value-editor" aria-describedby="@validationErrorId">
+                            @if (definition.Key.Equals("show_dl_ips", StringComparison.OrdinalIgnoreCase))
+                            {
+                                <label>On-site IP address prefixes</label>
+                                <div class="ip-prefix-editor" data-ip-prefix-editor>
+                                    @foreach (var prefix in ipPrefixes.DefaultIfEmpty(string.Empty))
+                                    {
+                                        <div class="ip-prefix-row"><input class="ip-prefix-input" type="text" value="@prefix" aria-label="On-site IP prefix" aria-describedby="@validationErrorId" readonly /><button type="button" class="ip-prefix-remove" disabled>Remove</button></div>
+                                    }
+                                    <button type="button" class="ip-prefix-add" disabled>+ Add prefix</button>
+                                </div>
+                                <small>Each prefix is saved using the existing semicolon-separated setting.</small>
+                            }
+                            else if (definition.ValueType == SettingValueType.Boolean)
+                            {
+                                <fieldset class="setting-value-group boolean-value-group" aria-describedby="@validationErrorId">
+                                    <legend>Value</legend>
+                                    <label><input class="setting-value boolean-value" type="radio" name="@token-value" value="true" data-value="true" checked="@string.Equals(editorValue, "true", StringComparison.OrdinalIgnoreCase)" disabled /> Yes</label>
+                                    <label><input class="setting-value boolean-value" type="radio" name="@token-value" value="false" data-value="false" checked="@string.Equals(editorValue, "false", StringComparison.OrdinalIgnoreCase)" disabled /> No</label>
+                                </fieldset>
+                            }
+                            else if (definition.ValueType == SettingValueType.Enumeration)
+                            {
+                                <label for="@inputId">Value</label>
+                                <select id="@inputId" class="setting-value" aria-describedby="@validationErrorId" disabled>
+                                    @foreach (var allowedValue in definition.AllowedValues ?? [])
+                                    {
+                                        <option value="@allowedValue" selected="@(editorValue ?? string.Empty).Equals(allowedValue, StringComparison.OrdinalIgnoreCase)">@Clc.PatronRegistration.Web.Models.SettingValuePresentation.FriendlyValue(definition, allowedValue)</option>
+                                    }
+                                </select>
+                            }
+                            else if (definition.ValueType is SettingValueType.Integer or SettingValueType.NullableInteger or SettingValueType.Decimal)
+                            {
+                                <label for="@inputId">Value</label>
+                                <div class="unit-editor"><input id="@inputId" class="setting-value" type="number" step="@(definition.ValueType == SettingValueType.Decimal ? "any" : "1")" min="@numberMin" max="@numberMax" value="@editorValue" aria-describedby="@validationErrorId" readonly /><span class="setting-unit">@(definition.Key.Equals("reset_seconds", StringComparison.OrdinalIgnoreCase) ? "seconds" : null)</span></div>
+                            }
+                            else if (definition.ValueType is SettingValueType.Date or SettingValueType.NullableDate)
+                            {
+                                <label for="@inputId">Value</label><input id="@inputId" class="setting-value" type="date" value="@editorValue" aria-describedby="@validationErrorId" disabled />
+                            }
+                            else if (definition.ValueType == SettingValueType.EmailAddress)
+                            {
+                                <label for="@inputId">Value</label><input id="@inputId" class="setting-value" type="email" value="@editorValue" aria-describedby="@validationErrorId" readonly />
+                            }
+                            else if (definition.ValueType == SettingValueType.Uri)
+                            {
+                                <label for="@inputId">Value</label><input id="@inputId" class="setting-value" type="url" value="@editorValue" aria-describedby="@validationErrorId" readonly />
+                            }
+                            else if (definition.ValueType is SettingValueType.LongString or SettingValueType.Html or SettingValueType.EmailTemplate)
+                            {
+                                <label for="@inputId">@(definition.ValueType == SettingValueType.EmailTemplate ? "Source" : "Value")</label>
+                                <textarea id="@inputId" class="setting-value" rows="@(definition.ValueType == SettingValueType.EmailTemplate ? 12 : definition.ValueType == SettingValueType.Html ? 9 : 6)" aria-describedby="@validationErrorId" readonly>@editorValue</textarea>
+                                @if (isHtml)
+                                {
+                                    <iframe sandbox="" title="Formatted preview for @definition.DisplayName" class="setting-html-value-preview html-preview" data-preview-kind="html"></iframe>
+                                }
+                                else if (definition.ValueType == SettingValueType.EmailTemplate)
+                                {
+                                    <pre class="plain-text-preview" data-preview-kind="plain" aria-label="Plain-text preview for @definition.DisplayName"></pre>
+                                }
+                            }
+                            else
+                            {
+                                <label for="@inputId">Value</label>
+                                <input id="@inputId" class="setting-value" type="@(definition.IsSensitive ? "password" : "text")" value="@(definition.IsSensitive ? string.Empty : editorValue)" placeholder="@(definition.IsSensitive ? "Enter a new value to replace the existing secret" : null)" autocomplete="@(definition.IsSensitive ? "new-password" : "off")" aria-describedby="@validationErrorId" readonly />
+                                @if (definition.IsSensitive)
+                                {
+                                    <button type="button" class="reveal-secret" aria-controls="@inputId" aria-expanded="false" aria-label="Reveal @definition.DisplayName" disabled>Reveal secret</button>
+                                    <small>Existing values are write-only and cannot be revealed. Enter a complete replacement.</small>
+                                }
+                            }
+                            @if (!definition.IsSensitive && definition.AllowEmpty && Model.HasInheritedValue && definition.ValueType is not SettingValueType.Boolean and not SettingValueType.Image)
+                            {
+                                <small class="blank-inheritance-note">Blank will override the inherited value. Use Revert to inherited value to remove this customization.</small>
+                            }
+                        </div>
+                        <input class="setting-value-binding" name="Changes[@token].Value" type="hidden" value="@(definition.IsSensitive ? string.Empty : editorValue)" disabled />
+                    </div>
+                </section>
             </div>
         }
 

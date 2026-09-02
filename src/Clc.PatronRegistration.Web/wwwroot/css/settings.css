@@ -101,51 +101,45 @@ body.settings-administration-page #regFormContainer {
     .settings-help a { color: inherit; text-decoration: underline }
 }
 
-/* Direct setting editors */
-.setting-content {
-    display: grid;
-    gap: .7rem 1rem;
-    grid-template-columns: minmax(15rem, .8fr) minmax(20rem, 1.2fr);
-}
-.setting-content > .setting-description,
-.setting-content > .technical-details,
-.setting-content > .image-setting,
-.setting-content > button { grid-column: 1 / -1 }
-.setting-content > .setting-baseline-column { grid-column: 1 }
-.setting-content > .setting-editor { grid-column: 2 }
-.setting-validation-error { background: #fff0f0; border: 2px solid #8a1c1c; color: #7a1f1b; grid-column: 1 / -1; grid-row: 2; margin: 0; padding: .5rem .65rem }
-.setting-description { grid-row: 1 }
+/* Explicit Change/Revert setting editors */
+.setting-content { display: grid; gap: .7rem; min-width: 0 }
+.setting-content > .technical-details, .setting-content > button { grid-column: 1 / -1 }
+.setting-validation-error { background: #fff0f0; border: 2px solid #8a1c1c; color: #7a1f1b; margin: 0; padding: .5rem .65rem }
+.setting-description { margin: .4rem 0 }
+.setting-comparison { align-items: start; display: grid; gap: .7rem 1rem; grid-template-columns: minmax(15rem, .85fr) minmax(20rem, 1.15fr); min-width: 0 }
+.setting-baseline-column { align-content: start; display: grid; gap: .7rem; min-width: 0 }
 .setting-value-panel { background: #f8fafb; border: 1px solid #c8d2da; border-radius: .3rem; min-width: 0; padding: .6rem .7rem }
 .setting-value-panel-heading { align-items: baseline; display: flex; flex-wrap: wrap; gap: .35rem .75rem; justify-content: space-between; margin-bottom: .35rem }
-.setting-baseline-column { align-content: start; display: grid; gap: .7rem; min-width: 0 }
 .setting-value-source, .setting-status-source, .batch-effective small { color: #555; font-size: .86rem }
 .setting-current-value { overflow-wrap: anywhere; white-space: pre-wrap }
-.setting-current-value-full { background: #fff; border: 1px solid #d3d3d3; margin: 0; max-height: 18rem; overflow: auto; padding: .45rem; white-space: pre-wrap }
+.setting-current-value-full { background: #fff; border: 1px solid #d3d3d3; box-sizing: border-box; margin: 0; max-height: 18rem; min-height: 8rem; overflow: auto; padding: .45rem; white-space: pre-wrap }
 .setting-html-value-preview { background: #fff; border: 1px solid #777; box-sizing: border-box; min-height: 8rem; width: 100% }
 .setting-draft-value-panel { background: #f4f8fc; border-color: #9bb8d1 }
-.setting-editor { align-items: start; display: grid; gap: .65rem 1rem; grid-template-columns: minmax(12rem, .75fr) minmax(14rem, 1.25fr); min-width: 0 }
-.setting-editor[data-editor-kind="longstring"],
-.setting-editor[data-editor-kind="html"],
-.setting-editor[data-editor-kind="emailtemplate"] { grid-template-columns: minmax(0, 1fr) }
-.setting-mode-group { border: 1px solid #ccd4da; box-sizing: border-box; display: grid; gap: .3rem; margin: 0; max-width: 100%; min-width: 0; padding: .55rem .7rem; width: auto }
-.setting-mode-group legend { font-weight: 700; padding-inline: .25rem }
-.setting-mode-group label { align-items: baseline; display: flex; flex-wrap: wrap; gap: .3rem .45rem; line-height: 1.35; min-width: 0 }
-.setting-mode-group label small { color: #555; flex-basis: 100%; margin-left: 1.45rem }
-.setting-mode-group input[type="radio"] { flex: 0 0 auto; margin: 0 }
-.boolean-mode-group label small { flex-basis: auto; margin-left: .2rem }
+.setting-scope-panel { min-width: 0 }
+.setting-scope-header { align-items: start; display: flex; flex-wrap: wrap; gap: .55rem .8rem; justify-content: space-between; margin-bottom: .55rem; min-height: 2.3rem }
+.setting-scope-heading { display: grid; gap: .12rem; min-width: 8rem }
+.setting-scope-status { color: #555; font-size: .86rem }
+.setting-scope-actions { align-items: center; display: flex; flex-wrap: wrap; gap: .4rem }
+.setting-change { font-weight: 700 }
+.setting-revert { background: #fff; border-color: #555; color: #222 }
+.setting-editor { min-width: 0 }
 .value-editor { display: grid; gap: .3rem; min-width: 0 }
 .value-editor > label { font-weight: 600 }
 .value-editor .setting-value { box-sizing: border-box; max-width: 100%; min-height: 2.3rem; width: 100% }
+.value-editor .setting-value[type="radio"] { min-height: 0; width: auto }
 .value-editor select.setting-value, .value-editor input[type="date"].setting-value { min-width: min(100%, 12rem); width: fit-content }
 .value-editor textarea.setting-value { min-height: 8rem; resize: vertical }
+.setting-value:disabled, .setting-value[readonly] { color: inherit; opacity: 1 }
 .unit-editor { align-items: center; display: flex; gap: .45rem; max-width: 28rem }
 .unit-editor .setting-value { width: min(100%, 16rem) }
 .setting-unit { color: #454545; white-space: nowrap }
 .blank-inheritance-note { color: #454545; display: block }
 .plain-text-preview { background: #fff; border: 1px solid #777; box-sizing: border-box; max-height: 18rem; min-height: 8rem; overflow: auto; padding: .55rem; white-space: pre-wrap; word-break: break-word }
-.image-mode-group { max-width: 38rem }
-.image-mode-group label small { flex-basis: auto }
-.setting-status { align-items: center; display: inline-flex; flex-direction: column; gap: .08rem; line-height: 1.2; }
+.setting-value-group { border: 0; display: grid; gap: .3rem; margin: 0; max-width: 100%; min-width: 0; padding: 0; width: auto }
+.setting-value-group legend { font-weight: 600; margin-bottom: .1rem; padding: 0 }
+.setting-value-group label { align-items: baseline; display: flex; gap: .35rem }
+.setting-value-group input[type="radio"] { flex: 0 0 auto; margin: 0 }
+.setting-status { align-items: center; display: inline-flex; flex-direction: column; gap: .08rem; line-height: 1.2 }
 .setting-status-source { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
 
 /* Purpose-built homogeneous groups */
@@ -159,9 +153,8 @@ body.settings-administration-page #regFormContainer {
 .batch-setting-name small, .batch-effective small { display: block; margin-top: .2rem }
 .batch-browser-status { color: #8a5700; font-weight: 600 }
 .batch-scope { min-width: 0 }
-.batch-mode-group { border: 0; padding: 0 }
-.batch-mode-group label { display: inline-flex; margin: .12rem .7rem .12rem 0; }
-.batch-label-input { display: block !important; margin-top: .3rem !important }
+.batch-scope .setting-scope-header { margin-bottom: .45rem }
+.batch-label-input { display: block; margin-top: .3rem }
 .batch-label-input input { box-sizing: border-box; min-height: 2.2rem; max-width: 100%; width: min(100%, 24rem) }
 .batch-remove-draft-change { margin-top: .45rem; max-width: 100%; white-space: normal }
 
@@ -175,11 +168,7 @@ body.settings-administration-page #regFormContainer {
 #save-confirm[data-review-mode="browser"] .review-baseline-column { display: none }
 
 @media (max-width: 60rem) {
-    .setting-content { grid-template-columns: minmax(0, 1fr) }
-    .setting-content > .setting-description, .setting-content > .technical-details,
-    .setting-content > .setting-baseline-column, .setting-content > .image-setting, .setting-content > .setting-editor,
-    .setting-content > button { grid-column: 1 }
-    .setting-editor { grid-template-columns: minmax(0, 1fr) }
+    .setting-comparison { grid-template-columns: minmax(0, 1fr) }
 }
 @media (max-width: 42rem) {
     .batch-settings { display: block; overflow: visible }

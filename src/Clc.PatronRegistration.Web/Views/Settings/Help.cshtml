@@ -90,14 +90,14 @@
         <h2>Change a setting</h2>
         <ol>
             <li>Expand the setting.</li>
-            <li>Choose <strong>Use inherited value</strong> or <strong>Customize here</strong> under <strong>At this scope</strong>.</li>
-            <li>Enter or select the value when customizing. The row is marked <strong>Unsaved in this browser</strong> as soon as its semantic state differs from the loaded state.</li>
-            <li>Save immediately or add the change to the shared draft.</li>
+            <li>Click <strong>Change</strong> to enable the value editor. Values are read-only until you explicitly choose this action.</li>
+            <li>Enter or select the value. An inherited setting starts with its effective value, and the row is marked <strong>Unsaved in this browser</strong> when its semantic state differs from the loaded state.</li>
+            <li>Review, save immediately, add the change to the shared draft, or discard browser changes.</li>
         </ol>
-        <h3>Set a value here</h3>
-        <p>Creates or replaces the value specifically for the selected organization and form.</p>
-        <h3>Use inherited value</h3>
-        <p>Removes the customization at the selected organization and form, so the setting again uses the applicable library or system value. It does not delete the value at the library or system level.</p>
+        <h3>Change</h3>
+        <p>Enables editing and, for an inherited setting, starts a local customization using the currently effective value. Clearing a setting that supports blank values creates an explicitly blank local value.</p>
+        <h3>Revert to inherited value</h3>
+        <p>Removes the customization at the selected organization and form, so the setting again uses the applicable library or system value. It creates a browser-pending <strong>RemoveOverride</strong> and does not save immediately. When no inherited value exists, the action is labeled <strong>Remove customization</strong>.</p>
         <p>Depending on the setting, you may use Yes/No selections, numbers, dates, URLs, email addresses, or longer text boxes. The page validates values before saving.</p>
     </section>
 
@@ -146,14 +146,14 @@
         <ol>
             <li>Select the branch and form.</li>
             <li>Find and expand the setting.</li>
-            <li>Choose <strong>Customize here</strong> and enter the value.</li>
+            <li>Click <strong>Change</strong> and enter the value.</li>
             <li>Use <strong>Save N changes live</strong>, or <strong>Add N changes to shared draft</strong>.</li>
         </ol>
         <h3>Return a branch setting to the library value</h3>
         <ol>
             <li>Select the branch and form.</li>
             <li>Expand the customized setting.</li>
-            <li>Choose <strong>Use inherited value</strong>.</li>
+            <li>Click <strong>Revert to inherited value</strong>.</li>
             <li>Save immediately or add the change to the draft.</li>
         </ol>
         <h3>Test several changes before publishing</h3>

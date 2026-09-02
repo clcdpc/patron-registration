@@ -117,17 +117,6 @@
         try { return [...(row?.querySelectorAll?.(selector) || [])]; } catch { return []; }
     }
 
-    function selectedModeControl(row) {
-        const modes = controlsAll(row, ".setting-mode");
-        return modes.find((mode) => mode.checked) || modes.find((mode) => mode.getAttribute?.("aria-checked") === "true") || null;
-    }
-
-    function modeFromRow(row) {
-        const selected = selectedModeControl(row);
-        if (selected) return selected.dataset?.mode || (selected.value === "inherit" ? "inherit" : "customize");
-        return row?.dataset?.baselineMode || "customize";
-    }
-
     function normalizeValue(row, value) {
         const text = (value === null || value === undefined ? "" : String(value)).replace(/\r\n?/g, "\n");
         if (row?.dataset?.valueType === "boolean") return text.trim().toLowerCase() === "true" ? "true" : "false";
@@ -154,43 +143,73 @@
         }
     }
 
-    function restoreVisibleEditorValue(row, value) {
-        const editor = controls(row, ".setting-value:not(.setting-value-binding)");
-        if (!editor) return;
-        editor.value = value === null || value === undefined ? "" : String(value);
-        syncEditorPreview(editor);
-    }
-
-    function proposedState(row) {
-        const modeControl = selectedModeControl(row);
-        const mode = modeControl?.dataset?.mode || (modeControl?.value === "inherit" ? "inherit" : modeFromRow(row));
-        if (mode === "inherit") return { mode: "inherit", operation: "RemoveOverride", value: "" };
-        const customValue = modeControl?.dataset?.customValue;
-        const valueEditor = controls(row, ".setting-value:not(.setting-value-binding)") || controls(row, ".setting-value");
-        const value = customValue !== undefined
-            ? customValue
-            : controls(row, "[data-ip-prefix-editor]") ? ipPrefixValue(row) : valueEditor?.value ?? controls(row, ".setting-value-binding")?.value ?? "";
-        return { mode: "customize", operation: "Upsert", value: normalizeValue(row, value) };
-    }
-
     function baselineState(row) {
-        const mode = row?.dataset?.baselineMode;
+        const mode = row?.dataset?.baselineMode || "customize";
         return { mode, operation: mode === "inherit" ? "RemoveOverride" : "Upsert", value: normalizeValue(row, row?.dataset?.baselineValue || "") };
     }
 
-    function sameState(row, proposed, baseline = baselineState(row)) {
-        if (proposed.mode !== baseline.mode) return false;
-        return proposed.mode === "inherit" || normalizeValue(row, proposed.value) === normalizeValue(row, baseline.value);
+    function booleanValueControls(row) {
+        return controlsAll(row, ".boolean-value, .batch-value-choice");
     }
 
-    function setSelectedMode(row, desiredMode, desiredValue = null) {
-        const modes = controlsAll(row, ".setting-mode");
-        modes.forEach((mode) => {
-            const modeName = mode.dataset?.mode || (mode.value === "inherit" ? "inherit" : "customize");
-            const isSelected = modeName === desiredMode && (desiredMode !== "customize" ||
-                desiredValue === null || mode.dataset?.customValue === undefined || normalizeValue(row, mode.dataset.customValue) === normalizeValue(row, desiredValue));
-            mode.checked = isSelected;
-        });
+    function valueControls(row) {
+        const booleanControls = booleanValueControls(row);
+        if (booleanControls.length) return booleanControls;
+        return controlsAll(row, ".setting-value:not(.setting-value-binding):not(.ip-prefix-input)");
+    }
+
+    function editorValue(row) {
+        if (controls(row, "[data-ip-prefix-editor]")) return ipPrefixValue(row);
+        const booleans = booleanValueControls(row);
+        if (booleans.length) return booleans.find((control) => control.checked)?.dataset?.value || booleans.find((control) => control.checked)?.value || "false";
+        return valueControls(row)[0]?.value ?? controls(row, ".setting-value-binding")?.value ?? "";
+    }
+
+    function setEditorValue(row, value) {
+        const normalized = normalizeValue(row, value);
+        if (controls(row, "[data-ip-prefix-editor]")) {
+            const editor = controls(row, "[data-ip-prefix-editor]");
+            const add = controls(row, ".ip-prefix-add");
+            const values = normalized ? normalized.split(";") : [""];
+            controlsAll(row, ".ip-prefix-row").forEach((prefixRow) => prefixRow.remove?.());
+            values.forEach((prefix) => {
+                if (typeof row._createPrefixRow === "function" && editor && add) editor.insertBefore(row._createPrefixRow(prefix), add);
+            });
+            return;
+        }
+        const booleans = booleanValueControls(row);
+        if (booleans.length) {
+            booleans.forEach((control) => { control.checked = normalizeValue(row, control.dataset?.value || control.value) === normalized; });
+            return;
+        }
+        const control = valueControls(row)[0];
+        if (!control) return;
+        control.value = value === null || value === undefined ? "" : String(value);
+        syncEditorPreview(control);
+    }
+
+    function ensureEditorState(row) {
+        if (row?._settingsEditorState) return row._settingsEditorState;
+        const baseline = baselineState(row);
+        row._settingsEditorState = { mode: baseline.mode, value: editorValue(row), editing: false };
+        return row._settingsEditorState;
+    }
+
+    function proposedState(row) {
+        if (typeof row?._settingsProposedState === "function") return row._settingsProposedState();
+        const state = ensureEditorState(row);
+        if (state.mode === "inherit") return { ...state, operation: "RemoveOverride", value: "" };
+        state.value = editorValue(row);
+        return { ...state, mode: "customize", operation: "Upsert", value: normalizeValue(row, state.value) };
+    }
+
+    function sameState(row, proposed, baseline = baselineState(row)) {
+        // Sensitive values are never loaded into the browser. An empty
+        // replacement while editing therefore leaves an inherited baseline
+        // semantically untouched until a replacement is entered.
+        if (row?.dataset?.sensitive === "true" && baseline.mode === "inherit" && proposed.mode === "customize" && !normalizeValue(row, proposed.value)) return true;
+        if (proposed.mode !== baseline.mode) return false;
+        return proposed.mode === "inherit" || normalizeValue(row, proposed.value) === normalizeValue(row, baseline.value);
     }
 
     function setBindingEnabled(row, enabled, state) {
@@ -204,7 +223,7 @@
     }
 
     function safeBrowserSummary(row, value, operation) {
-        if (operation === "RemoveOverride") return "Use inherited value";
+        if (operation === "RemoveOverride") return row?.dataset?.hasInherited === "true" ? "Use inherited value" : "Remove customization";
         if (row?.dataset?.sensitive === "true") return "Replacement entered";
         const valueType = row?.dataset?.valueType;
         if (valueType === "boolean") return String(value).toLowerCase() === "true" ? "Yes" : "No";
@@ -235,9 +254,24 @@
     }
 
     function updateEditorAvailability(row, state) {
-        const inherited = state.mode === "inherit";
-        controlsAll(row, ".value-editor .setting-value:not(.setting-value-binding), .batch-label-input .setting-value, .ip-prefix-input").forEach((control) => { control.disabled = inherited; });
-        controlsAll(row, ".ip-prefix-add, .ip-prefix-remove").forEach((control) => { control.disabled = inherited; });
+        const enabled = Boolean(state.editing && state.mode === "customize");
+        valueControls(row).forEach((control) => {
+            const tagName = String(control.tagName || "").toUpperCase();
+            const type = String(control.type || "").toLowerCase();
+            const canReadOnly = tagName === "TEXTAREA" || (tagName === "INPUT" && ["text", "email", "url", "number", "password"].includes(type));
+            if (canReadOnly) {
+                control.readOnly = !enabled;
+                control.disabled = false;
+            } else control.disabled = !enabled;
+        });
+        controlsAll(row, ".ip-prefix-input").forEach((control) => {
+            control.readOnly = !enabled;
+            control.disabled = false;
+        });
+        controlsAll(row, ".ip-prefix-add, .ip-prefix-remove").forEach((control) => { control.disabled = !enabled; });
+        const reveal = controls(row, ".reveal-secret");
+        if (reveal) reveal.disabled = !enabled;
+        row.dataset.editing = state.editing ? "true" : "false";
     }
 
     function resetSensitiveEditor(row) {
@@ -276,6 +310,17 @@
         row.dataset.dirty = dirty.toString();
         setBindingEnabled(row, dirty, state);
         updateEditorAvailability(row, state);
+        const change = controls(row, ".setting-change");
+        const revert = controls(row, ".setting-revert");
+        const scopeStatus = controls(row, ".setting-scope-status");
+        if (change) change.hidden = Boolean(state.editing);
+        if (revert) {
+            const canRevert = state.mode === "customize" && (baseline.mode === "customize" || state.editing || dirty);
+            revert.hidden = !canRevert;
+        }
+        if (scopeStatus) {
+            scopeStatus.textContent = dirty ? "Unsaved in this browser" : state.editing ? "Editing" : row._settingsScopeCleanStatus || "";
+        }
         if (dirty) {
             renderBrowserPendingSummary(row, state);
         } else {
@@ -298,8 +343,9 @@
     function syncBlockingStatus(settingsForm = form, status = statusRegion) {
         if (!status) return;
         if (hasImageUpload(settingsForm)) {
-            status.textContent = settingsForm?.querySelector?.('.setting-row[data-image-needs-upload="true"]')
-                ? imageUploadRequiredMessage
+            const needsImage = settingsForm?.querySelector?.('.setting-row[data-image-needs-upload="true"]');
+            status.textContent = needsImage
+                ? needsImage.dataset?.hasInherited === "true" ? imageUploadRequiredMessage : "Upload an image to customize this scope or remove customization."
                 : imageUploadBlockedMessage;
             status.dataset.statusKind = "blocking";
             status.hidden = false;
@@ -315,24 +361,51 @@
     function initializeStandardRow(row, settingsForm) {
         const summary = controls(row, ".summary-value");
         const status = controls(row, ".setting-status > span") || controls(row, ".setting-status");
-        const visibleValue = controls(row, ".setting-value:not(.setting-value-binding)");
-        const value = visibleValue || controls(row, ".setting-value");
-        row._settingsCleanPresentation = {
-            summary: summary?.textContent || "",
-            title: summary?.getAttribute?.("title"),
-            status: status?.textContent || ""
-        };
-        row._settingsInitialEditorValue = visibleValue?.value ?? null;
+        const scopeStatus = controls(row, ".setting-scope-status");
+        const initialValues = valueControls(row);
+        const initialEditorValue = controls(row, "[data-ip-prefix-editor]") ? ipPrefixValue(row) : editorValue(row);
+        row._settingsCleanPresentation = { summary: summary?.textContent || "", title: summary?.getAttribute?.("title"), status: status?.textContent || "" };
+        row._settingsScopeCleanStatus = scopeStatus?.textContent || row._settingsCleanPresentation.status;
+        row._settingsInitialEditorValue = initialEditorValue;
         row._settingsInitialIpPrefixValues = controlsAll(row, ".ip-prefix-input").map((input) => String(input.value ?? ""));
+        ensureEditorState(row);
 
-        controlsAll(row, ".setting-mode").forEach((mode) => mode.addEventListener("change", () => {
-            if (mode.checked && modeFromRow(row) === "inherit") resetSensitiveEditor(row);
+        const change = controls(row, ".setting-change");
+        const revert = controls(row, ".setting-revert");
+        change?.addEventListener("click", () => {
+            const state = ensureEditorState(row);
+            if (row.dataset?.sensitive === "true") {
+                state.mode = "customize";
+                state.value = "";
+                setEditorValue(row, "");
+                resetSensitiveEditor(row);
+            } else {
+                state.mode = "customize";
+                state.value = editorValue(row);
+            }
+            state.editing = true;
             updateStandardRow(row, settingsForm);
-        }));
-        value?.addEventListener("input", () => updateStandardRow(row, settingsForm));
-        value?.addEventListener("change", () => updateStandardRow(row, settingsForm));
+            (valueControls(row)[0] || controls(row, ".ip-prefix-input"))?.focus?.();
+        });
+        revert?.addEventListener("click", () => {
+            const state = ensureEditorState(row);
+            state.mode = "inherit";
+            state.value = row.dataset?.sensitive === "true" ? "" : row.dataset?.inheritedValue || "";
+            state.editing = false;
+            setEditorValue(row, state.value);
+            if (row.dataset?.sensitive === "true") resetSensitiveEditor(row);
+            updateStandardRow(row, settingsForm);
+            change?.focus?.();
+        });
+
+        initialValues.forEach((value) => {
+            const update = () => { syncEditorPreview(value); updateStandardRow(row, settingsForm); };
+            value.addEventListener("input", update);
+            value.addEventListener("change", update);
+        });
         const reveal = controls(row, ".reveal-secret");
         reveal?.addEventListener("click", () => {
+            const value = valueControls(row)[0];
             if (!value) return;
             const revealing = value.type === "password";
             value.type = revealing ? "text" : "password";
@@ -340,12 +413,13 @@
             reveal.textContent = revealing ? "Hide secret" : "Reveal secret";
             reveal.setAttribute("aria-label", `${revealing ? "Hide" : "Reveal"} ${row.dataset.displayName || "secret"}`);
         });
+
+        const prefixEditor = controls(row, "[data-ip-prefix-editor]");
+        const addPrefix = controls(row, ".ip-prefix-add");
         controlsAll(row, ".ip-prefix-input").forEach((input) => {
             input.addEventListener("input", () => updateStandardRow(row, settingsForm));
             input.addEventListener("change", () => updateStandardRow(row, settingsForm));
         });
-        const prefixEditor = controls(row, "[data-ip-prefix-editor]");
-        const addPrefix = controls(row, ".ip-prefix-add");
         const createPrefixRow = (initialValue = "") => {
             const wrapper = document.createElement("div");
             wrapper.className = "ip-prefix-row";
@@ -361,9 +435,10 @@
             wrapper.append(input, remove);
             input.addEventListener("input", () => updateStandardRow(row, settingsForm));
             input.addEventListener("change", () => updateStandardRow(row, settingsForm));
-            remove.addEventListener("click", () => { wrapper.remove(); updateStandardRow(row, settingsForm); });
+            remove.addEventListener("click", () => { if (!remove.disabled) { wrapper.remove(); updateStandardRow(row, settingsForm); } });
             return wrapper;
         };
+        row._createPrefixRow = createPrefixRow;
         addPrefix?.addEventListener("click", () => {
             if (addPrefix.disabled) return;
             const wrapper = createPrefixRow();
@@ -378,17 +453,16 @@
 
         row._discardPendingChange = (options = {}) => {
             const baseline = baselineState(row);
-            setSelectedMode(row, baseline.mode, baseline.value);
+            const state = ensureEditorState(row);
+            state.mode = baseline.mode;
+            state.editing = false;
+            state.value = baseline.mode === "customize" ? baseline.value : row._settingsInitialEditorValue;
             if (row.dataset?.sensitive === "true") resetSensitiveEditor(row);
-            else if (!controls(row, "[data-ip-prefix-editor]")) restoreVisibleEditorValue(row, row._settingsInitialEditorValue);
+            else setEditorValue(row, state.value);
             if (controls(row, "[data-ip-prefix-editor]")) {
-                const desiredValues = Array.isArray(row._settingsInitialIpPrefixValues) && row._settingsInitialIpPrefixValues.length
-                    ? row._settingsInitialIpPrefixValues
-                    : [""];
+                const desiredValues = Array.isArray(row._settingsInitialIpPrefixValues) && row._settingsInitialIpPrefixValues.length ? row._settingsInitialIpPrefixValues : [""];
                 controlsAll(row, ".ip-prefix-row").forEach((prefixRow) => prefixRow.remove());
-                if (prefixEditor && addPrefix) {
-                    desiredValues.forEach((prefix) => prefixEditor.insertBefore(createPrefixRow(prefix), addPrefix));
-                }
+                desiredValues.forEach((prefix) => prefixEditor?.insertBefore(createPrefixRow(prefix), addPrefix));
             }
             updateStandardRow(row, settingsForm, options);
         };
@@ -397,11 +471,9 @@
 
     function initializeImageRow(row, settingsForm) {
         const activeForm = settingsForm || form;
-        const uploadTrigger = controls(row, ".image-upload-trigger");
         const chooseAnother = controls(row, ".image-choose-another");
-        const undo = controls(row, ".image-undo-pending");
-        const inheritedMode = controls(row, ".image-mode-inherit");
-        const customizeMode = controls(row, ".image-mode-customize");
+        const change = controls(row, ".setting-change");
+        const revert = controls(row, ".setting-revert");
         const imageFile = controls(row, ".image-file");
         const pending = controls(row, ".image-pending") || controls(row, ".image-browser-pending");
         const pendingPreview = controls(pending, ".image-pending-preview") || controls(pending, "img");
@@ -411,9 +483,12 @@
         const binding = controls(row, ".setting-value-binding") || controls(row, ".setting-value");
         const summary = controls(row, ".summary-value");
         const rowStatus = controls(row, ".setting-status > span") || controls(row, ".setting-status");
+        const scopeStatus = controls(row, ".setting-scope-status");
         const baseline = baselineState(row);
         const clean = { summary: summary?.textContent || "", title: summary?.getAttribute?.("title"), status: rowStatus?.textContent || "" };
         const imageState = {
+            mode: baseline.mode,
+            editing: false,
             fileName: "",
             previewUrl: "",
             message: "",
@@ -438,26 +513,29 @@
         }
 
         function currentImageState() {
-            const mode = inheritedMode?.checked ? "inherit" : "customize";
+            const mode = imageState.mode;
             const operationName = mode === "inherit" ? "RemoveOverride" : "Upsert";
             return { mode, operation: operationName, value: operationName === "Upsert" ? String(binding?.value || "") : "" };
         }
 
+        row._settingsProposedState = currentImageState;
+
         function renderImage(options = {}) {
             const state = currentImageState();
-            const dirty = !sameState(row, state, baseline) ||
-                Boolean(row.dataset.imageNeedsUpload === "true") ||
-                Boolean(row.dataset.imageUploading === "true");
+            const semanticDirty = (state.mode !== baseline.mode || (state.mode === "customize" && normalizeValue(row, state.value) !== normalizeValue(row, baseline.value))) &&
+                !(baseline.mode === "inherit" && state.mode === "customize" && !normalizeValue(row, state.value));
+            const dirty = semanticDirty || Boolean(row.dataset.imageNeedsUpload === "true") || Boolean(row.dataset.imageUploading === "true");
             row.dataset.dirty = dirty.toString();
+            row.dataset.editing = imageState.editing ? "true" : "false";
+            if (imageFile) imageFile.disabled = !imageState.editing;
             if (operation) operation.value = state.operation;
-            if (binding && state.operation === "Upsert") binding.value = state.value;
             setBindingEnabled(row, dirty, state);
             if (row.dataset.imageNeedsUpload === "true" && uploadStatus) {
                 uploadStatus.textContent = "Upload an image to customize this scope.";
             }
             if (dirty) {
                 const pendingText = state.operation === "RemoveOverride"
-                    ? (row.dataset.imageHasInherited === "true" ? "Use inherited image" : "Remove image")
+                    ? (row.dataset.hasInherited === "true" ? "Use inherited image" : "Remove customization")
                     : imageState.fileName || "new image";
                 if (summary) { summary.textContent = `Unsaved: ${pendingText}`; summary.setAttribute?.("title", summary.textContent); }
                 if (rowStatus) rowStatus.textContent = "Unsaved in this browser";
@@ -465,6 +543,10 @@
                 if (summary) { summary.textContent = clean.summary; clean.title === null ? summary.removeAttribute?.("title") : summary.setAttribute?.("title", clean.title); }
                 if (rowStatus) rowStatus.textContent = clean.status;
             }
+            if (scopeStatus) scopeStatus.textContent = dirty ? "Unsaved in this browser" : imageState.editing ? "Editing" : clean.status;
+            const hasPendingImage = Boolean(row.dataset.imageNeedsUpload === "true" || row.dataset.imageUploading === "true" || imageState.error || imageState.fileName || imageState.previewUrl || imageState.message);
+            if (change) change.hidden = imageState.editing && hasPendingImage;
+            if (revert) revert.hidden = !(state.mode === "customize" && (baseline.mode === "customize" || imageState.editing || dirty));
             if (options.updateActions !== false) updatePendingActions(activeForm);
             syncBlockingStatus(activeForm);
         }
@@ -488,8 +570,7 @@
                 uploadStatus.textContent = imageState.message;
                 uploadStatus.classList?.toggle?.("image-upload-error", imageState.error);
             }
-            if (chooseAnother) chooseAnother.hidden = inheritedMode?.checked === true;
-            if (undo) undo.hidden = !row.dataset.dirty || row.dataset.dirty !== "true";
+            if (chooseAnother) chooseAnother.hidden = !imageState.editing;
         }
 
         function restoreBaseline(message = "", options = {}) {
@@ -500,7 +581,8 @@
             delete row.dataset.imageUploading;
             delete row.dataset.imageNeedsUpload;
             if (imageFile) imageFile.value = "";
-            setSelectedMode(row, baseline.mode, baseline.value);
+            imageState.mode = baseline.mode;
+            imageState.editing = false;
             if (binding) binding.value = baseline.value;
             if (operation) operation.value = baseline.operation;
             imageState.fileName = "";
@@ -511,26 +593,10 @@
             renderImage(options);
         }
 
-        function chooseInherited() {
-            imageState.requestVersion++;
-            imageState.uploadPromise = null;
-            discardFallback();
-            revokeObjectUrl();
-            delete row.dataset.imageUploading;
-            delete row.dataset.imageNeedsUpload;
-            if (inheritedMode) inheritedMode.checked = true;
-            imageState.fileName = row.dataset.imageInheritedFileName || "";
-            imageState.previewUrl = row.dataset.imageInheritedPreviewUrl || "";
-            imageState.message = row.dataset.imageInheritedMissing === "true"
-                ? "The inherited uploaded image is missing. Saving will use the inherited image setting."
-                : row.dataset.imageHasInherited === "true" ? "Use inherited image." : "No image will be configured.";
+        function changeImage() {
+            imageState.mode = "customize";
+            imageState.editing = true;
             imageState.error = false;
-            renderPending();
-            renderImage();
-        }
-
-        function chooseCustomize() {
-            if (customizeMode) customizeMode.checked = true;
             imageState.fileName = "";
             imageState.previewUrl = "";
             if (baseline.mode === "inherit") {
@@ -548,20 +614,43 @@
                     row.dataset.imageNeedsUpload = "true";
                 }
             } else {
-                if (binding) binding.value = baseline.value;
+                if (binding && !binding.value) binding.value = baseline.value;
                 imageState.message = "";
                 delete row.dataset.imageNeedsUpload;
             }
+            renderPending();
+            renderImage();
+            imageFile?.click?.();
+        }
+
+        function revertImage() {
+            imageState.requestVersion++;
+            imageState.uploadPromise = null;
+            discardFallback();
+            revokeObjectUrl();
+            delete row.dataset.imageUploading;
+            delete row.dataset.imageNeedsUpload;
+            imageState.mode = "inherit";
+            imageState.editing = false;
+            if (binding) binding.value = "";
+            if (operation) operation.value = "RemoveOverride";
+            imageState.fileName = "";
+            imageState.previewUrl = row.dataset.imageInheritedPreviewUrl || "";
+            imageState.message = row.dataset.imageInheritedMissing === "true"
+                ? "The inherited uploaded image is missing."
+                : row.dataset.hasInherited === "true" ? "Use inherited image." : "No image will be configured.";
             imageState.error = false;
             renderPending();
             renderImage();
+            change?.focus?.();
         }
 
         function setUploadPending(assetId, fileName, previewUrl) {
             delete row.dataset.imageNeedsUpload;
             delete row.dataset.imageUploading;
             imageState.fallback = null;
-            if (customizeMode) customizeMode.checked = true;
+            imageState.mode = "customize";
+            imageState.editing = true;
             if (binding) binding.value = String(assetId);
             imageState.fileName = fileName;
             imageState.previewUrl = previewUrl;
@@ -607,6 +696,7 @@
                     if (requestVersion !== imageState.requestVersion) return false;
                     let result = null;
                     try { result = await response.json(); } catch { /* use generic response error */ }
+                    if (requestVersion !== imageState.requestVersion) return false;
                     const assetId = Number(result?.assetId);
                     if (!response.ok || !Number.isInteger(assetId) || assetId <= 0) throw new Error(result?.error || "The image could not be uploaded.");
                     const safeFileName = result.fileName || file.name;
@@ -627,7 +717,8 @@
                     delete row.dataset.imageUploading;
                     delete row.dataset.imageNeedsUpload;
                     revokeObjectUrl();
-                    setSelectedMode(row, previous.mode, previous.value);
+                    imageState.mode = previous.mode;
+                    imageState.editing = true;
                     if (binding) binding.value = previous.operation === "Upsert" ? previous.value : "";
                     if (operation) operation.value = previous.operation;
                     imageState.objectUrl = previous.objectUrl || null;
@@ -644,11 +735,9 @@
             return imageState.uploadPromise;
         }
 
-        uploadTrigger?.addEventListener("click", () => { imageFile?.click?.(); });
         chooseAnother?.addEventListener("click", () => { imageFile?.click?.(); });
-        undo?.addEventListener("click", () => restoreBaseline());
-        inheritedMode?.addEventListener("change", chooseInherited);
-        customizeMode?.addEventListener("change", chooseCustomize);
+        change?.addEventListener("click", changeImage);
+        revert?.addEventListener("click", revertImage);
         imageFile?.addEventListener("change", () => {
             const selected = imageFile.files?.[0];
             imageFile.value = "";
@@ -676,7 +765,10 @@
     }
 
     function browserWorkRows(settingsForm = form) {
-        return new Set(settingsForm?.querySelectorAll?.('.setting-row[data-dirty="true"]') || []);
+        return new Set([
+            ...(settingsForm?.querySelectorAll?.('.setting-row[data-dirty="true"]') || []),
+            ...(settingsForm?.querySelectorAll?.('.setting-row[data-editing="true"]') || [])
+        ]);
     }
 
     function blockActiveEdit(settingsForm, status = statusRegion) {
@@ -688,7 +780,7 @@
         const row = imageUploadRows(settingsForm)[0] || settingsForm?.querySelector?.('.setting-row[data-image-needs-upload="true"]');
         row?.setAttribute?.("open", "");
         row?.closest?.(".setting-category, .dynamic-settings")?.setAttribute?.("open", "");
-        (row?.querySelector?.(".image-undo-pending") || row?.querySelector?.(".image-upload-trigger"))?.focus?.();
+        (row?.querySelector?.(".image-choose-another") || row?.querySelector?.(".image-upload-trigger"))?.focus?.();
         return true;
     }
 
@@ -714,7 +806,8 @@
             if (row.dataset.imageUploading === "true") return fileName ? `${fileName} (uploading)` : "Image upload in progress";
             return fileName || "Uploaded image";
         }
-        return safeBrowserSummary(row, value, operation);
+        const summary = safeBrowserSummary(row, value, operation);
+        return row?.dataset?.baselineMode === "inherit" && row?.dataset?.sensitive !== "true" ? `Customize here: ${summary}` : summary;
     }
 
     function appendReviewRow(tbody, row, value, operation) {
@@ -965,6 +1058,7 @@
 
     function discardPendingChanges(settingsForm = form, options = {}) {
         const rows = [...browserWorkRows(settingsForm)];
+        const dirtyCountBeforeDiscard = rows.filter((row) => row.dataset?.dirty === "true").length;
         const failures = [];
         rows.forEach((row) => {
             try {
@@ -976,8 +1070,8 @@
         });
         updatePendingActions(settingsForm);
         syncBlockingStatus(settingsForm);
-        const remainingDirtyRows = [...(settingsForm?.querySelectorAll?.('.setting-row[data-dirty="true"]') || [])];
-        const result = { discardedCount: rows.length, failures, remainingDirtyRows };
+        const remainingDirtyRows = [...browserWorkRows(settingsForm)];
+        const result = { discardedCount: dirtyCountBeforeDiscard, failures, remainingDirtyRows };
         if (options.announce) announceDiscardResult(result);
         return result;
     }
@@ -1176,10 +1270,11 @@
     });
     document.querySelector("[data-discard-pending]")?.addEventListener("click", (event) => {
         const rows = [...browserWorkRows()];
-        if (!rows.length) return;
+        const count = dirtyCount();
+        if (!count) return;
         pendingAction = { explicitDiscard: true, focusTarget: rows[0] };
         unsavedDialog._trigger = event.currentTarget;
-        setUnsavedDialogMode("explicit-discard", rows.length);
+        setUnsavedDialogMode("explicit-discard", count);
         showModal(unsavedDialog, '[data-dialog-cancel]');
     });
     window.addEventListener?.("beforeunload", (event) => {

@@ -98,7 +98,7 @@ public sealed record SettingDefinition(string Key, string DisplayName, string De
         {
             return AllowEmpty && !IsSensitive
                 ? null
-                : "An empty value is not valid for this setting. Choose “Use inherited value” instead.";
+                : "An empty value is not valid for this setting. Use Revert to inherited value instead.";
         }
         if (Key.Equals("css_file", StringComparison.OrdinalIgnoreCase) &&
             !SafeHtmlPolicy.IsSafeStylesheetReference(value))
