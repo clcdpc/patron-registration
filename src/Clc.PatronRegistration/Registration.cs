@@ -709,6 +709,8 @@ namespace Clc.PatronRegistration
                 IsECard = settings.ForceEcardRemotely && !CheckIp(ip, settings.DriversLicenseButtonEnabledIpAddresses)
             };
 
+            if (settings.DefaultEreceiptToOn) { p.ReceiveEreceipts = true; }
+
             if (settings.DisplayMailingListCheckbox) { p.AddToMailingList = true; }
 
             var org = CacheHelper.OrganizationCache.Single(o => o.OrganizationID == orgId);

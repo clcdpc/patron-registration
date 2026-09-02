@@ -175,5 +175,6 @@ namespace Clc.PatronRegistration.Configuration
         public int ResetSeconds => GetSetting<int>("reset_seconds");
         public string PhoneNumberFormat => GetSetting<string>("phone_number_format");
         public bool ForceEcardRemotely => GetSetting<bool>("force_ecard_remotely");
+        public bool DefaultEreceiptToOn => GetSetting<bool>("default_ereceipt_to_on");
     }
 }

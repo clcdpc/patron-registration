@@ -136,6 +136,7 @@ namespace Clc.PatronRegistration.Configuration
         bool DisableBranch { get; }
         string PhoneNumberFormat { get; }
         bool ForceEcardRemotely { get; }
+        bool DefaultEreceiptToOn { get; }
 
         List<string> GetRequiredFields();
 
