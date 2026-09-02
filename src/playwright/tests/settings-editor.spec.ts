@@ -49,6 +49,7 @@ test('the loaded editor is locked and contains only explicit actions', async ({ 
         await expect(page.locator(selector)).toBeDisabled();
     }
     await expect(rowFor(page, 'drivers_license_button_text').getByRole('button', { name: 'Revert to inherited value' })).toBeHidden();
+    await expect(rowFor(page, 'age_warning_text').getByRole('button', { name: 'Revert to inherited value' })).toBeHidden();
     await expect(rowFor(page, 'custom_heading').getByRole('button', { name: 'Revert to inherited value' })).toBeVisible();
     await expect(rowFor(page, 'no_inherited_value').getByRole('button', { name: 'Remove customization' })).toBeVisible();
     await expect(rowFor(page, 'header_image').getByRole('button', { name: 'Change image' })).toBeVisible();
