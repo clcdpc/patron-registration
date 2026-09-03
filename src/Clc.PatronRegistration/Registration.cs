@@ -48,7 +48,7 @@ namespace Clc.PatronRegistration
         public string? StreetTwo { get; set; } = string.Empty;
         public string City { get; set; } = string.Empty;
         public string State { get; set; } = string.Empty;
-        public string User1 { get; set; } = string.Empty;
+        public string? User1 { get; set; } = string.Empty;
         public string User2 { get; set; } = string.Empty;
         public string User4 { get; set; } = string.Empty;
         public string User5 { get; set; } = string.Empty;
