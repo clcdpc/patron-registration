@@ -1827,7 +1827,11 @@ public class SettingsAdministrationTests
         StringAssert.Contains(partial, "class=\"setting-change image-upload-trigger\"");
         StringAssert.Contains(partial, "class=\"image-choose-another\"");
         StringAssert.Contains(partial, "class=\"setting-comparison\"");
-        StringAssert.Contains(partial, "class=\"setting-scope-header\"");
+        StringAssert.Contains(partial, "class=\"setting-comparison-column setting-baseline-column\"");
+        StringAssert.Contains(partial, "class=\"setting-comparison-column setting-scope-panel\"");
+        StringAssert.Contains(partial, "class=\"setting-comparison-header setting-scope-header\"");
+        StringAssert.Contains(partial, "<label class=\"visually-hidden\" for=\"@inputId\"");
+        Assert.IsFalse(partial.Contains("setting-value-panel", StringComparison.Ordinal));
         StringAssert.Contains(partial, "class=\"setting-change\"");
         StringAssert.Contains(partial, "class=\"setting-revert\"");
         StringAssert.Contains(partial, "data-image-local-value=");

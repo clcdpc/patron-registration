@@ -410,37 +410,79 @@ test('discard locks several edited controls and restores the loaded values', asy
     await expect(page.locator('.settings-actions')).toBeHidden();
 });
 
-test('desktop and narrow layouts keep effective and scope columns readable', async ({ page }) => {
+test('desktop and narrow layouts keep peer headers and value surfaces aligned', async ({ page }) => {
     const row = rowFor(page, 'registration_text');
-    const measureLongFormValues = async () => Promise.all(['registration_text', 'age_warning_text'].map((key) => rowFor(page, key).evaluate((element) => {
-        const effective = element.querySelector('.setting-current-value-full')!.getBoundingClientRect();
+    const measureLongFormValues = async () => Promise.all(['registration_text', 'age_warning_text', 'custom_form_footer_html', 'welcome_email_template_text', 'welcome_email_template_html'].map((key) => rowFor(page, key).evaluate((element) => {
+        const effective = element.querySelector('.setting-effective-value')!.getBoundingClientRect();
         const editor = element.querySelector('textarea.setting-value')!.getBoundingClientRect();
-        return { effectiveHeight: effective.height, editorHeight: editor.height };
+        const header = element.querySelector('[aria-label="At this scope"] .setting-comparison-header')!.getBoundingClientRect();
+        const actions = element.querySelector('.setting-scope-actions')!.getBoundingClientRect();
+        const preview = element.querySelector('.html-preview, .plain-text-preview')?.getBoundingClientRect();
+        const labelVisuallyHidden = [...element.querySelectorAll('.value-editor > label')].every((label) => label.classList.contains('visually-hidden'));
+        return {
+            actionInsideHeader: actions.top >= header.top - 1 && actions.right <= header.right + 1 && actions.bottom <= header.bottom + 1,
+            effectiveHeight: effective.height,
+            editorHeight: editor.height,
+            valueTopDifference: Math.abs(effective.top - editor.top),
+            previewFollowsEditor: !preview || preview.top >= editor.bottom,
+            labelVisuallyHidden,
+        };
     })));
     const desktop = await row.locator('.setting-comparison').evaluate((element) => {
         const effective = element.querySelector('[aria-label="Effective now"]')!.getBoundingClientRect();
         const scope = element.querySelector('[aria-label="At this scope"]')!.getBoundingClientRect();
-        return { effectiveRight: effective.right, scopeLeft: scope.left, effectiveTop: effective.top, scopeTop: scope.top };
+        return {
+            effectiveRight: effective.right,
+            scopeLeft: scope.left,
+            effectiveTop: effective.top,
+            scopeTop: scope.top,
+            noOverflow: element.scrollWidth <= element.clientWidth + 1,
+        };
     });
     expect(desktop.effectiveRight).toBeLessThanOrEqual(desktop.scopeLeft + 1);
     expect(Math.abs(desktop.effectiveTop - desktop.scopeTop)).toBeLessThan(4);
+    expect(desktop.noOverflow).toBe(true);
     for (const metrics of await measureLongFormValues()) {
         expect(metrics.effectiveHeight).toBeGreaterThanOrEqual(128);
-        expect(Math.abs(metrics.effectiveHeight - metrics.editorHeight)).toBeLessThan(32);
+        expect(Math.abs(metrics.effectiveHeight - metrics.editorHeight)).toBeLessThanOrEqual(5);
+        expect(metrics.valueTopDifference).toBeLessThanOrEqual(2);
+        expect(metrics.labelVisuallyHidden).toBe(true);
+        expect(metrics.actionInsideHeader).toBe(true);
+        expect(metrics.previewFollowsEditor).toBe(true);
     }
+    await expect(row.getByLabel('Value for Default success message at this scope')).toBeVisible();
+    for (const key of ['custom_heading', 'show_age_warning', 'reset_seconds', 'expiration_date', 'drivers_license_input_type']) {
+        const scalar = await rowFor(page, key).evaluate((element) => {
+            const effective = element.querySelector('.setting-effective-value')!.getBoundingClientRect();
+            const editor = element.querySelector('.value-editor')!.getBoundingClientRect();
+            return { compact: effective.height < 80, startDifference: Math.abs(effective.top - editor.top) };
+        });
+        expect(scalar.compact).toBe(true);
+        expect(scalar.startDifference).toBeLessThanOrEqual(2);
+    }
+    const batchHeader = await rowFor(page, 'label.NameFirst').locator('.setting-scope-header').evaluate((element) => {
+        const header = element.getBoundingClientRect();
+        const actions = element.querySelector('.setting-scope-actions')!.getBoundingClientRect();
+        return { compact: header.height < 60, actionsInside: actions.top >= header.top - 1 && actions.right <= header.right + 1 && actions.bottom <= header.bottom + 1 };
+    });
+    expect(batchHeader.compact).toBe(true);
+    expect(batchHeader.actionsInside).toBe(true);
 
-    await page.setViewportSize({ width: 320, height: 900 });
+    await page.setViewportSize({ width: 420, height: 900 });
     const narrow = await row.locator('.setting-comparison').evaluate((element) => {
         const effective = element.querySelector('[aria-label="Effective now"]')!.getBoundingClientRect();
         const scope = element.querySelector('[aria-label="At this scope"]')!.getBoundingClientRect();
-        return { effectiveBottom: effective.bottom, scopeTop: scope.top, effectiveLeft: effective.left, scopeLeft: scope.left };
+        return {
+            effectiveBottom: effective.bottom,
+            scopeTop: scope.top,
+            effectiveLeft: effective.left,
+            scopeLeft: scope.left,
+            noOverflow: element.scrollWidth <= element.clientWidth + 1,
+        };
     });
     expect(narrow.effectiveBottom).toBeLessThanOrEqual(narrow.scopeTop + 1);
     expect(Math.abs(narrow.effectiveLeft - narrow.scopeLeft)).toBeLessThan(4);
-    for (const metrics of await measureLongFormValues()) {
-        expect(metrics.effectiveHeight).toBeGreaterThanOrEqual(128);
-        expect(Math.abs(metrics.effectiveHeight - metrics.editorHeight)).toBeLessThan(32);
-    }
+    expect(narrow.noOverflow).toBe(true);
     const boolean = rowFor(page, 'show_age_warning');
     const narrowGroup = await boolean.locator('.setting-value-group').evaluate((element) => ({ width: element.getBoundingClientRect().width, parentWidth: element.parentElement!.getBoundingClientRect().width }));
     expect(narrowGroup.width).toBeLessThanOrEqual(narrowGroup.parentWidth + 1);

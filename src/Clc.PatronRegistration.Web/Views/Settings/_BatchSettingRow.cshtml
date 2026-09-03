@@ -75,8 +75,8 @@
         <input class="change-key" type="hidden" name="Changes[@token].Key" value="@definition.Key" disabled />
         <input class="operation" type="hidden" name="Changes[@token].Operation" value="@baselineOperation" disabled />
         <input class="setting-value-binding" type="hidden" name="Changes[@token].Value" value="@editorValue" disabled />
-        <div class="setting-scope-header">
-            <div class="setting-scope-heading"><strong>At this scope</strong><span class="setting-scope-status">@rowStatus</span></div>
+        <div class="setting-comparison-header setting-scope-header">
+            <div class="setting-comparison-heading"><strong>At this scope</strong><span class="setting-scope-status">@rowStatus</span></div>
             <div class="setting-scope-actions">
                 <button type="button" class="setting-change" aria-label="Change @definition.DisplayName">Change</button>
                 <button type="button" class="setting-revert" aria-label="@revertLabel for @definition.DisplayName" hidden="@(baselineMode == "customize" ? null : "hidden")">@revertLabel</button>

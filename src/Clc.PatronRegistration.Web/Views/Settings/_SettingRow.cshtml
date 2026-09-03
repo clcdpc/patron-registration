@@ -153,53 +153,57 @@
         @if (isImage)
         {
             <div class="setting-comparison image-comparison">
-                <section class="setting-value-panel" aria-label="Effective now">
-                    <div class="setting-value-panel-heading"><strong>Effective now</strong><span class="setting-value-source">Source: @(isNotSet ? "Not configured" : Model.SourceDescription)</span></div>
-                    <div class="@imageCurrentClass">
-                        @if (Model.EffectiveAsset is not null)
-                        {
-                            <img class="setting-image-preview" src="@Model.EffectiveAsset.PreviewUrl" alt="Current header image" />
-                            <div class="image-card-copy"><strong>@Model.EffectiveAsset.FileName</strong><span class="image-source-status">@imageSource</span></div>
-                        }
-                        else if (Model.EffectiveAssetMissing)
-                        {
-                            <p class="setting-missing-asset" role="status">The configured uploaded image is missing.</p><span class="image-source-status">@imageSource</span>
-                        }
-                        else
-                        {
-                            <span>No image configured.</span>
-                        }
+                <section class="setting-comparison-column" aria-label="Effective now">
+                    <div class="setting-comparison-header">
+                        <div class="setting-comparison-heading"><strong>Effective now</strong><span class="setting-value-source">Source: @(isNotSet ? "Not configured" : Model.SourceDescription)</span></div>
                     </div>
-                    @if (hasDraftOperation)
-                    {
-                        <div class="image-card image-draft">
-                            <strong>Shared draft</strong>
-                            @if (isDraftUpsert && Model.StagedAsset is not null)
+                    <div class="setting-baseline-values">
+                        <div class="@imageCurrentClass">
+                            @if (Model.EffectiveAsset is not null)
                             {
-                                <img class="setting-image-preview" src="@Model.StagedAsset.PreviewUrl" alt="Shared draft header image" /><small>@Model.StagedAsset.FileName</small><span>Replace with this uploaded image.</span>
+                                <img class="setting-image-preview" src="@Model.EffectiveAsset.PreviewUrl" alt="Current header image" />
+                                <div class="image-card-copy"><strong>@Model.EffectiveAsset.FileName</strong><span class="image-source-status">@imageSource</span></div>
                             }
-                            else if (isDraftUpsert && Model.StagedAssetMissing)
+                            else if (Model.EffectiveAssetMissing)
                             {
-                                <p class="setting-missing-asset" role="status">The staged uploaded image is missing.</p>
-                            }
-                            else if (!isDraftUpsert && Model.HasInheritedValue && Model.InheritedAssetMissing)
-                            {
-                                <p class="setting-missing-asset" role="status">The inherited uploaded image is missing.</p><span>Use the inherited image setting.</span>
-                            }
-                            else if (Model.StagedAsset is not null)
-                            {
-                                <img class="setting-image-preview" src="@Model.StagedAsset.PreviewUrl" alt="Inherited shared draft header image" /><small>@Model.StagedAsset.FileName</small><span>Use inherited image.</span>
+                                <p class="setting-missing-asset" role="status">The configured uploaded image is missing.</p><span class="image-source-status">@imageSource</span>
                             }
                             else
                             {
-                                <p>No image will be configured.</p><span>@(Model.HasInheritedValue ? "Use inherited image." : "Remove image.")</span>
+                                <span>No image configured.</span>
                             }
                         </div>
-                    }
+                        @if (hasDraftOperation)
+                        {
+                            <div class="image-card image-draft">
+                                <strong>Shared draft</strong>
+                                @if (isDraftUpsert && Model.StagedAsset is not null)
+                                {
+                                    <img class="setting-image-preview" src="@Model.StagedAsset.PreviewUrl" alt="Shared draft header image" /><small>@Model.StagedAsset.FileName</small><span>Replace with this uploaded image.</span>
+                                }
+                                else if (isDraftUpsert && Model.StagedAssetMissing)
+                                {
+                                    <p class="setting-missing-asset" role="status">The staged uploaded image is missing.</p>
+                                }
+                                else if (!isDraftUpsert && Model.HasInheritedValue && Model.InheritedAssetMissing)
+                                {
+                                    <p class="setting-missing-asset" role="status">The inherited uploaded image is missing.</p><span>Use the inherited image setting.</span>
+                                }
+                                else if (Model.StagedAsset is not null)
+                                {
+                                    <img class="setting-image-preview" src="@Model.StagedAsset.PreviewUrl" alt="Inherited shared draft header image" /><small>@Model.StagedAsset.FileName</small><span>Use inherited image.</span>
+                                }
+                                else
+                                {
+                                    <p>No image will be configured.</p><span>@(Model.HasInheritedValue ? "Use inherited image." : "Remove image.")</span>
+                                }
+                            </div>
+                        }
+                    </div>
                 </section>
-                <section class="setting-scope-panel" aria-label="At this scope">
-                    <div class="setting-scope-header">
-                        <div class="setting-scope-heading"><strong>At this scope</strong><span class="setting-scope-status">@scopeStatus</span></div>
+                <section class="setting-comparison-column setting-scope-panel" aria-label="At this scope">
+                    <div class="setting-comparison-header setting-scope-header">
+                        <div class="setting-comparison-heading"><strong>At this scope</strong><span class="setting-scope-status">@scopeStatus</span></div>
                         <div class="setting-scope-actions">
                             <button type="button" class="setting-change image-upload-trigger" aria-label="@imageActionLabel for @definition.DisplayName" aria-describedby="@validationErrorId">@imageActionLabel</button>
                             <button type="button" class="setting-revert" aria-label="@revertLabel for @definition.DisplayName" aria-describedby="@validationErrorId" hidden="@(baselineMode == "customize" ? null : "hidden")">@revertLabel</button>
@@ -226,44 +230,46 @@
         else
         {
             <div class="setting-comparison">
-                <div class="setting-baseline-column">
-                    <section class="setting-value-panel" aria-label="Effective now">
-                        <div class="setting-value-panel-heading"><strong>Effective now</strong><span class="setting-value-source">Source: @(isNotSet ? "Not configured" : Model.SourceDescription)</span></div>
+                <section class="setting-comparison-column setting-baseline-column" aria-label="Effective now">
+                    <div class="setting-comparison-header">
+                        <div class="setting-comparison-heading"><strong>Effective now</strong><span class="setting-value-source">Source: @(isNotSet ? "Not configured" : Model.SourceDescription)</span></div>
+                    </div>
+                    <div class="setting-baseline-values">
                         @if (hasCurrentHtmlValue)
                         {
-                            <iframe sandbox="" class="setting-html-value-preview" title="Formatted effective value for @definition.DisplayName" srcdoc="@resolution.EffectiveValue"></iframe>
+                            <iframe sandbox="" class="setting-effective-value setting-html-value-preview" title="Formatted effective value for @definition.DisplayName" srcdoc="@resolution.EffectiveValue"></iframe>
                         }
                         else if (preservesFullValueFormatting)
                         {
-                            <pre class="setting-current-value setting-current-value-full">@expandedCurrentValue</pre>
+                            <pre class="setting-effective-value setting-current-value setting-current-value-full">@expandedCurrentValue</pre>
                         }
                         else
                         {
-                            <div class="setting-current-value">@(definition.ValueType == SettingValueType.Enumeration ? Clc.PatronRegistration.Web.Models.SettingValuePresentation.FriendlyValue(definition, resolution.EffectiveValue, resolution.SourceOrganizationId.HasValue) : expandedCurrentValue)</div>
+                            <div class="setting-effective-value setting-current-value">@(definition.ValueType == SettingValueType.Enumeration ? Clc.PatronRegistration.Web.Models.SettingValuePresentation.FriendlyValue(definition, resolution.EffectiveValue, resolution.SourceOrganizationId.HasValue) : expandedCurrentValue)</div>
                         }
-                    </section>
-                    @if (hasDraftOperation)
-                    {
-                        <section class="setting-value-panel setting-draft-value-panel" aria-label="Shared draft value">
-                            <div class="setting-value-panel-heading"><strong>Shared draft</strong></div>
-                            @if (hasDraftHtmlValue)
-                            {
-                                <iframe sandbox="" class="setting-html-value-preview" title="Formatted shared draft value for @definition.DisplayName" srcdoc="@Model.DraftValue"></iframe>
-                            }
-                            else if (preservesFullValueFormatting && !isRemoveOverride && !definition.IsSensitive)
-                            {
-                                <pre class="setting-current-value setting-current-value-full">@expandedDraftValue</pre>
-                            }
-                            else
-                            {
-                                <div class="setting-current-value">@expandedDraftValue</div>
-                            }
-                        </section>
-                    }
-                </div>
-                <section class="setting-scope-panel" aria-label="At this scope">
-                    <div class="setting-scope-header">
-                        <div class="setting-scope-heading"><strong>At this scope</strong><span class="setting-scope-status">@scopeStatus</span></div>
+                        @if (hasDraftOperation)
+                        {
+                            <section class="setting-draft-value-panel" aria-label="Shared draft value">
+                                <div class="setting-draft-value-heading"><strong>Shared draft</strong></div>
+                                @if (hasDraftHtmlValue)
+                                {
+                                    <iframe sandbox="" class="setting-html-value-preview" title="Formatted shared draft value for @definition.DisplayName" srcdoc="@Model.DraftValue"></iframe>
+                                }
+                                else if (preservesFullValueFormatting && !isRemoveOverride && !definition.IsSensitive)
+                                {
+                                    <pre class="setting-current-value setting-current-value-full">@expandedDraftValue</pre>
+                                }
+                                else
+                                {
+                                    <div class="setting-current-value">@expandedDraftValue</div>
+                                }
+                            </section>
+                        }
+                    </div>
+                </section>
+                <section class="setting-comparison-column setting-scope-panel" aria-label="At this scope">
+                    <div class="setting-comparison-header setting-scope-header">
+                        <div class="setting-comparison-heading"><strong>At this scope</strong><span class="setting-scope-status">@scopeStatus</span></div>
                         <div class="setting-scope-actions">
                             <button type="button" class="setting-change" aria-label="Change @definition.DisplayName" aria-describedby="@validationErrorId">Change</button>
                             <button type="button" class="setting-revert" aria-label="@revertLabel for @definition.DisplayName" aria-describedby="@validationErrorId" hidden="@(baselineMode == "customize" ? null : "hidden")">@revertLabel</button>
@@ -320,7 +326,7 @@
                             }
                             else if (definition.ValueType is SettingValueType.LongString or SettingValueType.Html or SettingValueType.EmailTemplate)
                             {
-                                <label for="@inputId">@(definition.ValueType == SettingValueType.EmailTemplate ? "Source" : "Value")</label>
+                                <label class="visually-hidden" for="@inputId">@(definition.ValueType == SettingValueType.EmailTemplate ? "Source" : "Value") for @definition.DisplayName at this scope</label>
                                 <textarea id="@inputId" class="setting-value" rows="@(definition.ValueType == SettingValueType.EmailTemplate ? 12 : definition.ValueType == SettingValueType.Html ? 9 : 6)" aria-describedby="@validationErrorId" readonly>@editorValue</textarea>
                                 @if (isHtml)
                                 {
