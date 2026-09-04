@@ -1,6 +1,7 @@
 using Clc.PatronRegistration.Administration;
 using Clc.PatronRegistration.Configuration;
 using Clc.PatronRegistration.Web.Settings;
+using System.Globalization;
 using System.Text.RegularExpressions;
 
 namespace Clc.PatronRegistration.Web.Models;
@@ -23,6 +24,45 @@ public static class SettingEditorDefaults
 
 public static class SettingValuePresentation
 {
+    public const int CompactPreviewMaximumLength = 160;
+
+    public static string FriendlyValue(SettingDefinition definition, string? value, bool hasValue = true)
+    {
+        if (!hasValue || value is null || value.Length == 0)
+        {
+            return Format(definition, value, hasValue);
+        }
+
+        if (definition.ValueType == SettingValueType.Enumeration)
+        {
+            return definition.Key.ToLowerInvariant() switch
+            {
+                "dl_format" when value.Equals("barcode", StringComparison.OrdinalIgnoreCase) => "Barcode",
+                "dl_format" when value.Equals("magstripe", StringComparison.OrdinalIgnoreCase) => "Magnetic stripe",
+                _ => value
+            };
+        }
+
+        if (definition.Key.Equals("show_dl_ips", StringComparison.OrdinalIgnoreCase))
+        {
+            var prefixes = value.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            return prefixes.Length == 0 ? "Blank" : string.Join(", ", prefixes);
+        }
+
+        if ((definition.ValueType is SettingValueType.Date or SettingValueType.NullableDate) &&
+            DateOnly.TryParseExact(value, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var date))
+        {
+            return date.ToString("MMMM d, yyyy", CultureInfo.InvariantCulture);
+        }
+
+        if (definition.Key.Equals("reset_seconds", StringComparison.OrdinalIgnoreCase))
+        {
+            return $"{value} seconds";
+        }
+
+        return Format(definition, value, hasValue);
+    }
+
     public static string Format(SettingDefinition definition, string? value, bool hasValue)
     {
         if (!hasValue)
@@ -45,46 +85,58 @@ public static class SettingValuePresentation
         {
             return "Blank";
         }
-        return definition.ValueType switch
+        if (definition.ValueType == SettingValueType.Boolean && bool.TryParse(value, out var booleanValue))
         {
-            SettingValueType.Boolean when bool.TryParse(value, out var booleanValue) => booleanValue ? "Yes" : "No",
-            SettingValueType.LongString => Preview(value),
-            SettingValueType.Html => "HTML configured",
-            SettingValueType.EmailTemplate => "Email template configured",
-            _ => value
-        };
+            return booleanValue ? "Yes" : "No";
+        }
+        return definition.ValueType is SettingValueType.LongString or SettingValueType.Html or SettingValueType.EmailTemplate ||
+            SafeHtmlPolicy.IsHtmlExecutionContext(definition)
+            ? CompactPreview(value)
+            : value;
     }
 
     public static SettingRowPresentation ForRow(SettingRowViewModel row)
     {
         if (row.DraftOperation == DraftOperation.Upsert)
         {
-            return new(SettingPresentationState.DraftChange, Format(row.Definition, row.DraftValue, true),
-                "Shared draft", Format(row.Definition, row.Resolution.EffectiveValue, row.Resolution.SourceOrganizationId.HasValue));
+            return new(SettingPresentationState.DraftChange, FriendlyValue(row.Definition, row.DraftValue, true),
+                "Shared draft", FriendlyValue(row.Definition, row.Resolution.EffectiveValue, row.Resolution.SourceOrganizationId.HasValue));
         }
         if (row.DraftOperation == DraftOperation.RemoveOverride)
         {
-            return new(SettingPresentationState.DraftChange, "Use inherited value", "Shared draft",
-                Format(row.Definition, row.Resolution.EffectiveValue, row.Resolution.SourceOrganizationId.HasValue));
+            return new(SettingPresentationState.DraftChange,
+                FriendlyValue(row.Definition, row.InheritedValue, row.HasInheritedValue),
+                "Shared draft — use inherited value",
+                FriendlyValue(row.Definition, row.InheritedValue, row.HasInheritedValue));
         }
         if (row.Resolution.OwnsOverride)
         {
-            var value = Format(row.Definition, row.Resolution.EffectiveValue, true);
-            return new(SettingPresentationState.Customized, value, "Customized", value);
+            var value = FriendlyValue(row.Definition, row.Resolution.EffectiveValue, true);
+            return new(SettingPresentationState.Customized, value, "Customized here", value);
         }
         if (row.Resolution.SourceOrganizationId.HasValue)
         {
-            var value = Format(row.Definition, row.Resolution.EffectiveValue, true);
-            return new(SettingPresentationState.Inherited, value, "Inherited", value);
+            var value = FriendlyValue(row.Definition, row.Resolution.EffectiveValue, true);
+            var source = string.IsNullOrWhiteSpace(row.InheritedSourceDescription) ? row.SourceDescription : row.InheritedSourceDescription;
+            if (string.IsNullOrWhiteSpace(source) || string.Equals(source, "No value is configured", StringComparison.Ordinal))
+            {
+                source = row.Resolution.SourceOrganizationType;
+            }
+            return new(SettingPresentationState.Inherited, value, $"Inherited from {source}", value);
         }
-        return new(SettingPresentationState.NotSet, "—", "Not set", "Not set");
+        return new(SettingPresentationState.NotSet, "Not configured", "Not configured", "Not configured");
     }
 
-    private static string Preview(string value)
+    public static string CompactPreview(string value)
     {
-        const int maximumLength = 160;
         var normalized = Regex.Replace(value, @"\s+", " ").Trim();
-        return normalized.Length <= maximumLength ? normalized : $"{normalized[..maximumLength].TrimEnd()}…";
+        if (normalized.Length == 0)
+        {
+            return "Blank";
+        }
+        return normalized.Length <= CompactPreviewMaximumLength
+            ? normalized
+            : $"{normalized[..CompactPreviewMaximumLength].TrimEnd()}…";
     }
 }
 
@@ -134,29 +186,6 @@ public sealed record SettingRowViewModel(
     string? InheritedSourceDescription = null,
     long? DraftRevision = null);
 
-public static class SettingInheritancePresentation
-{
-    public static string MessageFor(SettingRowViewModel row)
-    {
-        const string prefix = "Choosing Use inherited value will remove this customization.";
-        if (!row.HasInheritedValue)
-        {
-            return $"{prefix} No inherited value is configured.";
-        }
-        var source = row.InheritedSourceDescription ?? "the inherited scope";
-        if (row.Definition.IsSensitive)
-        {
-            return $"{prefix} Use the inherited value from {source}.";
-        }
-
-        var inheritedValue = SettingValuePresentation.Format(row.Definition, row.InheritedValue, true);
-        var valueDescription = row.Definition.ValueType is SettingValueType.Html or SettingValueType.EmailTemplate
-            ? $"use the value from {source}"
-            : $"use “{inheritedValue}” from {source}";
-        return $"{prefix} The setting will {valueDescription}.";
-    }
-}
-
 public static class SettingReviewPresentation
 {
     public static string Live(SettingRowViewModel row)
@@ -173,9 +202,8 @@ public static class SettingReviewPresentation
         {
             return "not configured";
         }
-        return row.Resolution.OwnsOverride
-            ? SettingValuePresentation.Format(row.Definition, row.Resolution.EffectiveValue, true)
-            : $"inherited from {row.SourceDescription}";
+        var value = SettingValuePresentation.FriendlyValue(row.Definition, row.Resolution.EffectiveValue, true);
+        return row.Resolution.OwnsOverride ? value : $"{value} · inherited from {row.SourceDescription}";
     }
 
     public static string Proposed(SettingRowViewModel row)
@@ -197,7 +225,7 @@ public static class SettingReviewPresentation
             }
             return row.Definition.IsSensitive
                 ? $"use inherited value from {source}"
-                : $"use {SettingValuePresentation.Format(row.Definition, row.InheritedValue, true)} from {source}";
+                : $"use {SettingValuePresentation.FriendlyValue(row.Definition, row.InheritedValue, true)} from {source}";
         }
         if (row.Definition.IsSensitive)
         {
@@ -209,7 +237,7 @@ public static class SettingReviewPresentation
                 ? row.StagedAsset.FileName
                 : row.StagedAssetMissing ? "missing staged image" : "uploaded image";
         }
-        return SettingValuePresentation.Format(row.Definition, row.DraftValue, true);
+        return SettingValuePresentation.FriendlyValue(row.Definition, row.DraftValue, true);
     }
 
     private static string LiveImage(SettingRowViewModel row)

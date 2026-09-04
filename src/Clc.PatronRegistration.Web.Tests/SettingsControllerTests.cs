@@ -812,7 +812,7 @@ public class SettingsControllerTests
     }
 
     [TestMethod]
-    public void DirectSave_RepositoryFailureStillReturnsConflictWithoutRefreshingCache()
+    public void DirectSave_ConcurrencyRedirectsWithRefreshMessageWithoutRefreshingCache()
     {
         var repository = new Mock<ISettingsAdministrationRepository>();
         repository.Setup(service => service.DirectSave(
@@ -829,7 +829,63 @@ public class SettingsControllerTests
             Changes = [new SettingMutationInput { Key = "label.NameFirst", Value = "First name" }]
         });
 
-        Assert.IsInstanceOfType<ConflictObjectResult>(result);
+        Assert.IsInstanceOfType<RedirectToActionResult>(result);
+        Assert.AreEqual(nameof(SettingsController.Index), ((RedirectToActionResult)result).ActionName);
+        StringAssert.Contains(controller.TempData["SettingsError"]?.ToString(), "Reloaded values are shown below");
+        StringAssert.Contains(controller.TempData["SettingsError"]?.ToString(), "Review them before trying again");
+        invalidator.Verify(service => service.LiveSettingsChanged(It.IsAny<string?>()), Times.Never);
+    }
+
+    [TestMethod]
+    public void DirectSave_DeadlockRedirectsWithRefreshMessageWithoutRefreshingCache()
+    {
+        var repository = new Mock<ISettingsAdministrationRepository>();
+        repository.Setup(service => service.DirectSave(
+                It.IsAny<int>(), It.IsAny<string>(), It.IsAny<long>(), It.IsAny<IReadOnlyList<SettingMutation>>(),
+                It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), It.IsAny<AuditContext>()))
+            .Throws(SqlExceptionWithNumber(1205));
+        var invalidator = new Mock<ISettingsCacheInvalidator>(MockBehavior.Strict);
+        var controller = CreateController(repository, LibraryAuthorization(), suppliedCacheInvalidator: invalidator.Object);
+
+        var result = controller.DirectSave(new SaveSettingsRequest
+        {
+            OrganizationId = 3,
+            ExpectedVersion = 1,
+            Changes = [new SettingMutationInput { Key = "label.NameFirst", Value = "First name" }]
+        });
+
+        Assert.IsInstanceOfType<RedirectToActionResult>(result);
+        Assert.AreEqual(nameof(SettingsController.Index), ((RedirectToActionResult)result).ActionName);
+        StringAssert.Contains(controller.TempData["SettingsError"]?.ToString(), "Reloaded values are shown below");
+        StringAssert.Contains(controller.TempData["SettingsError"]?.ToString(), "Review them before trying again");
+        invalidator.Verify(service => service.LiveSettingsChanged(It.IsAny<string?>()), Times.Never);
+    }
+
+    [TestMethod]
+    public void DirectSave_RepositoryValidationFailureRedirectsAndAuditsWithoutRefreshingCache()
+    {
+        var repository = new Mock<ISettingsAdministrationRepository>();
+        repository.Setup(service => service.DirectSave(
+                It.IsAny<int>(), It.IsAny<string>(), It.IsAny<long>(), It.IsAny<IReadOnlyList<SettingMutation>>(),
+                It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), It.IsAny<AuditContext>()))
+            .Throws(new InvalidOperationException("First name is invalid."));
+        var invalidator = new Mock<ISettingsCacheInvalidator>(MockBehavior.Strict);
+        var controller = CreateController(repository, LibraryAuthorization(), suppliedCacheInvalidator: invalidator.Object);
+
+        var result = controller.DirectSave(new SaveSettingsRequest
+        {
+            OrganizationId = 3,
+            ExpectedVersion = 1,
+            Changes = [new SettingMutationInput { Key = "label.NameFirst", Value = "First name" }]
+        });
+
+        Assert.IsInstanceOfType<RedirectToActionResult>(result);
+        Assert.AreEqual(nameof(SettingsController.Index), ((RedirectToActionResult)result).ActionName);
+        StringAssert.Contains(controller.TempData["SettingsError"]?.ToString(), "First name is invalid.");
+        StringAssert.Contains(controller.TempData["SettingsError"]?.ToString(), "Reloaded values are shown below");
+        StringAssert.Contains(controller.TempData["SettingsError"]?.ToString(), "Review them before trying again");
+        repository.Verify(service => service.WriteAudit("ValidationFailed", false, It.IsAny<AuditContext>(),
+            "First name is invalid.", null, null, null), Times.Once);
         invalidator.Verify(service => service.LiveSettingsChanged(It.IsAny<string?>()), Times.Never);
     }
 
@@ -850,6 +906,8 @@ public class SettingsControllerTests
         });
 
         Assert.IsInstanceOfType<RedirectToActionResult>(result);
+        Assert.AreEqual("header_image_asset_id", controller.TempData["SettingsErrorKey"]);
+        Assert.AreEqual("header_image_asset_id", controller.TempData["SettingsErrorGroup"]);
         repository.Verify(service => service.DirectSave(
             It.IsAny<int>(), It.IsAny<string>(), It.IsAny<long>(), It.IsAny<IReadOnlyList<SettingMutation>>(),
             It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), It.IsAny<AuditContext>()), Times.Never);
@@ -894,6 +952,8 @@ public class SettingsControllerTests
         });
 
         Assert.IsInstanceOfType<RedirectToActionResult>(result);
+        Assert.AreEqual("header_image_asset_id", controller.TempData["SettingsErrorKey"]);
+        Assert.AreEqual("header_image_asset_id", controller.TempData["SettingsErrorGroup"]);
         repository.Verify(service => service.SaveToSharedDraft(
             It.IsAny<int>(), It.IsAny<string>(), It.IsAny<long>(), It.IsAny<long?>(),
             It.IsAny<IReadOnlyList<SettingMutation>>(), It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(),
@@ -1286,6 +1346,30 @@ public class SettingsControllerTests
         Assert.IsNull(row.EffectiveAsset);
         repository.Verify(service => service.DirectSave(It.IsAny<int>(), It.IsAny<string>(), It.IsAny<long>(),
             It.IsAny<IReadOnlyList<SettingMutation>>(), It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(), It.IsAny<AuditContext>()), Times.Never);
+    }
+
+    [TestMethod]
+    public void Index_InheritedRowsExposeEffectiveValueAsTheInheritanceChoice()
+    {
+        var repository = new Mock<ISettingsAdministrationRepository>();
+        repository.Setup(service => service.GetVersion(3, string.Empty)).Returns(4);
+        repository.Setup(service => service.GetFormCodes(It.IsAny<int>(), It.IsAny<int>())).Returns([]);
+        repository.Setup(service => service.GetLegacyFormCodes()).Returns([]);
+        var cache = new TestCache
+        {
+            SettingsCache =
+            [
+                new() { OrganizationID = 1, FormCode = string.Empty, Setting = "registration_text", Value = "System text" }
+            ]
+        };
+
+        var result = (ViewResult)CreateController(repository, LibraryAuthorization(), cache).Index(3);
+        var row = ((SettingsIndexViewModel)result.Model!).Settings.Single(setting => setting.Definition.Key == "registration_text");
+
+        Assert.IsFalse(row.Resolution.OwnsOverride);
+        Assert.IsTrue(row.HasInheritedValue);
+        Assert.AreEqual("System text", row.InheritedValue);
+        Assert.AreEqual("System defaults", row.InheritedSourceDescription);
     }
 
     [TestMethod]
@@ -1896,6 +1980,29 @@ public class SettingsControllerTests
 
         Assert.IsInstanceOfType<RedirectToActionResult>(controller.CommitDraft(draft.DraftId, 3, expectedDraftRevision: draft.Revision));
         Assert.IsInstanceOfType<RedirectToActionResult>(controller.DiscardDraft(draft.DraftId, 3, expectedDraftRevision: draft.Revision));
+    }
+
+    [DataTestMethod]
+    [DataRow("label.NameFirst", "Draft first name")]
+    [DataRow("require.PhoneVoice1", "true")]
+    public void RemoveDraftChange_BatchSettingUsesGuardedRevision(string settingKey, string draftValue)
+    {
+        var repository = new Mock<ISettingsAdministrationRepository>();
+        var draft = new SettingDraft(25, 3, string.Empty, 7, DraftStatus.Active,
+            [new SettingMutation(settingKey, DraftOperation.Upsert, draftValue)]);
+        repository.Setup(service => service.GetDraft(draft.DraftId)).Returns(draft);
+        var controller = CreateController(repository, LibraryAuthorization());
+
+        var result = controller.RemoveDraftChange(draft.DraftId, 3, string.Empty, settingKey, draft.Revision);
+
+        Assert.IsInstanceOfType<RedirectToActionResult>(result);
+        repository.Verify(service => service.RemoveDraftChange(
+            draft.DraftId,
+            settingKey,
+            It.IsAny<IReadOnlyDictionary<string, SettingDefinition>>(),
+            false,
+            It.IsAny<AuditContext>(),
+            draft.Revision), Times.Once);
     }
 
     [TestMethod]

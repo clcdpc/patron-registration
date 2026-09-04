@@ -1,0 +1,99 @@
+@using Clc.PatronRegistration.Administration
+@model Clc.PatronRegistration.Web.Models.SettingRowViewModel
+@{
+    var definition = Model.Definition;
+    var resolution = Model.Resolution;
+    var token = Model.Token;
+    var isRequired = definition.Group == SettingGroup.Require;
+    var baselineOperation = Model.DraftOperation switch
+    {
+        DraftOperation.Upsert => "Upsert",
+        DraftOperation.RemoveOverride => "RemoveOverride",
+        _ => resolution.OwnsOverride ? "Upsert" : "RemoveOverride"
+    };
+    var baselineMode = baselineOperation == "Upsert" ? "customize" : "inherit";
+    var customValue = Model.DraftOperation == DraftOperation.Upsert ? Model.DraftValue : resolution.OwnsOverride ? resolution.CurrentOverrideValue : null;
+    var inheritedValue = Model.HasInheritedValue ? Model.InheritedValue : null;
+    var editorValue = Clc.PatronRegistration.Web.Models.SettingEditorDefaults.ValueFor(definition, baselineMode == "customize" ? customValue : inheritedValue);
+    var idleValue = baselineMode == "customize" ? customValue : inheritedValue;
+    var idleHasValue = baselineMode == "customize" ? customValue is not null : Model.HasInheritedValue;
+    var idleText = isRequired
+        ? idleHasValue && bool.TryParse(idleValue, out var required) ? required ? "Required" : "Optional" : "Not configured"
+        : !idleHasValue ? "Not configured" : string.IsNullOrEmpty(idleValue) ? "Blank" : idleValue;
+    var liveReviewSummary = !resolution.SourceOrganizationId.HasValue
+        ? "not configured"
+        : resolution.OwnsOverride ? idleText : $"{SettingValuePresentation.FriendlyValue(definition, resolution.EffectiveValue, true)} · inherited from {Model.SourceDescription}";
+    var searchText = $"{definition.DisplayName} {definition.Key} {definition.Description} {idleText}".ToLowerInvariant();
+    var settingsError = ViewData["SettingsError"] as string;
+    var settingsErrorKey = ViewData["SettingsErrorKey"] as string;
+    var validationError = string.Equals(definition.Key, settingsErrorKey, StringComparison.OrdinalIgnoreCase) ? settingsError : null;
+    var validationErrorId = string.IsNullOrWhiteSpace(validationError) ? null : $"{token}-validation-error";
+    var inheritedSource = Model.InheritedSourceDescription ?? Model.SourceDescription;
+    var inheritedSourceLabel = string.IsNullOrWhiteSpace(inheritedSource) ? "inherited" : inheritedSource;
+    var rowStatus = Model.DraftOperation switch
+    {
+        DraftOperation.RemoveOverride => "Shared draft — use inherited value",
+        DraftOperation.Upsert => "Shared draft",
+        _ when baselineMode == "customize" => "Customized here",
+        _ when Model.HasInheritedValue => $"Inherited from {inheritedSourceLabel}",
+        _ => "Not configured"
+    };
+    var revertLabel = Model.HasInheritedValue ? $"Revert to {inheritedSourceLabel} value…" : "Remove customization…";
+}
+<tr class="setting-row batch-setting-row"
+    data-search="@searchText"
+    data-display-name="@definition.DisplayName"
+    data-setting-key="@definition.Key"
+    data-sensitive="false"
+    data-batch="true"
+    data-batch-required="@isRequired.ToString().ToLowerInvariant()"
+    data-draft-change="@Model.DraftOperation.HasValue.ToString().ToLowerInvariant()"
+    data-value-type="@definition.ValueType.ToString().ToLowerInvariant()"
+    data-presentation-state="@(Model.DraftOperation.HasValue ? "draftchange" : baselineMode == "customize" ? "customized" : resolution.SourceOrganizationId.HasValue ? "inherited" : "notset")"
+    data-live-state="@(resolution.OwnsOverride ? "customized" : resolution.SourceOrganizationId.HasValue ? "inherited" : "notset")"
+    data-live-summary="@liveReviewSummary"
+    data-inherited-summary="@SettingValuePresentation.FriendlyValue(definition, Model.InheritedValue, Model.HasInheritedValue)"
+    data-inherited-value="@(inheritedValue ?? string.Empty)"
+    data-inherited-source="@(Model.HasInheritedValue ? inheritedSourceLabel : string.Empty)"
+    data-has-inherited="@Model.HasInheritedValue.ToString().ToLowerInvariant()"
+    data-baseline-mode="@baselineMode"
+    data-baseline-value="@(baselineMode == "customize" ? customValue ?? string.Empty : string.Empty)">
+    <td class="batch-setting-name" headers="batch-@((isRequired ? "required-fields" : "field-labels"))-field"><strong>@definition.DisplayName.Replace("Require ", "", StringComparison.OrdinalIgnoreCase)</strong><small>@definition.Description</small></td>
+    <td class="batch-value" headers="batch-@((isRequired ? "required-fields" : "field-labels"))-value">
+        @if (validationErrorId is not null)
+        {
+            <p id="@validationErrorId" class="setting-validation-error" role="alert">@validationError</p>
+        }
+        <div class="setting-value-header">
+            <strong>Value</strong>
+            <span class="setting-scope-status">@rowStatus</span>
+            <div class="setting-scope-actions">
+                <button type="button" class="setting-change" aria-label="Change @definition.DisplayName">Change</button>
+                <button type="button" class="setting-revert" aria-label="@revertLabel for @definition.DisplayName" hidden="@(baselineMode == "customize" ? null : "hidden")">@revertLabel</button>
+            </div>
+        </div>
+        <input class="change-index" type="hidden" name="Changes.Index" value="@token" disabled />
+        <input class="change-key" type="hidden" name="Changes[@token].Key" value="@definition.Key" disabled />
+        <input class="operation" type="hidden" name="Changes[@token].Operation" value="@baselineOperation" disabled />
+        <input class="setting-value-binding" type="hidden" name="Changes[@token].Value" value="@editorValue" disabled />
+        <div class="setting-value-surface" data-idle-surface><div class="setting-idle-value" data-idle-text>@idleText</div></div>
+        <div class="setting-value-surface" data-editor-surface hidden>
+            @if (isRequired)
+            {
+                <fieldset class="setting-value-group batch-value-group" aria-describedby="@validationErrorId">
+                    <legend class="visually-hidden">Value for @definition.DisplayName</legend>
+                    <label><input class="setting-value batch-value-choice" type="radio" name="@token-value" value="true" data-value="true" checked="@editorValue.Equals("true", StringComparison.OrdinalIgnoreCase)" disabled /> Required</label>
+                    <label><input class="setting-value batch-value-choice" type="radio" name="@token-value" value="false" data-value="false" checked="@editorValue.Equals("false", StringComparison.OrdinalIgnoreCase)" disabled /> Optional</label>
+                </fieldset>
+            }
+            else
+            {
+                <div class="batch-label-input"><label for="@token-value" class="visually-hidden">Custom label for @definition.DisplayName</label><input id="@token-value" class="setting-value" type="text" value="@editorValue" maxlength="200" aria-describedby="@validationErrorId" readonly /></div>
+            }
+        </div>
+        @if (Model.DraftOperation.HasValue && Model.DraftId.HasValue)
+        {
+            <button type="submit" class="batch-remove-draft-change" formaction="@Url.Action("RemoveDraftChange", new { draftId = Model.DraftId })" name="settingKey" value="@definition.Key" data-submit-kind="guarded" formnovalidate aria-label="Remove shared draft change for @definition.DisplayName">Remove shared draft change</button>
+        }
+    </td>
+</tr>

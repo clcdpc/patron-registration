@@ -15,8 +15,11 @@
         groups.Insert(0, (SettingGroup.Alert, "Validation messages"));
     }
     var settingsError = TempData["SettingsError"] as string;
+    var settingsErrorKey = TempData["SettingsErrorKey"] as string;
     var settingsErrorGroup = TempData["SettingsErrorGroup"] as string;
     var settingsStatus = TempData["SettingsStatus"] as string;
+    ViewData["SettingsError"] = settingsError;
+    ViewData["SettingsErrorKey"] = settingsErrorKey;
     var formDisplayName = string.IsNullOrWhiteSpace(Model.FormDisplayName)
         ? Model.FormCodes.FirstOrDefault(form => form.FormCode.Equals(Model.FormCode, StringComparison.OrdinalIgnoreCase))?.DisplayName
             ?? (Model.FormCode.Length == 0 ? "Default form" : Model.FormCode)
@@ -82,9 +85,16 @@
                     }
                 </select>
             </div>
-            <div class="settings-filter-group" role="group" aria-label="Setting filters">
-                <label class="inline-check"><input id="customized-only-filter" type="checkbox" /> <span>Customized only</span></label>
-                @if (draftChangeCount > 0) { <label class="inline-check"><input id="draft-only-filter" type="checkbox" /> <span>Show shared draft changes only</span></label> }
+            <div class="settings-filter-group">
+                <label for="setting-status-filter">Status</label>
+                <select id="setting-status-filter" aria-label="Filter settings by status">
+                    <option value="all">All settings</option>
+                    <option value="customized">Customized here</option>
+                    <option value="inherited">Inherited</option>
+                    <option value="notset">Not configured</option>
+                    <option value="draft">Shared draft changes</option>
+                    <option value="unsaved">Unsaved changes</option>
+                </select>
             </div>
             <noscript><button type="submit">View settings</button></noscript>
         </div>
@@ -116,8 +126,9 @@
     }
     </div>
     @if (Model.ActiveDraft is not null && canManageDraftLifecycle) {
-    <section class="preview-tools" aria-labelledby="preview-tools-title">
-      <h3 id="preview-tools-title">Preview tools</h3>
+    <details class="preview-tools" aria-labelledby="preview-tools-title">
+      <summary id="preview-tools-title">Preview tools and links (@activePreviewCount)</summary>
+      <div class="preview-tools-content">
       <form asp-action="CreatePreviewLink" asp-route-draftId="@Model.ActiveDraft.DraftId" method="post" data-preview-form data-guard-action>
         @Html.AntiForgeryToken()<input type="hidden" name="OrganizationId" value="@Model.OrganizationId" /><input type="hidden" name="FormCode" value="@Model.FormCode" /><input type="hidden" name="ExpectedDraftRevision" value="@Model.ActiveDraft.Revision" />
         <div class="preview-create-row">
@@ -192,7 +203,8 @@
           </div>
         </section>
       }
-    </section>}
+      </div>
+    </details>}
 </section>
 }
 <form asp-action="DirectSave" method="post" id="settings-form">
@@ -204,7 +216,7 @@
         <input type="hidden" name="ExpectedDraftId" value="@Model.ActiveDraft.DraftId" />
         <input type="hidden" name="ExpectedDraftRevision" value="@Model.ActiveDraft.Revision" />
     }
-    <p id="edit-session-status" class="validation-summary" role="alert" tabindex="-1" hidden></p>
+    <p id="settings-status" class="validation-summary" role="alert" tabindex="-1" hidden></p>
 
     @foreach (var category in SettingCategoryPresentation.Ordered)
     {
@@ -212,6 +224,7 @@
             .OrderBy(row => row.Definition.DisplayName, StringComparer.OrdinalIgnoreCase).ToList();
         if (rows.Count == 0) { continue; }
         bool categoryOpen = rows.Any(row => row.DraftOperation is not null);
+        categoryOpen = categoryOpen || rows.Any(row => string.Equals(row.Definition.Key, settingsErrorKey, StringComparison.OrdinalIgnoreCase));
         <details class="setting-category" open="@categoryOpen">
             <summary>@category.DisplayName() <span>(@rows.Count)</span></summary>
             <div class="settings-column-headings"><span>Setting</span><span>Value</span><span>Status</span></div>
@@ -223,22 +236,42 @@
 
     @foreach (var group in groups)
     {
-        var rows = Model.Settings.Where(row => row.Definition.Group == group.Item1).ToList();
+        var rows = Model.Settings.Where(row => row.Definition.Group == group.Item1)
+            .OrderBy(row => row.Definition.DisplayName, StringComparer.OrdinalIgnoreCase).ToList();
         bool isDynamicGroupOpen = rows.Any(row => row.DraftOperation is not null) ||
+            rows.Any(row => string.Equals(row.Definition.Key, settingsErrorKey, StringComparison.OrdinalIgnoreCase)) ||
             string.Equals(group.Item1.ToString(), settingsErrorGroup, StringComparison.OrdinalIgnoreCase);
         <details class="dynamic-settings" open="@isDynamicGroupOpen">
             <summary>@group.Item2 <span>(@rows.Count)</span></summary>
-            @if (group.Item1 == SettingGroup.Alert)
+            @if (group.Item1 == SettingGroup.Label || group.Item1 == SettingGroup.Require)
             {
-                <p class="group-introduction">These messages are saved for future use but are not currently shown on registration forms.</p>
+                var batchHeadingPrefix = group.Item1 == SettingGroup.Label ? "field-labels" : "required-fields";
+                <p class="group-introduction">These related fields share one value surface per row. Each choice still uses the normal settings save and validation path. @if (group.Item1 == SettingGroup.Label) { <span>Blank labels override inherited labels; click Revert to inherited value… to remove a customization.</span> }</p>
+                <table class="batch-settings @(group.Item1 == SettingGroup.Label ? "field-labels-editor" : "required-fields-editor")">
+                    <caption class="visually-hidden">@group.Item2</caption>
+                    <thead><tr><th id="batch-@batchHeadingPrefix-field" scope="col">Field</th><th id="batch-@batchHeadingPrefix-value" scope="col">Value</th></tr></thead>
+                    <tbody>
+                    @foreach (var row in rows)
+                    {
+                        <partial name="_BatchSettingRow" model="row" />
+                    }
+                    </tbody>
+                </table>
             }
-            <div class="settings-column-headings"><span>Setting</span><span>Value</span><span>Status</span></div>
-            <div class="settings-list">
-                @foreach (var row in rows)
+            else
+            {
+                @if (group.Item1 == SettingGroup.Alert)
                 {
-                    <partial name="_SettingRow" model="row" />
+                    <p class="group-introduction">These messages are saved for future use but are not currently shown on registration forms.</p>
                 }
-            </div>
+                <div class="settings-column-headings"><span>Setting</span><span>Value</span><span>Status</span></div>
+                <div class="settings-list">
+                    @foreach (var row in rows)
+                    {
+                        <partial name="_SettingRow" model="row" />
+                    }
+                </div>
+            }
         </details>
     }
 
@@ -249,12 +282,13 @@
             <strong>@Model.OrganizationName</strong><span aria-hidden="true"> · </span><strong>@formDisplayName</strong>
         </span>
         <div class="settings-action-buttons">
+            <button type="button" data-review-pending data-label-template="Review {count} {noun}">Review changes</button>
             @if (Model.ActiveDraft is not null) {
-                <button type="submit" class="settings-primary-action" formaction="@Url.Action("SaveToSharedDraft")" data-submit-kind="draft" data-label-template="Add {count} {noun} to shared draft" data-review-title="Add changes to shared draft" data-confirm-label="Add to shared draft">Add changes to shared draft</button>
+                <button type="submit" class="settings-primary-action" formaction="@Url.Action("SaveToSharedDraft")" data-submit-kind="draft" data-label-template="Add {count} {noun} to shared draft">Add changes to shared draft</button>
                 <button type="submit" class="settings-secondary-action" data-label-template="Save {count} {noun} live instead" data-review-title="Save changes live" data-confirm-label="Save live">Save changes live instead</button>
                 <small>Saving live applies only changes marked <strong>Unsaved in this browser</strong>. It does not publish or modify the existing shared draft.</small>
             } else {
-                <button type="submit" formaction="@Url.Action("SaveToSharedDraft")" data-submit-kind="draft" data-label-template="Save {count} {noun} to shared draft" data-review-title="Save changes to shared draft" data-confirm-label="Save to shared draft">Save changes to shared draft</button>
+                <button type="submit" formaction="@Url.Action("SaveToSharedDraft")" data-submit-kind="draft" data-label-template="Save {count} {noun} to shared draft">Save changes to shared draft</button>
                 <button type="submit" data-label-template="Save {count} {noun} live" data-review-title="Save changes live" data-confirm-label="Save live">Save changes live</button>
             }
             <button type="button" data-discard-pending>Discard unsaved changes</button>
@@ -264,11 +298,35 @@
 
 <dialog id="save-confirm" aria-labelledby="save-confirm-title">
     <h2 id="save-confirm-title">Review changes</h2>
-    <p>Target: <strong>@Model.OrganizationName</strong> · <strong>@formDisplayName</strong>.</p>
-    <ul></ul>
+    <p data-save-review-context>Target: <strong>@Model.OrganizationName</strong> · <strong>@formDisplayName</strong>.</p>
+    <p data-browser-review-context hidden>These changes exist only in this browser. Reviewing them does not save or publish anything.</p>
+    <div class="review-table-wrap">
+        <table class="review-table browser-review-table">
+            <caption class="visually-hidden">Pending setting changes</caption>
+            <thead><tr><th scope="col">Setting</th><th scope="col" class="review-baseline-column">Live now</th><th scope="col" class="review-pending-column">Proposed</th></tr></thead>
+            <tbody></tbody>
+        </table>
+    </div>
     <div class="button-row">
         <button id="confirm-save" type="button">Save changes</button>
         <button id="cancel-save" type="button">Cancel</button>
+    </div>
+</dialog>
+
+<dialog id="revert-confirm" aria-labelledby="revert-confirm-title">
+    <h2 id="revert-confirm-title">Revert to inherited value?</h2>
+    <p data-revert-explanation></p>
+    <div class="revert-target" data-revert-target aria-live="polite">
+        <iframe sandbox="" class="setting-html-value-preview" data-revert-html title="Inherited rendered value" hidden></iframe>
+        <pre class="setting-idle-value setting-idle-value-full" data-revert-text hidden></pre>
+        <div class="setting-idle-value" data-revert-friendly hidden></div>
+        <div class="image-card" data-revert-image hidden><img class="setting-image-preview" data-revert-image-preview alt="Inherited image" hidden /><strong data-revert-image-file></strong></div>
+        <p data-revert-none hidden>No inherited value is configured for this setting. Removing this customization will leave the setting not configured.</p>
+        <p data-revert-sensitive hidden>An inherited value is configured, but the inherited secret cannot be displayed.</p>
+    </div>
+    <div class="button-row">
+        <button type="button" data-revert-keep>Keep current value</button>
+        <button type="button" data-revert-affirm>Use inherited value</button>
     </div>
 </dialog>
 
@@ -290,16 +348,22 @@
     <dialog id="publish-draft-review" aria-labelledby="publish-title">
         <h2 id="publish-title">Publish shared draft #@Model.ActiveDraft.DraftId</h2>
         <p>Publishing makes all listed shared-draft changes live for <strong>@Model.OrganizationName</strong> · <strong>@formDisplayName</strong>.</p>
-        <ul>
+        <div class="review-table-wrap">
+        <table class="review-table">
+            <caption class="visually-hidden">Shared draft changes to publish</caption>
+            <thead><tr><th scope="col">Setting</th><th scope="col">Live now</th><th scope="col">Proposed</th></tr></thead>
+            <tbody>
             @foreach (var row in Model.Settings.Where(row => row.DraftOperation.HasValue))
             {
-                <li>
-                    <strong>@row.Definition.DisplayName</strong>:
-                    Live: @SettingReviewPresentation.Live(row);
-                    New shared draft value: @SettingReviewPresentation.Proposed(row)
-                </li>
+                <tr>
+                    <th scope="row">@row.Definition.DisplayName</th>
+                    <td>@SettingReviewPresentation.Live(row)</td>
+                    <td>@SettingReviewPresentation.Proposed(row)</td>
+                </tr>
             }
-        </ul>
+            </tbody>
+        </table>
+        </div>
         <p>@activePreviewCount active preview @(activePreviewCount == 1 ? "link" : "links") will become unusable.</p>
         <form asp-action="CommitDraft" asp-route-draftId="@Model.ActiveDraft.DraftId" method="post" data-guard-action>
             @Html.AntiForgeryToken()

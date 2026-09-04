@@ -580,18 +580,85 @@ public class SettingsAdministrationTests
     }
 
     [TestMethod]
+    public void SettingValuePresentation_UsesFriendlyDriverLicenseLabelsWithoutChangingTokens()
+    {
+        var definition = new SettingDefinition("dl_format", "Driver-license format", "Driver-license format", SettingValueType.Enumeration,
+            AllowedValues: new[] { "barcode", "magstripe" });
+
+        Assert.AreEqual("Barcode", SettingValuePresentation.FriendlyValue(definition, "barcode"));
+        Assert.AreEqual("Magnetic stripe", SettingValuePresentation.FriendlyValue(definition, "magstripe"));
+        Assert.AreEqual("barcode-token", SettingValuePresentation.FriendlyValue(definition, "barcode-token"));
+        Assert.AreEqual("Blank", SettingValuePresentation.FriendlyValue(definition, string.Empty));
+        Assert.AreEqual("Not configured", SettingValuePresentation.FriendlyValue(definition, null, false));
+
+        var resolution = new ResolvedSetting(definition.Key, "barcode", 1, "System", string.Empty, true, "barcode", false);
+        var row = new SettingRowViewModel("token", definition, resolution, null, null, null);
+        Assert.AreEqual("Barcode", SettingValuePresentation.ForRow(row).Value);
+        Assert.AreEqual("Barcode", SettingReviewPresentation.Live(row));
+    }
+
+    [TestMethod]
     public void SettingValuePresentation_UsesSafeTypeSpecificSummaries()
     {
         var longText = new SettingDefinition("long", "Long", "Long", SettingValueType.LongString);
         var html = new SettingDefinition("html", "HTML", "HTML", SettingValueType.Html);
         var template = new SettingDefinition("template", "Template", "Template", SettingValueType.EmailTemplate);
+        var prefixes = new SettingDefinition("show_dl_ips", "IP prefixes", "IP prefixes", SettingValueType.ShortString);
+        var date = new SettingDefinition("expiration_date", "Expiration date", "Expiration date", SettingValueType.Date);
+        var resetSeconds = new SettingDefinition("reset_seconds", "Reset seconds", "Reset seconds", SettingValueType.Integer);
         var sensitive = new SettingDefinition("secret", "Secret", "Secret", SettingValueType.ShortString, IsSensitive: true);
 
         Assert.AreEqual("Several words on one line", SettingValuePresentation.Format(longText, " Several\n words   on\tone line ", true));
-        Assert.AreEqual("HTML configured", SettingValuePresentation.Format(html, "<strong>private markup</strong>", true));
-        Assert.AreEqual("Email template configured", SettingValuePresentation.Format(template, "Hello {{name}}", true));
+        Assert.AreEqual("<strong>private markup</strong>", SettingValuePresentation.Format(html, "<strong>private markup</strong>", true));
+        Assert.AreEqual("Hello {{name}}", SettingValuePresentation.Format(template, "Hello {{name}}", true));
         Assert.AreEqual("Hidden", SettingValuePresentation.Format(sensitive, "recognizable-secret", true));
         Assert.AreEqual("Not configured", SettingValuePresentation.Format(sensitive, null, false));
+        Assert.AreEqual("10., 192.168.", SettingValuePresentation.FriendlyValue(prefixes, "10.; 192.168."));
+        Assert.AreEqual("December 31, 2027", SettingValuePresentation.FriendlyValue(date, "2027-12-31"));
+        Assert.AreEqual("60 seconds", SettingValuePresentation.FriendlyValue(resetSeconds, "60"));
+    }
+
+    [TestMethod]
+    public void SettingValuePresentation_CompactsSourcePreviewsWithoutRenderingOrExposingSensitiveValues()
+    {
+        var html = new SettingDefinition("html", "HTML", "HTML", SettingValueType.Html);
+        var template = new SettingDefinition("template", "Template", "Template", SettingValueType.EmailTemplate);
+        var sensitive = new SettingDefinition("secret", "Secret", "Secret", SettingValueType.Html, IsSensitive: true);
+        var source = " <p>First\n\tline with <strong>markup</strong> and a hostile <img src=x onerror=\"alert(1)\"> value</p> ";
+        var longSource = new string('x', SettingValuePresentation.CompactPreviewMaximumLength + 20);
+
+        Assert.AreEqual("<p>First line with <strong>markup</strong> and a hostile <img src=x onerror=\"alert(1)\"> value</p>", SettingValuePresentation.CompactPreview(source));
+        Assert.AreEqual("Hello {{name}}", SettingValuePresentation.CompactPreview("Hello {{name}}"));
+        Assert.AreEqual("Blank", SettingValuePresentation.CompactPreview(" \r\n\t "));
+        Assert.AreEqual($"{new string('x', SettingValuePresentation.CompactPreviewMaximumLength)}…", SettingValuePresentation.CompactPreview(longSource));
+        Assert.AreEqual("Not configured", SettingValuePresentation.Format(html, null, false));
+        var sensitiveSummary = SettingValuePresentation.Format(sensitive, "recognizable-secret", true);
+        Assert.AreEqual("Hidden", sensitiveSummary);
+        Assert.IsFalse(sensitiveSummary.Contains("recognizable-secret", StringComparison.Ordinal));
+    }
+
+    [TestMethod]
+    public void SettingReviewPresentation_UsesCompactRawSourceForHtmlAndTemplates()
+    {
+        var html = new SettingDefinition("html", "HTML", "HTML", SettingValueType.Html);
+        var template = new SettingDefinition("template", "Template", "Template", SettingValueType.EmailTemplate);
+        var oldHtml = "<p>Old registration message</p>";
+        var newHtml = "<p>New registration message</p>";
+        var liveResolution = new ResolvedSetting("html", oldHtml, 2, "Library", string.Empty, true, oldHtml, false);
+        var live = new SettingRowViewModel("html", html, liveResolution, null, null, null);
+        var proposed = live with { DraftValue = newHtml, DraftOperation = DraftOperation.Upsert, DraftId = 8 };
+        var templateLive = new SettingRowViewModel("template", template,
+            new ResolvedSetting("template", "Hello {{NameFirst}}", 2, "Library", string.Empty, true, "Hello {{NameFirst}}", false),
+            null, null, null);
+        var templateRow = templateLive with { DraftValue = "Hello {{NameLast}}", DraftOperation = DraftOperation.Upsert, DraftId = 8 };
+
+        Assert.AreEqual(oldHtml, SettingReviewPresentation.Live(live));
+        Assert.AreEqual(newHtml, SettingReviewPresentation.Proposed(proposed));
+        Assert.AreEqual("Hello {{NameFirst}}", SettingReviewPresentation.Live(templateLive));
+        Assert.AreEqual("Hello {{NameLast}}", SettingReviewPresentation.Proposed(templateRow));
+        Assert.AreNotEqual(SettingReviewPresentation.Live(templateLive), SettingReviewPresentation.Proposed(templateRow));
+        Assert.IsFalse(SettingReviewPresentation.Live(live).Contains("configured", StringComparison.OrdinalIgnoreCase));
+        Assert.IsFalse(SettingReviewPresentation.Proposed(proposed).Contains("configured", StringComparison.OrdinalIgnoreCase));
     }
 
     [TestMethod]
@@ -618,14 +685,14 @@ public class SettingsAdministrationTests
         var notSet = SettingValuePresentation.ForRow(Row(text,
             new("text", null, null, "Unconfigured", string.Empty, false, null, true)));
         Assert.AreEqual(SettingPresentationState.NotSet, notSet.State);
-        Assert.AreEqual("—", notSet.Value);
-        Assert.AreEqual("Not set", notSet.Status);
+        Assert.AreEqual("Not configured", notSet.Value);
+        Assert.AreEqual("Not configured", notSet.Status);
         Assert.AreNotEqual(SettingPresentationState.Inherited, notSet.State);
 
         var inherited = SettingValuePresentation.ForRow(Row(text,
             new("text", "Parent value", 1, "System", string.Empty, false, null, true)));
         Assert.AreEqual(SettingPresentationState.Inherited, inherited.State);
-        Assert.AreEqual("Inherited", inherited.Status);
+        Assert.AreEqual("Inherited from System", inherited.Status);
 
         var blank = SettingValuePresentation.ForRow(Row(text,
             new("text", string.Empty, 2, "Library", string.Empty, true, string.Empty, false)));
@@ -676,7 +743,8 @@ public class SettingsAdministrationTests
         StringAssert.Contains(index, "<section class=\"settings-search settings-controls\" aria-label=\"Settings controls\">");
         StringAssert.Contains(index, "<div class=\"settings-context-row settings-context-primary\">");
         StringAssert.Contains(index, "<label for=\"organization-scope\">Scope <span class=\"visually-hidden\">(system, library, or branch)</span></label>");
-        StringAssert.Contains(index, "<span>Customized only</span>");
+        StringAssert.Contains(index, "<label for=\"setting-status-filter\">Status</label>");
+        StringAssert.Contains(index, "<option value=\"customized\">Customized here</option>");
         StringAssert.Contains(index, "<div class=\"settings-context-row settings-search-row\">");
         StringAssert.Contains(index, "<label id=\"search-label\" for=\"setting-search\">Search</label>");
         StringAssert.Contains(index, "<p id=\"search-status\" aria-live=\"polite\">@Model.Settings.Count settings</p>");
@@ -689,6 +757,8 @@ public class SettingsAdministrationTests
         StringAssert.Contains(css, "--settings-form-field-width");
         StringAssert.Contains(css, ".settings-search-row");
         StringAssert.Contains(css, "grid-template-columns: var(--settings-control-label-width) minmax(0, 1fr)");
+        StringAssert.Contains(css, ".setting-html-value-preview[data-idle-html]");
+        StringAssert.Contains(css, "clamp(12rem, 28vh, 18rem)");
     }
 
     [TestMethod]
@@ -702,7 +772,7 @@ public class SettingsAdministrationTests
         Assert.AreEqual(1, index.Split("id=\"search-status\"").Length - 1);
         StringAssert.Contains(index, "id=\"search-status\" aria-live=\"polite\"");
         Assert.IsFalse(index.Contains("id=\"settings-filter-empty\"", StringComparison.Ordinal));
-        StringAssert.Contains(index, "Show shared draft changes only");
+        StringAssert.Contains(index, "<option value=\"draft\">Shared draft changes</option>");
         StringAssert.Contains(index, "if (draftChangeCount > 0)");
         StringAssert.Contains(index, "Review @draftChangeCount shared draft @(draftChangeCount == 1 ? \"change\" : \"changes\")");
         StringAssert.Contains(index, "@if (Model.ActiveDraft is not null)");
@@ -714,7 +784,8 @@ public class SettingsAdministrationTests
         Assert.IsFalse(index.Contains("No shared draft", StringComparison.Ordinal));
         StringAssert.Contains(css, ".settings-search input[type=\"search\"]");
         Assert.IsFalse(css.Contains(".settings-search input {", StringComparison.Ordinal));
-        StringAssert.Contains(row, "$\"Shared draft: {imageSummary}\"");
+        StringAssert.Contains(row, "Shared draft — use inherited value");
+        StringAssert.Contains(row, "data-image-idle-preview-url=");
         StringAssert.Contains(row, "definition.IsSensitive ? string.Empty");
         Assert.IsFalse(row.Contains("<details class=\"setting-row\" open=", StringComparison.Ordinal));
         Assert.IsFalse(row.Contains("tabindex=\"-1\"", StringComparison.Ordinal));
@@ -737,7 +808,8 @@ public class SettingsAdministrationTests
         foreach (var action in new[] { "data-review-draft", ">Publish draft</button>", ">Discard shared draft</button>" })
             StringAssert.Contains(index, action);
 
-        StringAssert.Contains(index, "<section class=\"preview-tools\" aria-labelledby=\"preview-tools-title\">");
+        StringAssert.Contains(index, "<details class=\"preview-tools\" aria-labelledby=\"preview-tools-title\">");
+        StringAssert.Contains(index, "<summary id=\"preview-tools-title\">Preview tools and links (@activePreviewCount)</summary>");
         var createRow = index.IndexOf("<div class=\"preview-create-row\">", StringComparison.Ordinal);
         Assert.IsTrue(createRow >= 0);
         var branchField = index.IndexOf("<div class=\"preview-branch-field\">", createRow, StringComparison.Ordinal);
@@ -771,18 +843,19 @@ public class SettingsAdministrationTests
         var row = File.ReadAllText(Path.Combine(root, "src/Clc.PatronRegistration.Web/Views/Settings/_SettingRow.cshtml"));
         var script = File.ReadAllText(Path.Combine(root, "src/Clc.PatronRegistration.Web/wwwroot/js/settings.js"));
 
-        StringAssert.Contains(index, "id=\"customized-only-filter\"");
+        StringAssert.Contains(index, "id=\"setting-status-filter\"");
         StringAssert.Contains(index, "class=\"settings-actions-context\"");
         StringAssert.Contains(index, "<strong>@Model.OrganizationName</strong>");
         StringAssert.Contains(index, "<strong>@formDisplayName</strong>");
-        StringAssert.Contains(index, "data-review-title=\"Add changes to shared draft\"");
+        Assert.IsFalse(index.Contains("data-review-title=\"Add changes to shared draft\"", StringComparison.Ordinal));
         StringAssert.Contains(index, "data-review-title=\"Save changes live\"");
         StringAssert.Contains(index, "MMM d, yyyy, h:mm tt 'UTC'");
-        StringAssert.Contains(row, "data-customized-here=\"@resolution.OwnsOverride.ToString().ToLowerInvariant()\"");
-        StringAssert.Contains(row, "data-live-summary=\"@liveSummary\"");
+        StringAssert.Contains(row, "data-live-state=\"@(resolution.OwnsOverride ? \"customized\" : resolution.SourceOrganizationId.HasValue ? \"inherited\" : \"notset\")\"");
+        StringAssert.Contains(row, "data-live-summary=\"@Clc.PatronRegistration.Web.Models.SettingReviewPresentation.Live(Model)\"");
         Assert.IsFalse(row.Contains(">Apply</button>", StringComparison.Ordinal));
         StringAssert.Contains(script, "Unsaved in this browser");
-        StringAssert.Contains(script, "row.dataset.customizedHere === \"true\"");
+        StringAssert.Contains(script, "case \"customized\":");
+        StringAssert.Contains(script, "row.dataset.liveState === \"customized\"");
     }
 
     [TestMethod]
@@ -812,7 +885,7 @@ public class SettingsAdministrationTests
         var help = File.ReadAllText(Path.Combine(root, "src/Clc.PatronRegistration.Web/Views/Settings/Help.cshtml"));
 
         foreach (var current in new[] { "Save N changes live", "Add N changes to shared draft", "Save N changes live instead",
-            "Discard unsaved changes", "Show shared draft changes only", "Review N shared draft changes",
+            "Discard unsaved changes", "Shared draft changes", "Review N shared draft changes",
             "Discard shared draft", "Safe preview", "Live-submission preview" })
             StringAssert.Contains(help, current);
         foreach (var obsolete in new[] { "Review and save now", "Save changes to draft", ">Discard draft<",
@@ -1791,42 +1864,83 @@ public class SettingsAdministrationTests
     }
 
     [TestMethod]
-    public void SettingsEditor_UsesExplicitRowEditSessionContract()
+    public void SettingsEditor_UsesDirectSemanticEditorContract()
     {
         var root = FindRepositoryRoot();
+        var index = File.ReadAllText(Path.Combine(root, "src/Clc.PatronRegistration.Web/Views/Settings/Index.cshtml"));
         var partial = File.ReadAllText(Path.Combine(root, "src/Clc.PatronRegistration.Web/Views/Settings/_SettingRow.cshtml"));
+        var batch = File.ReadAllText(Path.Combine(root, "src/Clc.PatronRegistration.Web/Views/Settings/_BatchSettingRow.cshtml"));
         var script = File.ReadAllText(Path.Combine(root, "src/Clc.PatronRegistration.Web/wwwroot/js/settings.js"));
+        var css = File.ReadAllText(Path.Combine(root, "src/Clc.PatronRegistration.Web/wwwroot/css/settings.css"));
+        var normalizedCss = css.Replace("\r\n", "\n", StringComparison.Ordinal);
 
         Assert.IsFalse(partial.Contains("<select id=\"@operationId\"", StringComparison.Ordinal));
         StringAssert.Contains(partial, "class=\"operation\" type=\"hidden\"");
         StringAssert.Contains(partial, "class=\"image-setting\"");
-        StringAssert.Contains(partial, "class=\"image-upload-trigger\"");
+        StringAssert.Contains(partial, "class=\"setting-change @(isImage ? \"image-upload-trigger\" : null)\"");
         StringAssert.Contains(partial, "class=\"image-choose-another\"");
-        StringAssert.Contains(partial, "class=\"image-undo-pending\"");
-        StringAssert.Contains(partial, "class=\"edit-setting\"");
-        StringAssert.Contains(partial, ">Change</button>");
-        StringAssert.Contains(partial, "class=\"apply-setting\">Keep change</button>");
-        StringAssert.Contains(partial, "class=\"cancel-setting\">Cancel</button>");
-        StringAssert.Contains(partial, "class=\"edit-actions\" hidden");
-        StringAssert.Contains(partial, "@if (canRemoveOverride)");
-        StringAssert.Contains(partial, "canRemoveOverride = resolution.OwnsOverride");
+        Assert.IsFalse(partial.Contains("setting-comparison", StringComparison.Ordinal));
+        Assert.IsFalse(partial.Contains("setting-baseline", StringComparison.Ordinal));
+        Assert.IsFalse(partial.Contains("setting-effective", StringComparison.Ordinal));
+        Assert.IsFalse(partial.Contains("setting-scope-panel", StringComparison.Ordinal));
+        StringAssert.Contains(partial, "data-idle-surface");
+        StringAssert.Contains(partial, "data-editor-surface");
+        StringAssert.Contains(partial, "<label class=\"visually-hidden\" for=\"@inputId\"");
+        Assert.IsFalse(partial.Contains("setting-value-panel", StringComparison.Ordinal));
+        StringAssert.Contains(partial, "class=\"setting-revert\"");
+        StringAssert.Contains(partial, "data-image-local-value=");
+        StringAssert.Contains(partial, "data-image-local-missing=");
+        StringAssert.Contains(partial, "data-image-local-preview-url=");
+        StringAssert.Contains(partial, "data-image-local-file-name=");
+        StringAssert.Contains(partial, "data-html-capable=");
+        StringAssert.Contains(partial, "title=\"@drawerSummary\">@drawerSummary");
+        Assert.IsFalse(partial.Contains("Html.Raw", StringComparison.Ordinal));
+        Assert.IsFalse(partial.Contains("setting-mode", StringComparison.Ordinal));
+        Assert.IsFalse(partial.Contains("image-mode", StringComparison.Ordinal));
+        Assert.IsFalse(partial.Contains("batch-mode", StringComparison.Ordinal));
+        StringAssert.Contains(partial, "boolean-value-group");
+        Assert.IsFalse(partial.Contains("plain-text-preview", StringComparison.Ordinal));
+        StringAssert.Contains(index, "class=\"batch-settings");
+        StringAssert.Contains(index, "id=\"batch-@batchHeadingPrefix-field\"");
+        Assert.IsFalse(batch.Contains("batch-effective", StringComparison.Ordinal));
+        Assert.IsFalse(batch.Contains("batch-scope", StringComparison.Ordinal));
+        StringAssert.Contains(index, "class=\"pending-changes-status\" role=\"status\" aria-live=\"polite\"");
+        StringAssert.Contains(batch, "headers=\"batch-@((isRequired ? \"required-fields\" : \"field-labels\"))-value\"");
+        StringAssert.Contains(index, "settingsErrorKey");
+        StringAssert.Contains(index, "row.Definition.Key, settingsErrorKey");
+        StringAssert.Contains(partial, "setting-validation-error");
+        StringAssert.Contains(partial, "aria-describedby=\"@validationErrorId\"");
+        StringAssert.Contains(batch, "setting-validation-error");
+        StringAssert.Contains(batch, "aria-describedby=\"@validationErrorId\"");
+        StringAssert.Contains(partial, "Model.HasInheritedValue");
+        StringAssert.Contains(batch, "Model.HasInheritedValue");
+        StringAssert.Contains(partial, "Model.InheritedSourceDescription");
+        StringAssert.Contains(batch, "Model.InheritedSourceDescription");
+        StringAssert.Contains(css, "clip-path: inset(50%)");
+        Assert.AreEqual(1, css.Split(".preview-tools-content", StringSplitOptions.None).Length - 1);
+        Assert.AreEqual(1, css.Split(".preview-tools > summary", StringSplitOptions.None).Length - 1);
+        Assert.IsFalse(css.Contains(".preview-tools > form", StringComparison.Ordinal));
+        Assert.IsFalse(css.Contains(".review-table thead { display: none", StringComparison.Ordinal));
+        StringAssert.Contains(normalizedCss, ".review-table thead {\n        clip: rect(0 0 0 0)");
+        Assert.IsFalse(css.Contains(".batch-settings thead { display: none", StringComparison.Ordinal));
 
-        StringAssert.Contains(script, "function beginEdit(candidateOperation)");
+        Assert.IsFalse(partial.Contains("data-candidate-operation", StringComparison.Ordinal));
+        Assert.IsFalse(partial.Contains("Keep change", StringComparison.Ordinal));
+        Assert.IsFalse(partial.Contains("Cancel edit", StringComparison.Ordinal));
+        Assert.IsFalse(index.Contains("choose Inherit", StringComparison.OrdinalIgnoreCase));
+        Assert.IsFalse(partial.Contains("class=\"edit-setting\"", StringComparison.Ordinal));
+        Assert.IsFalse(script.Contains("data-candidate-operation", StringComparison.Ordinal));
+        Assert.IsFalse(script.Contains("function beginEdit", StringComparison.Ordinal));
+        Assert.IsFalse(script.Contains("function applyEdit", StringComparison.Ordinal));
+        Assert.IsFalse(script.Contains("function cancelEdit", StringComparison.Ordinal));
+        StringAssert.Contains(script, "function proposedState(row)");
+        StringAssert.Contains(script, "function baselineState(row)");
+        StringAssert.Contains(script, "const dirty = !sameState(row, state, baseline)");
+        StringAssert.Contains(script, "row.dataset.dirty = dirty.toString()");
         StringAssert.Contains(script, "function initializeImageRow(row, settingsForm)");
         StringAssert.Contains(script, "function initializeStandardRow(row, settingsForm)");
-        StringAssert.Contains(script, "function markUpsert(assetId, fileName, previewUrl)");
-        StringAssert.Contains(script, "imageState.status = `${fileName} is ready to save.`");
-        StringAssert.Contains(script, "async function applyEdit()");
-        StringAssert.Contains(script, "function cancelEdit()");
-        StringAssert.Contains(script, "change?.addEventListener(\"click\", () => beginEdit(\"Upsert\"))");
-        StringAssert.Contains(script, "inherit?.addEventListener(\"click\", () => beginEdit(\"RemoveOverride\"))");
-        StringAssert.Contains(script, "if (candidateOperation === \"Upsert\" && !value.reportValidity()) return;");
-        StringAssert.Contains(script, "row.dataset.dirty = \"true\"");
-        Assert.IsFalse(script[(script.IndexOf("function beginEdit", StringComparison.Ordinal))..
-            script.IndexOf("function applyEdit", StringComparison.Ordinal)].Contains("dataset.dirty = \"true\"", StringComparison.Ordinal));
-        StringAssert.Contains(script, "operation.value = session.operation");
-        StringAssert.Contains(script, "row.dataset.dirty = session.dirty.toString()");
-        StringAssert.Contains(script, "value.disabled = !enabled || selectedOperation === \"RemoveOverride\"");
+        StringAssert.Contains(script, "function disableDirtyMutations()");
+        StringAssert.Contains(script, "submitter?.dataset?.submitKind === \"draft\"");
     }
 
     [TestMethod]
@@ -1836,34 +1950,18 @@ public class SettingsAdministrationTests
         var partial = File.ReadAllText(Path.Combine(root, "src/Clc.PatronRegistration.Web/Views/Settings/_SettingRow.cshtml"));
         var script = File.ReadAllText(Path.Combine(root, "src/Clc.PatronRegistration.Web/wwwroot/js/settings.js"));
 
-        StringAssert.Contains(partial, "SettingInheritancePresentation.MessageFor(Model)");
+        Assert.IsFalse(partial.Contains("inheritance-message", StringComparison.Ordinal));
         StringAssert.Contains(script, "row.dataset.sensitive === \"true\"");
         StringAssert.Contains(script, "row.dataset.valueType === \"image\"");
-        StringAssert.Contains(script, "Replace with “${row.dataset.imagePendingFileName || \"uploaded image\"}”");
-        StringAssert.Contains(script, "Use inherited image (image currently missing)");
+        StringAssert.Contains(script, "image-pending-file-name");
+        StringAssert.Contains(script, "Use inherited image");
         StringAssert.Contains(partial, "data-image-inherited-missing=");
-        StringAssert.Contains(script, "operation?.value === \"RemoveOverride\"");
-    }
-
-    [TestMethod]
-    public void InheritancePresentation_ShowsSafeValueOrUnconfiguredWithoutExposingSecrets()
-    {
-        var text = new SettingDefinition("text", "Text", "Text", SettingValueType.ShortString);
-        var secret = new SettingDefinition("secret", "Secret", "Secret", SettingValueType.ShortString, IsSensitive: true);
-        var resolution = new ResolvedSetting("text", "local", 2, "Library", string.Empty, true, "local", false);
-
-        var inherited = new SettingRowViewModel("one", text, resolution, null, null, null,
-            InheritedValue: "system value", HasInheritedValue: true);
-        StringAssert.Contains(SettingInheritancePresentation.MessageFor(inherited), "use “system value”");
-
-        var unconfigured = inherited with { InheritedValue = null, HasInheritedValue = false };
-        StringAssert.Contains(SettingInheritancePresentation.MessageFor(unconfigured), "No inherited value is configured");
-
-        var sensitive = new SettingRowViewModel("two", secret, resolution, null, null, null,
-            InheritedValue: "recognizable secret", HasInheritedValue: true);
-        var message = SettingInheritancePresentation.MessageFor(sensitive);
-        Assert.IsFalse(message.Contains("recognizable secret", StringComparison.Ordinal));
-        Assert.AreEqual("Choosing Use inherited value will remove this customization. Use the inherited value from the inherited scope.", message);
+        StringAssert.Contains(script, "operationName = mode === \"inherit\" ? \"RemoveOverride\" : \"Upsert\"");
+        StringAssert.Contains(script, "Replacement entered");
+        StringAssert.Contains(script, "summary.textContent = text");
+        StringAssert.Contains(script, "compactSourcePreview");
+        Assert.IsFalse(script.Contains("innerHTML", StringComparison.Ordinal));
+        Assert.IsFalse(script.Contains("image-undo-pending", StringComparison.Ordinal));
     }
 
     [TestMethod]

@@ -166,7 +166,7 @@ public sealed class SettingsController(
                     {
                         (target, formCode, definition.Key)
                     })
-                : null;
+                : resolution.SourceOrganizationId.HasValue ? resolution : null;
             var effectiveAssetMissing = false;
             var effectiveAsset = definition.ValueType == SettingValueType.Image
                 ? ResolveAsset(resolution.EffectiveValue, target, formCode, out effectiveAssetMissing)
@@ -330,7 +330,9 @@ public sealed class SettingsController(
         {
             repository.WriteAudit("ValidationFailed", false, CreateAudit(request.OrganizationId, request.FormCode), "One or more setting values were invalid.");
             TempData["SettingsError"] = string.Join(" ", ModelState.Values.SelectMany(value => value.Errors).Select(error => error.ErrorMessage));
-            TempData["SettingsErrorGroup"] = request.Changes.FirstOrDefault(change => ModelState.ContainsKey(change.Key))?.Key.Split('.')[0];
+            var invalidSettingKey = request.Changes.Select(change => change.Key).FirstOrDefault(ModelState.ContainsKey);
+            TempData["SettingsErrorKey"] = invalidSettingKey;
+            TempData["SettingsErrorGroup"] = invalidSettingKey?.Split('.')[0];
             return RedirectToAction(nameof(Index), new { organizationId = request.OrganizationId, formCode = request.FormCode });
         }
 
@@ -339,18 +341,21 @@ public sealed class SettingsController(
             repository.DirectSave(request.OrganizationId, request.FormCode, request.ExpectedVersion, mutations, CatalogByKey, CreateAudit(request.OrganizationId, request.FormCode));
             cacheInvalidator.LiveSettingsChanged($"DirectSave organization={request.OrganizationId} form={request.FormCode}");
         }
-        catch (DBConcurrencyException exception)
+        catch (DBConcurrencyException)
         {
-            return Conflict(exception.Message);
+            TempData["SettingsError"] = "The settings changed while you were working. Reloaded values are shown below. Review them before trying again.";
+            return RedirectToAction(nameof(Index), new { organizationId = request.OrganizationId, formCode = request.FormCode });
         }
         catch (SqlException exception) when (exception.Number == 1205)
         {
-            return Conflict("Direct save conflicted with another settings change. Reload and review the settings.");
+            TempData["SettingsError"] = "The settings changed while you were working. Reloaded values are shown below. Review them before trying again.";
+            return RedirectToAction(nameof(Index), new { organizationId = request.OrganizationId, formCode = request.FormCode });
         }
         catch (InvalidOperationException exception)
         {
             repository.WriteAudit("ValidationFailed", false, CreateAudit(request.OrganizationId, request.FormCode), exception.Message);
-            return BadRequest(exception.Message);
+            TempData["SettingsError"] = $"{exception.Message} Reloaded values are shown below. Review them before trying again.";
+            return RedirectToAction(nameof(Index), new { organizationId = request.OrganizationId, formCode = request.FormCode });
         }
 
         return RedirectToAction(nameof(Index), new { organizationId = request.OrganizationId, formCode = request.FormCode });
@@ -370,7 +375,9 @@ public sealed class SettingsController(
         {
             repository.WriteAudit("ValidationFailed", false, CreateAudit(request.OrganizationId, request.FormCode), "Shared draft changes were invalid.", request.ExpectedDraftId);
             TempData["SettingsError"] = string.Join(" ", ModelState.Values.SelectMany(value => value.Errors).Select(error => error.ErrorMessage));
-            TempData["SettingsErrorGroup"] = request.Changes.FirstOrDefault(change => ModelState.ContainsKey(change.Key))?.Key.Split('.')[0];
+            var invalidSettingKey = request.Changes.Select(change => change.Key).FirstOrDefault(ModelState.ContainsKey);
+            TempData["SettingsErrorKey"] = invalidSettingKey;
+            TempData["SettingsErrorGroup"] = invalidSettingKey?.Split('.')[0];
             return RedirectToAction(nameof(Index), new { organizationId = request.OrganizationId, formCode = request.FormCode });
         }
         try
@@ -464,7 +471,7 @@ public sealed class SettingsController(
         }
 
         // Asset creation is deliberately independent from setting mutation. The browser places this
-        // returned ID into the normal row edit session, and Save/Save-to-draft persists it with peers.
+        // returned ID into the image editor's pending value, and Save/Save-to-draft persists it with peers.
         RegistrationFormAsset asset;
         try
         {
@@ -1123,7 +1130,7 @@ public sealed class SettingsController(
         {
             if (!catalog.TryGet(input.Key, out var definition) || !authorization.CanManage(User, organizationId, definition.IsSensitive))
             {
-                ModelState.AddModelError("setting", "One or more submitted settings are unrecognized or inaccessible.");
+                ModelState.AddModelError(input.Key, "One or more submitted settings are unrecognized or inaccessible.");
                 continue;
             }
             if (!DraftOperationValidation.TryParseSupported(input.Operation, out var operation))
