@@ -609,13 +609,56 @@ public class SettingsAdministrationTests
         var sensitive = new SettingDefinition("secret", "Secret", "Secret", SettingValueType.ShortString, IsSensitive: true);
 
         Assert.AreEqual("Several words on one line", SettingValuePresentation.Format(longText, " Several\n words   on\tone line ", true));
-        Assert.AreEqual("HTML configured", SettingValuePresentation.Format(html, "<strong>private markup</strong>", true));
-        Assert.AreEqual("Email template configured", SettingValuePresentation.Format(template, "Hello {{name}}", true));
+        Assert.AreEqual("<strong>private markup</strong>", SettingValuePresentation.Format(html, "<strong>private markup</strong>", true));
+        Assert.AreEqual("Hello {{name}}", SettingValuePresentation.Format(template, "Hello {{name}}", true));
         Assert.AreEqual("Hidden", SettingValuePresentation.Format(sensitive, "recognizable-secret", true));
         Assert.AreEqual("Not configured", SettingValuePresentation.Format(sensitive, null, false));
         Assert.AreEqual("10., 192.168.", SettingValuePresentation.FriendlyValue(prefixes, "10.; 192.168."));
         Assert.AreEqual("December 31, 2027", SettingValuePresentation.FriendlyValue(date, "2027-12-31"));
         Assert.AreEqual("60 seconds", SettingValuePresentation.FriendlyValue(resetSeconds, "60"));
+    }
+
+    [TestMethod]
+    public void SettingValuePresentation_CompactsSourcePreviewsWithoutRenderingOrExposingSensitiveValues()
+    {
+        var html = new SettingDefinition("html", "HTML", "HTML", SettingValueType.Html);
+        var template = new SettingDefinition("template", "Template", "Template", SettingValueType.EmailTemplate);
+        var sensitive = new SettingDefinition("secret", "Secret", "Secret", SettingValueType.Html, IsSensitive: true);
+        var source = " <p>First\n\tline with <strong>markup</strong> and a hostile <img src=x onerror=\"alert(1)\"> value</p> ";
+        var longSource = new string('x', SettingValuePresentation.CompactPreviewMaximumLength + 20);
+
+        Assert.AreEqual("<p>First line with <strong>markup</strong> and a hostile <img src=x onerror=\"alert(1)\"> value</p>", SettingValuePresentation.CompactPreview(source));
+        Assert.AreEqual("Hello {{name}}", SettingValuePresentation.CompactPreview("Hello {{name}}"));
+        Assert.AreEqual("Blank", SettingValuePresentation.CompactPreview(" \r\n\t "));
+        Assert.AreEqual($"{new string('x', SettingValuePresentation.CompactPreviewMaximumLength)}…", SettingValuePresentation.CompactPreview(longSource));
+        Assert.AreEqual("Not configured", SettingValuePresentation.Format(html, null, false));
+        var sensitiveSummary = SettingValuePresentation.Format(sensitive, "recognizable-secret", true);
+        Assert.AreEqual("Hidden", sensitiveSummary);
+        Assert.IsFalse(sensitiveSummary.Contains("recognizable-secret", StringComparison.Ordinal));
+    }
+
+    [TestMethod]
+    public void SettingReviewPresentation_UsesCompactRawSourceForHtmlAndTemplates()
+    {
+        var html = new SettingDefinition("html", "HTML", "HTML", SettingValueType.Html);
+        var template = new SettingDefinition("template", "Template", "Template", SettingValueType.EmailTemplate);
+        var oldHtml = "<p>Old registration message</p>";
+        var newHtml = "<p>New registration message</p>";
+        var liveResolution = new ResolvedSetting("html", oldHtml, 2, "Library", string.Empty, true, oldHtml, false);
+        var live = new SettingRowViewModel("html", html, liveResolution, null, null, null);
+        var proposed = live with { DraftValue = newHtml, DraftOperation = DraftOperation.Upsert, DraftId = 8 };
+        var templateLive = new SettingRowViewModel("template", template,
+            new ResolvedSetting("template", "Hello {{NameFirst}}", 2, "Library", string.Empty, true, "Hello {{NameFirst}}", false),
+            null, null, null);
+        var templateRow = templateLive with { DraftValue = "Hello {{NameLast}}", DraftOperation = DraftOperation.Upsert, DraftId = 8 };
+
+        Assert.AreEqual(oldHtml, SettingReviewPresentation.Live(live));
+        Assert.AreEqual(newHtml, SettingReviewPresentation.Proposed(proposed));
+        Assert.AreEqual("Hello {{NameFirst}}", SettingReviewPresentation.Live(templateLive));
+        Assert.AreEqual("Hello {{NameLast}}", SettingReviewPresentation.Proposed(templateRow));
+        Assert.AreNotEqual(SettingReviewPresentation.Live(templateLive), SettingReviewPresentation.Proposed(templateRow));
+        Assert.IsFalse(SettingReviewPresentation.Live(live).Contains("configured", StringComparison.OrdinalIgnoreCase));
+        Assert.IsFalse(SettingReviewPresentation.Proposed(proposed).Contains("configured", StringComparison.OrdinalIgnoreCase));
     }
 
     [TestMethod]
@@ -714,6 +757,8 @@ public class SettingsAdministrationTests
         StringAssert.Contains(css, "--settings-form-field-width");
         StringAssert.Contains(css, ".settings-search-row");
         StringAssert.Contains(css, "grid-template-columns: var(--settings-control-label-width) minmax(0, 1fr)");
+        StringAssert.Contains(css, ".setting-html-value-preview[data-idle-html]");
+        StringAssert.Contains(css, "clamp(12rem, 28vh, 18rem)");
     }
 
     [TestMethod]
@@ -1847,6 +1892,9 @@ public class SettingsAdministrationTests
         StringAssert.Contains(partial, "data-image-local-missing=");
         StringAssert.Contains(partial, "data-image-local-preview-url=");
         StringAssert.Contains(partial, "data-image-local-file-name=");
+        StringAssert.Contains(partial, "data-html-capable=");
+        StringAssert.Contains(partial, "title=\"@drawerSummary\">@drawerSummary");
+        Assert.IsFalse(partial.Contains("Html.Raw", StringComparison.Ordinal));
         Assert.IsFalse(partial.Contains("setting-mode", StringComparison.Ordinal));
         Assert.IsFalse(partial.Contains("image-mode", StringComparison.Ordinal));
         Assert.IsFalse(partial.Contains("batch-mode", StringComparison.Ordinal));
@@ -1910,6 +1958,9 @@ public class SettingsAdministrationTests
         StringAssert.Contains(partial, "data-image-inherited-missing=");
         StringAssert.Contains(script, "operationName = mode === \"inherit\" ? \"RemoveOverride\" : \"Upsert\"");
         StringAssert.Contains(script, "Replacement entered");
+        StringAssert.Contains(script, "summary.textContent = text");
+        StringAssert.Contains(script, "compactSourcePreview");
+        Assert.IsFalse(script.Contains("innerHTML", StringComparison.Ordinal));
         Assert.IsFalse(script.Contains("image-undo-pending", StringComparison.Ordinal));
     }
 

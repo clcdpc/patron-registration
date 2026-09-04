@@ -40,13 +40,38 @@ test('loaded rows use one readable value surface and explicit actions', async ({
     await expect(dirtyRows(page)).toHaveCount(0);
     await expect(page.locator('.settings-actions')).toBeHidden();
     await expect(page.locator('.setting-comparison, .setting-baseline-column, .setting-effective-value, .setting-scope-panel, .html-preview, .plain-text-preview')).toHaveCount(0);
-    await expect(page.locator('.setting-row .setting-change')).toHaveCount(24);
-    await expect(page.locator('.setting-row .setting-value-surface:visible')).toHaveCount(24);
+    await expect(page.locator('.setting-row .setting-change')).toHaveCount(29);
+    await expect(page.locator('.setting-row .setting-value-surface:visible')).toHaveCount(29);
     await expect(rowFor(page, 'drivers_license_button_text').locator('.setting-scope-status')).toHaveText('Inherited from Main Library');
     await expect(revertButton(rowFor(page, 'drivers_license_button_text'))).toBeHidden();
     await expect(revertButton(rowFor(page, 'custom_heading'))).toBeVisible();
     await expect(revertButton(rowFor(page, 'no_inherited_value'))).toHaveText('Remove customization…');
     await expect(rowFor(page, 'show_dl_ips').locator('[data-idle-text]')).toHaveText('10., 192.168.');
+});
+
+test('HTML and template drawer summaries show safe compact raw source', async ({ page }) => {
+    const footer = rowFor(page, 'custom_form_footer_html');
+    const template = rowFor(page, 'welcome_email_template_html');
+    const inherited = rowFor(page, 'inherited_html_message');
+    const draftRemove = rowFor(page, 'shared_draft_remove_override_html');
+    const long = rowFor(page, 'long_hostile_html');
+
+    await expect(footer.locator('.summary-value')).toHaveText('<p>Draft line one</p> <p>Draft line two</p>');
+    await expect(template.locator('.summary-value')).toHaveText('<p>Hello, {{NameFirst}}.</p>');
+    await expect(inherited.locator('.summary-value')).toHaveText('<p>Inherited HTML content.</p>');
+    await expect(inherited.locator('.setting-status')).toHaveText('Inherited from Main Library');
+    await expect(draftRemove.locator('.summary-value')).toHaveText('<p>Inherited draft HTML.</p>');
+    await expect(draftRemove.locator('.setting-status')).toHaveText('Shared draft — use inherited value');
+    await expect(footer.locator('.summary-value')).not.toHaveText('HTML configured');
+    await expect(template.locator('.summary-value')).not.toHaveText('Email template configured');
+    await expect(inherited.locator('.summary-value')).not.toHaveText('HTML configured');
+    await expect(draftRemove.locator('.summary-value')).not.toHaveText('HTML configured');
+    await expect(long.locator('.summary-value')).toContainText('<p>Bring a photo ID');
+    await expect(long.locator('.summary-value')).toContainText('…');
+    expect(await long.locator('.summary-value').evaluate((element) => element.textContent.length)).toBeLessThanOrEqual(161);
+    await expect(long.locator('.setting-name')).toBeVisible();
+    await expect(long.locator('.setting-status')).toBeVisible();
+    await expect(long.locator('img')).toHaveCount(0);
 });
 
 test('idle customized HTML is rendered and Change swaps the same region to source', async ({ page }) => {
@@ -71,6 +96,22 @@ test('idle customized HTML is rendered and Change swaps the same region to sourc
     await expect(source).toBeFocused();
     await expect(source).toHaveValue('<p>Draft line one</p>\n<p>Draft line two</p>');
     await expect(row.locator('[data-editor-surface] .setting-html-value-preview')).toHaveCount(0);
+});
+
+test('dirty HTML summaries show proposed raw source and discard restores the loaded baseline', async ({ page }) => {
+    const custom = rowFor(page, 'welcome_email_template_html');
+    await custom.getByRole('button', { name: 'Change' }).click();
+    await custom.locator('#welcome-html-value').fill('<p>Updated registration message with <strong>new details</strong>.</p>');
+    await expect(custom.locator('.summary-value')).toHaveText('Unsaved: <p>Updated registration message with <strong>new details</strong>.</p>');
+    await discardChanges(page, 1);
+    await expect(custom.locator('.summary-value')).toHaveText('<p>Hello, {{NameFirst}}.</p>');
+
+    const draft = rowFor(page, 'custom_form_footer_html');
+    await draft.getByRole('button', { name: 'Change' }).click();
+    await draft.locator('#footer-value').fill('<p>Updated shared-draft footer</p>');
+    await expect(draft.locator('.summary-value')).toHaveText('Unsaved: <p>Updated shared-draft footer</p>');
+    await discardChanges(page, 1);
+    await expect(draft.locator('.summary-value')).toHaveText('<p>Draft line one</p> <p>Draft line two</p>');
 });
 
 test('plain long text uses a readable surface then the same textarea while editing', async ({ page }) => {
@@ -314,9 +355,99 @@ test('review keeps semantic pending changes as the before/after comparison surfa
     await page.getByRole('button', { name: 'Review 2 changes' }).click();
     const dialog = page.locator('#save-confirm');
     await expect(dialog).toBeVisible();
+    await expect(dialog.locator('thead .review-baseline-column')).toHaveText('Live now');
+    await expect(dialog.locator('thead .review-pending-column')).toHaveText('Proposed');
+    await expect(dialog.locator('tbody .review-baseline-column')).toHaveCount(2);
+    await expect(dialog.locator('tbody .review-baseline-column').nth(0)).toBeVisible();
+    await expect(dialog.locator('tbody .review-baseline-column').nth(1)).toBeVisible();
+    await expect(dialog.locator('tbody .review-pending-column')).toHaveCount(2);
+    await expect(dialog.locator('tbody .review-pending-column').nth(0)).toBeVisible();
+    await expect(dialog.locator('tbody .review-pending-column').nth(1)).toBeVisible();
     await expect(dialog.locator('tbody')).toContainText('Browser heading');
     await expect(dialog.locator('tbody')).toContainText('Customize here: Scan ID');
     await dialog.getByRole('button', { name: 'Close' }).click();
+});
+
+test('HTML review compares compact raw source instead of generic configured labels', async ({ page }) => {
+    const row = rowFor(page, 'welcome_email_template_html');
+    await row.getByRole('button', { name: 'Change' }).click();
+    await row.locator('#welcome-html-value').fill('<p>New registration message</p>');
+    await page.getByRole('button', { name: 'Review 1 change' }).click();
+
+    const review = page.locator('#save-confirm');
+    await expect(review.locator('tbody .review-baseline-column')).toHaveText('<p>Hello, {{NameFirst}}.</p>');
+    await expect(review.locator('tbody .review-pending-column')).toHaveText('<p>New registration message</p>');
+    await expect(review).not.toContainText('HTML configured');
+    await expect(review).not.toContainText('Email template configured');
+    await review.getByRole('button', { name: 'Close' }).click();
+    await discardChanges(page, 1);
+
+    const hostile = rowFor(page, 'long_hostile_html');
+    const hostileSource = '<p>Review literal <img src=x onerror="alert(1)"><strong>markup</strong></p>';
+    await hostile.getByRole('button', { name: 'Change' }).click();
+    await hostile.locator('#long-hostile-html-value').fill(hostileSource);
+    await page.getByRole('button', { name: 'Review 1 change' }).click();
+    const hostileReview = page.locator('#save-confirm');
+    await expect(hostileReview.locator('tbody .review-pending-column')).toHaveText(hostileSource);
+    await expect(hostileReview.locator('tbody img')).toHaveCount(0);
+    await expect(hostileReview.locator('thead .review-baseline-column')).toHaveText('Live now');
+    await expect(hostileReview.locator('thead .review-pending-column')).toHaveText('Proposed');
+    await expect(hostileReview.locator('tbody .review-baseline-column')).toBeVisible();
+    await expect(hostileReview.locator('tbody .review-pending-column')).toBeVisible();
+    await page.setViewportSize({ width: 420, height: 900 });
+    const reviewDimensions = await page.evaluate(() => ({ body: document.body.scrollWidth, viewport: document.documentElement.clientWidth }));
+    expect(reviewDimensions.body).toBeLessThanOrEqual(reviewDimensions.viewport + 1);
+    await expect(hostileReview.locator('.review-table-wrap')).toBeVisible();
+    await hostileReview.getByRole('button', { name: 'Close' }).click();
+    await discardChanges(page, 1);
+});
+
+test('sensitive shared-draft RemoveOverride follows the draft baseline without exposing secrets', async ({ page }) => {
+    const noInherited = rowFor(page, 'shared_draft_secret_no_inherited');
+    const inherited = rowFor(page, 'shared_draft_secret_inherited');
+    await expect(noInherited.locator('[data-idle-text]')).toHaveText('Not configured');
+    await expect(noInherited.locator('.setting-status')).toHaveText('Shared draft — use inherited value');
+    await expect(inherited.locator('[data-idle-text]')).toHaveText('Configured');
+    await expect(page.locator('body')).not.toContainText('super-secret');
+
+    await noInherited.getByRole('button', { name: 'Change' }).click();
+    await expect(noInherited.locator('[data-editor-surface]')).toBeVisible();
+    await expect(noInherited.locator('input.setting-value')).toHaveValue('');
+    await noInherited.locator('input.setting-value').fill('temporary-secret');
+    await expect(noInherited).toHaveAttribute('data-dirty', 'true');
+    await page.getByRole('button', { name: 'Review 1 change' }).click();
+    const review = page.locator('#save-confirm');
+    await expect(review.locator('tbody')).toContainText('Replacement entered');
+    await expect(review.locator('tbody')).not.toContainText('temporary-secret');
+    await review.getByRole('button', { name: 'Close' }).click();
+    await discardChanges(page, 1);
+    await expect(noInherited.locator('[data-idle-text]')).toHaveText('Not configured');
+
+    await inherited.getByRole('button', { name: 'Change' }).click();
+    await expect(inherited.locator('[data-editor-surface]')).toBeVisible();
+    await expect(inherited.locator('input.setting-value')).toHaveValue('');
+    await inherited.locator('input.setting-value').fill('another-temporary-secret');
+    await discardChanges(page, 1);
+    await expect(inherited.locator('[data-idle-text]')).toHaveText('Configured');
+    await expect(page.locator('body')).not.toContainText('another-temporary-secret');
+});
+
+test('idle HTML previews are taller but bounded, scrollable, and keep the revert dialog compact', async ({ page }) => {
+    const row = rowFor(page, 'long_hostile_html');
+    const frame = row.locator('[data-idle-html]');
+    const box = await frame.boundingBox();
+    expect(box?.height).toBeGreaterThanOrEqual(190);
+    expect(box?.height).toBeLessThanOrEqual(290);
+    expect(await frame.evaluate((element) => getComputedStyle(element).height)).not.toBe('144px');
+    await expect.poll(async () => frame.contentFrame().locator('html').evaluate((html) => html.scrollHeight > html.clientHeight)).toBe(true);
+    const dimensions = await page.evaluate(() => ({ body: document.body.scrollWidth, viewport: document.documentElement.clientWidth }));
+    expect(dimensions.body).toBeLessThanOrEqual(dimensions.viewport + 1);
+
+    await revertButton(row).click();
+    const dialog = page.locator('#revert-confirm');
+    const dialogBox = await dialog.boundingBox();
+    expect(dialogBox?.height).toBeLessThan(600);
+    await dialog.getByRole('button', { name: 'Keep current value' }).click();
 });
 
 test('Escape on the revert dialog is the safe Keep current value action', async ({ page }) => {

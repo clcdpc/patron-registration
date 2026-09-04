@@ -110,6 +110,7 @@ body.settings-administration-page #regFormContainer {
 .setting-row[data-value-type="html"] { --setting-long-form-height: 9rem }
 .setting-row[data-value-type="emailtemplate"] { --setting-long-form-height: 11.5rem }
 .setting-html-value-preview { background: #fff; border: 1px solid #777; box-sizing: border-box; display: block; min-height: var(--setting-long-form-height, 8rem); width: 100% }
+.setting-html-value-preview[data-idle-html] { height: clamp(12rem, 28vh, 18rem); min-height: 12rem }
 .setting-value-header { align-items: center; display: flex; flex-wrap: wrap; gap: .4rem .8rem; min-width: 0 }
 .setting-value-header > strong { flex: 0 0 auto }
 .setting-scope-status { color: #555; font-size: .86rem }
@@ -162,7 +163,6 @@ body.settings-administration-page #regFormContainer {
 .review-table thead { background: #e8eef3 }
 .review-table th[scope="row"] { background: #fafafa }
 .review-table td { overflow-wrap: anywhere }
-#save-confirm[data-review-mode="browser"] .review-baseline-column { display: none }
 
 @media (max-width: 42rem) {
     .batch-settings { display: block; overflow: visible }
@@ -198,7 +198,6 @@ body.settings-administration-page #regFormContainer {
     .review-table td::before { color: #555; display: inline-block; font-size: .75rem; font-weight: 700; margin-right: .35rem; text-transform: uppercase }
     .review-table td:nth-child(2)::before { content: "Live now:" }
     .review-table td:nth-child(3)::before { content: "Proposed:" }
-    #save-confirm[data-review-mode="browser"] .review-pending-column::before { content: "Pending change:" }
 }
 
 .settings-header {

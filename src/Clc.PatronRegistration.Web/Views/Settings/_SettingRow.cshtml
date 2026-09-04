@@ -30,12 +30,13 @@
     editorValue = definition.IsSensitive ? string.Empty : Clc.PatronRegistration.Web.Models.SettingEditorDefaults.ValueFor(definition, editorValue);
     var idleValue = baselineMode == "customize" ? customValue : inheritedValue;
     var idleHasValue = definition.IsSensitive
-        ? isDraftUpsert || resolution.SourceOrganizationId.HasValue
+        ? baselineMode == "customize" ? isDraftUpsert || resolution.OwnsOverride : Model.HasInheritedValue
         : baselineMode == "customize" ? customValue is not null : Model.HasInheritedValue;
     var idleHtml = !definition.IsSensitive && isHtml && idleHasValue ? SafeHtmlPolicy.SanitizeForSetting(definition, idleValue) : string.Empty;
     var safeEffective = definition.IsSensitive ? string.Empty : resolution.EffectiveValue;
     var searchText = $"{definition.DisplayName} {definition.Key} {definition.Description} {safeEffective}".ToLowerInvariant();
     var presentation = Clc.PatronRegistration.Web.Models.SettingValuePresentation.ForRow(Model);
+    var useCompactSourceSummary = !definition.IsSensitive && (isHtml || definition.ValueType == SettingValueType.EmailTemplate);
     var idleText = definition.IsSensitive
         ? idleHasValue ? "Configured" : "Not configured"
         : isHtml
@@ -43,6 +44,7 @@
             : definition.Key.Equals("show_dl_ips", StringComparison.OrdinalIgnoreCase)
                 ? !idleHasValue ? "Not configured" : string.IsNullOrWhiteSpace(idleValue) ? "Blank" : string.Join(", ", idleValue!.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
                 : Clc.PatronRegistration.Web.Models.SettingValuePresentation.FriendlyValue(definition, idleValue, idleHasValue);
+    var drawerSummary = useCompactSourceSummary ? presentation.Value : idleText;
     var idleFullText = definition.IsSensitive ? idleText : idleValue is { Length: 0 } && idleHasValue ? "Blank" : idleValue ?? idleText;
     var inheritedSource = Model.InheritedSourceDescription ?? Model.SourceDescription;
     var inheritedSourceLabel = string.IsNullOrWhiteSpace(inheritedSource) ? "inherited" : inheritedSource;
@@ -91,6 +93,7 @@
          data-sensitive="@definition.IsSensitive.ToString().ToLowerInvariant()"
          data-draft-change="@hasDraftOperation.ToString().ToLowerInvariant()"
          data-value-type="@definition.ValueType.ToString().ToLowerInvariant()"
+         data-html-capable="@isHtml.ToString().ToLowerInvariant()"
          data-presentation-state="@presentation.State.ToString().ToLowerInvariant()"
          data-live-state="@(resolution.OwnsOverride ? "customized" : resolution.SourceOrganizationId.HasValue ? "inherited" : "notset")"
          data-live-summary="@Clc.PatronRegistration.Web.Models.SettingReviewPresentation.Live(Model)"
@@ -119,7 +122,7 @@
     <summary>
         <span class="setting-summary-content">
             <span class="setting-name">@definition.DisplayName</span>
-            <span class="summary-value" title="@idleText">@idleText</span>
+            <span class="summary-value" title="@drawerSummary">@drawerSummary</span>
             <span class="setting-status"><span>@rowStatus</span></span>
         </span>
     </summary>

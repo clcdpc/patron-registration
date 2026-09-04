@@ -24,6 +24,8 @@ public static class SettingEditorDefaults
 
 public static class SettingValuePresentation
 {
+    public const int CompactPreviewMaximumLength = 160;
+
     public static string FriendlyValue(SettingDefinition definition, string? value, bool hasValue = true)
     {
         if (!hasValue || value is null || value.Length == 0)
@@ -83,14 +85,14 @@ public static class SettingValuePresentation
         {
             return "Blank";
         }
-        return definition.ValueType switch
+        if (definition.ValueType == SettingValueType.Boolean && bool.TryParse(value, out var booleanValue))
         {
-            SettingValueType.Boolean when bool.TryParse(value, out var booleanValue) => booleanValue ? "Yes" : "No",
-            SettingValueType.LongString => Preview(value),
-            SettingValueType.Html => "HTML configured",
-            SettingValueType.EmailTemplate => "Email template configured",
-            _ => value
-        };
+            return booleanValue ? "Yes" : "No";
+        }
+        return definition.ValueType is SettingValueType.LongString or SettingValueType.Html or SettingValueType.EmailTemplate ||
+            SafeHtmlPolicy.IsHtmlExecutionContext(definition)
+            ? CompactPreview(value)
+            : value;
     }
 
     public static SettingRowPresentation ForRow(SettingRowViewModel row)
@@ -125,11 +127,16 @@ public static class SettingValuePresentation
         return new(SettingPresentationState.NotSet, "Not configured", "Not configured", "Not configured");
     }
 
-    private static string Preview(string value)
+    public static string CompactPreview(string value)
     {
-        const int maximumLength = 160;
         var normalized = Regex.Replace(value, @"\s+", " ").Trim();
-        return normalized.Length <= maximumLength ? normalized : $"{normalized[..maximumLength].TrimEnd()}…";
+        if (normalized.Length == 0)
+        {
+            return "Blank";
+        }
+        return normalized.Length <= CompactPreviewMaximumLength
+            ? normalized
+            : $"{normalized[..CompactPreviewMaximumLength].TrimEnd()}…";
     }
 }
 

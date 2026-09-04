@@ -482,6 +482,42 @@ test("HTML idle output is rendered and has no permanent editor preview", () => {
     assert.equal(html.row.querySelector(".html-preview"), null); assert.equal(html.row.querySelector(".plain-text-preview"), null);
 });
 
+test("compact source previews normalize whitespace and cap literal markup", () => {
+    const api = loadSettings();
+    assert.equal(api.SettingsEditor.compactSourcePreview(" <p>One\n\tline</p> "), "<p>One line</p>");
+    assert.equal(api.SettingsEditor.compactSourcePreview(" "), "Blank");
+    const source = "<p>" + "x".repeat(170) + "</p>";
+    const preview = api.SettingsEditor.compactSourcePreview(source);
+    assert.equal(preview.length, 161);
+    assert.equal(preview.endsWith("…"), true);
+    assert.equal(preview.startsWith("<p>"), true);
+});
+
+test("sensitive shared-draft RemoveOverride uses inherited existence for idle presence", () => {
+    const api = loadSettings();
+    const noInherited = makeRow({ key: "draft-secret-none", valueType: "shortstring", baselineMode: "inherit", baselineValue: "", value: "", sensitive: true, inherited: false, draftChange: true });
+    const inherited = makeRow({ key: "draft-secret-inherited", valueType: "shortstring", baselineMode: "inherit", baselineValue: "", value: "", sensitive: true, inherited: true, inheritedValue: "", draftChange: true });
+    const form = makeForm([noInherited.row, inherited.row]);
+    api.SettingsEditor.initializeStandardRow(noInherited.row, form);
+    api.SettingsEditor.initializeStandardRow(inherited.row, form);
+    assert.equal(noInherited.idleText.textContent, "Not configured");
+    assert.equal(inherited.idleText.textContent, "Configured");
+
+    noInherited.change.click();
+    assert.equal(noInherited.visible.value, "");
+    noInherited.visible.value = "temporary-secret";
+    noInherited.visible.emit("input");
+    assert.equal(noInherited.row.dataset.dirty, "true");
+    api.SettingsWorkflow.discardPendingChanges(form);
+    assert.equal(noInherited.row.dataset.dirty, "false");
+    assert.equal(noInherited.idleText.textContent, "Not configured");
+
+    inherited.change.click();
+    assert.equal(inherited.visible.value, "");
+    assert.equal(inherited.row.dataset.dirty, "false");
+    assert.equal(inherited.idleText.textContent, "Configured");
+});
+
 test("image Revert previews the inherited image before applying it", () => {
     const api = loadSettings();
     const image = makeImageRow({ baselineMode: "customize", baselineValue: "12", inherited: true });

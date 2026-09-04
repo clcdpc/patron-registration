@@ -212,6 +212,12 @@
         if (binding) binding.value = state.value;
     }
 
+    function compactSourcePreview(value) {
+        const normalized = String(value ?? "").replace(/\s+/g, " ").trim();
+        if (!normalized) return "Blank";
+        return normalized.length <= 160 ? normalized : `${normalized.slice(0, 160).trimEnd()}…`;
+    }
+
     function safeBrowserSummary(row, value, operation) {
         if (operation === "RemoveOverride") return row?.dataset?.hasInherited === "true" ? "Use inherited value" : "Remove customization";
         if (row?.dataset?.sensitive === "true") return "Replacement entered";
@@ -220,13 +226,7 @@
         if (valueType === "boolean") return String(value).toLowerCase() === "true" ? "Yes" : "No";
         if (valueType === "enumeration" && String(value).toLowerCase() === "barcode") return "Barcode";
         if (valueType === "enumeration" && String(value).toLowerCase() === "magstripe") return "Magnetic stripe";
-        if (valueType === "html") return "HTML configured";
-        if (valueType === "emailtemplate") return "Email template configured";
-        if (valueType === "longstring") {
-            const normalized = String(value ?? "").replace(/\s+/g, " ").trim();
-            if (!normalized) return "Blank";
-            return normalized.length <= 120 ? normalized : `${normalized.slice(0, 120).trimEnd()}…`;
-        }
+        if (row?.dataset?.htmlCapable === "true" || valueType === "longstring" || valueType === "html" || valueType === "emailtemplate") return compactSourcePreview(value);
         return String(value ?? "").trim() || "Blank";
     }
 
@@ -1024,7 +1024,7 @@
         if (close) close.textContent = reviewOnly ? "Close" : "Cancel";
         if (saveContext) saveContext.hidden = reviewOnly;
         if (browserContext) browserContext.hidden = !reviewOnly;
-        if (proposedHeading) proposedHeading.textContent = reviewOnly ? "Pending change" : "Proposed";
+        if (proposedHeading) proposedHeading.textContent = "Proposed";
         if (caption) caption.textContent = reviewOnly ? "Browser-pending setting changes" : "Pending setting changes";
     }
 
@@ -1440,7 +1440,7 @@
     globalThis.SettingsEditor = {
         initializeSettingsContext, setNavigationGuard: (guard) => { navigationGuard = guard; }, initializeRow,
         initializeStandardRow, initializeImageRow, updatePendingActions, hasImageUpload, blockActiveEdit,
-        populateReviewTable, reviewPendingChanges
+        populateReviewTable, reviewPendingChanges, compactSourcePreview
     };
     globalThis.SettingsWorkflow = {
         continuePipeline, lifecycleSubmit, needsLiveConfirmation, disableDirtyMutations, discardPendingChanges,
