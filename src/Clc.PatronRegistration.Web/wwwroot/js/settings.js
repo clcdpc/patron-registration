@@ -3,6 +3,7 @@
     const searchStatus = document.querySelector("#search-status");
     const form = document.querySelector("#settings-form");
     const reviewDialog = document.querySelector("#save-confirm");
+    const revertDialog = document.querySelector("#revert-confirm");
     const statusRegion = document.querySelector("#settings-status");
     const imageUploadBlockedMessage = "Wait for the image upload to finish or choose another state before continuing.";
     const imageUploadRequiredMessage = "Upload an image to customize this scope or choose the inherited image instead.";
@@ -133,16 +134,6 @@
             .join(";");
     }
 
-    function syncEditorPreview(source, preview = source?.nextElementSibling) {
-        if (!source || !preview) return;
-        if (preview.classList?.contains?.("html-preview")) {
-            const frame = preview;
-            frame.srcdoc = source.value;
-        } else if (preview.classList?.contains?.("plain-text-preview")) {
-            preview.textContent = source.value;
-        }
-    }
-
     function baselineState(row) {
         const mode = row?.dataset?.baselineMode || "customize";
         return { mode, operation: mode === "inherit" ? "RemoveOverride" : "Upsert", value: normalizeValue(row, row?.dataset?.baselineValue || "") };
@@ -185,7 +176,6 @@
         const control = valueControls(row)[0];
         if (!control) return;
         control.value = value === null || value === undefined ? "" : String(value);
-        syncEditorPreview(control);
     }
 
     function ensureEditorState(row) {
@@ -226,6 +216,7 @@
         if (operation === "RemoveOverride") return row?.dataset?.hasInherited === "true" ? "Use inherited value" : "Remove customization";
         if (row?.dataset?.sensitive === "true") return "Replacement entered";
         const valueType = row?.dataset?.valueType;
+        if (row?.dataset?.batchRequired === "true") return String(value).toLowerCase() === "true" ? "Required" : "Optional";
         if (valueType === "boolean") return String(value).toLowerCase() === "true" ? "Yes" : "No";
         if (valueType === "enumeration" && String(value).toLowerCase() === "barcode") return "Barcode";
         if (valueType === "enumeration" && String(value).toLowerCase() === "magstripe") return "Magnetic stripe";
@@ -242,15 +233,13 @@
     function renderBrowserPendingSummary(row, state) {
         const summary = controls(row, ".summary-value");
         const status = controls(row, ".setting-status > span") || controls(row, ".setting-status");
-        const batchStatus = controls(row, ".batch-browser-status");
         const pendingValue = safeBrowserSummary(row, state.value, state.operation);
         const text = `Unsaved: ${pendingValue}`;
         if (summary) {
             summary.textContent = text;
             summary.setAttribute?.("title", text);
         }
-        if (batchStatus) batchStatus.textContent = text;
-        else if (status) status.textContent = "Unsaved in this browser";
+        if (status) status.textContent = "Unsaved in this browser";
     }
 
     function updateEditorAvailability(row, state) {
@@ -274,6 +263,57 @@
         row.dataset.editing = state.editing ? "true" : "false";
     }
 
+    function displayValue(row, value, hasValue = true) {
+        if (row?.dataset?.sensitive === "true") return hasValue ? "Configured" : "Not configured";
+        if (!hasValue) return "Not configured";
+        const text = value === null || value === undefined ? "" : String(value);
+        if (!text) return "Blank";
+        if (row?.dataset?.batchRequired === "true") return text.trim().toLowerCase() === "true" ? "Required" : "Optional";
+        if (row?.dataset?.valueType === "boolean") return text.trim().toLowerCase() === "true" ? "Yes" : "No";
+        if (row?.dataset?.valueType === "enumeration") {
+            if (text.toLowerCase() === "barcode") return "Barcode";
+            if (text.toLowerCase() === "magstripe") return "Magnetic stripe";
+        }
+        if (row?.dataset?.valueType === "ip-prefixes" || row?.dataset?.settingKey === "show_dl_ips") return text.split(";").map((part) => part.trim()).filter(Boolean).join(", ");
+        if (row?.dataset?.valueType === "date" || row?.dataset?.valueType === "nullabledate") {
+            const date = /^\d{4}-\d{2}-\d{2}$/.test(text) ? new Date(`${text}T00:00:00Z`) : null;
+            if (date && !Number.isNaN(date.valueOf())) return new Intl.DateTimeFormat(undefined, { year: "numeric", month: "long", day: "numeric", timeZone: "UTC" }).format(date);
+        }
+        if (row?.dataset?.settingKey === "reset_seconds") return `${text} seconds`;
+        if (row?.dataset?.valueType === "image") return row.dataset.imageInheritedFileName || "Uploaded image";
+        return text;
+    }
+
+    function updateIdleSurface(row, state) {
+        const idle = controls(row, "[data-idle-surface]");
+        const editor = controls(row, "[data-editor-surface]");
+        if (!idle || !editor) return;
+        idle.hidden = Boolean(state.editing);
+        editor.hidden = !state.editing;
+
+        if (state.editing) return;
+        const hasInherited = row?.dataset?.hasInherited === "true";
+        const inheritedValue = row?.dataset?.inheritedValue || "";
+        const useInherited = state.mode === "inherit";
+        const value = useInherited ? inheritedValue : row?._settingsInitialEditorValue || "";
+        const hasValue = useInherited ? hasInherited : row?.dataset?.baselineMode === "customize";
+        const html = controls(idle, "[data-idle-html]");
+        const text = controls(idle, "[data-idle-text]");
+        if (html) {
+            const htmlValue = useInherited ? row?.dataset?.inheritedHtml || inheritedValue : row?._settingsInitialHtmlValue || "";
+            html.hidden = !hasValue || !htmlValue;
+            html.srcdoc = htmlValue;
+        }
+        if (text) {
+            text.hidden = Boolean(html && !html.hidden);
+            if (row?.dataset?.valueType === "longstring" || row?.dataset?.valueType === "html" || row?.dataset?.valueType === "emailtemplate") {
+                text.textContent = hasValue && value ? value : displayValue(row, value, hasValue);
+            } else {
+                text.textContent = displayValue(row, value, hasValue);
+            }
+        }
+    }
+
     function resetSensitiveEditor(row) {
         if (row?.dataset?.sensitive !== "true") return;
         const input = controls(row, ".setting-value:not(.setting-value-binding)") || controls(row, ".setting-value");
@@ -287,6 +327,97 @@
             reveal.setAttribute("aria-expanded", "false");
             reveal.setAttribute("aria-label", `Reveal ${row.dataset.displayName || "secret"}`);
         }
+    }
+
+    function clearRevertTarget() {
+        if (!revertDialog) return;
+        const html = revertDialog.querySelector?.("[data-revert-html]");
+        const text = revertDialog.querySelector?.("[data-revert-text]");
+        const friendly = revertDialog.querySelector?.("[data-revert-friendly]");
+        const image = revertDialog.querySelector?.("[data-revert-image]");
+        const none = revertDialog.querySelector?.("[data-revert-none]");
+        const sensitive = revertDialog.querySelector?.("[data-revert-sensitive]");
+        [html, text, friendly, image, none, sensitive].forEach((element) => { if (element) element.hidden = true; });
+        if (html) html.srcdoc = "";
+        const preview = image?.querySelector?.("[data-revert-image-preview]");
+        if (preview) {
+            preview.hidden = true;
+            preview.removeAttribute?.("src");
+        }
+        const file = image?.querySelector?.("[data-revert-image-file]");
+        if (file) file.textContent = "";
+    }
+
+    function openRevertDialog(row, trigger) {
+        if (!revertDialog?.showModal) return false;
+        const hasInherited = row?.dataset?.hasInherited === "true";
+        const sensitive = row?.dataset?.sensitive === "true";
+        const image = row?.dataset?.valueType === "image";
+        const source = row?.dataset?.inheritedSource || "the inherited scope";
+        const title = revertDialog.querySelector?.("#revert-confirm-title");
+        const explanation = revertDialog.querySelector?.("[data-revert-explanation]");
+        const keep = revertDialog.querySelector?.("[data-revert-keep]");
+        const affirm = revertDialog.querySelector?.("[data-revert-affirm]");
+        if (title) title.textContent = hasInherited
+            ? `Revert to ${source} ${image ? "image" : "value"}?`
+            : image ? "Remove image customization?" : "Remove customization?";
+        if (explanation) explanation.textContent = hasInherited
+            ? sensitive
+                ? `An inherited value is configured by ${source}. The inherited secret cannot be displayed.`
+                : `This setting will use the value inherited from ${source}.`
+            : "No inherited value is configured for this setting. Removing this customization will leave the setting not configured.";
+        if (keep) keep.textContent = image ? "Keep current image" : "Keep current value";
+        if (affirm) affirm.textContent = hasInherited ? image ? "Use inherited image" : "Use inherited value" : image ? "Remove customization" : "Remove customization";
+
+        clearRevertTarget();
+        const html = revertDialog.querySelector?.("[data-revert-html]");
+        const text = revertDialog.querySelector?.("[data-revert-text]");
+        const friendly = revertDialog.querySelector?.("[data-revert-friendly]");
+        const imageTarget = revertDialog.querySelector?.("[data-revert-image]");
+        const none = revertDialog.querySelector?.("[data-revert-none]");
+        const sensitiveTarget = revertDialog.querySelector?.("[data-revert-sensitive]");
+        if (!hasInherited) {
+            if (none) none.hidden = false;
+        } else if (sensitive) {
+            if (sensitiveTarget) sensitiveTarget.hidden = false;
+        } else if (image) {
+            const preview = imageTarget?.querySelector?.("[data-revert-image-preview]");
+            const file = imageTarget?.querySelector?.("[data-revert-image-file]");
+            if (preview && row.dataset.imageInheritedPreviewUrl) {
+                preview.src = row.dataset.imageInheritedPreviewUrl;
+                preview.hidden = false;
+            }
+            if (file) file.textContent = row.dataset.imageInheritedFileName || (row.dataset.imageInheritedMissing === "true" ? "Inherited image is missing." : "No image configured.");
+            if (imageTarget) imageTarget.hidden = false;
+        } else if (row?.dataset?.inheritedHtml) {
+            if (html) { html.srcdoc = row.dataset.inheritedHtml; html.hidden = false; }
+        } else if (row?.dataset?.valueType === "longstring" || row?.dataset?.valueType === "emailtemplate") {
+            if (text) { text.textContent = row.dataset.inheritedValue || "Blank"; text.hidden = false; }
+        } else if (friendly) {
+            friendly.textContent = row.dataset.inheritedSummary || displayValue(row, row.dataset.inheritedValue, true);
+            friendly.hidden = false;
+        }
+
+        revertDialog._row = row;
+        revertDialog._trigger = trigger || controls(row, ".setting-revert");
+        revertDialog.showModal();
+        revertDialog.querySelector?.("[data-revert-keep]")?.focus?.();
+        return true;
+    }
+
+    function closeRevertDialog(confirm = false) {
+        if (!revertDialog) return;
+        const row = revertDialog._row;
+        const trigger = revertDialog._trigger;
+        if (revertDialog.open) revertDialog.close();
+        if (confirm && row?._applyRevert) {
+            row._applyRevert();
+            controls(row, ".setting-change")?.focus?.();
+        } else {
+            trigger?.focus?.();
+        }
+        revertDialog._row = null;
+        revertDialog._trigger = null;
     }
 
     function updatePendingActions(settingsForm = form) {
@@ -310,6 +441,7 @@
         row.dataset.dirty = dirty.toString();
         setBindingEnabled(row, dirty, state);
         updateEditorAvailability(row, state);
+        updateIdleSurface(row, state);
         const change = controls(row, ".setting-change");
         const revert = controls(row, ".setting-revert");
         const scopeStatus = controls(row, ".setting-scope-status");
@@ -318,23 +450,19 @@
             const canRevert = state.mode === "customize" && (baseline.mode === "customize" || state.editing || dirty);
             revert.hidden = !canRevert;
         }
-        if (scopeStatus) {
-            scopeStatus.textContent = dirty ? "Unsaved in this browser" : state.editing ? "Editing" : row._settingsScopeCleanStatus || "";
-        }
+        if (scopeStatus) scopeStatus.textContent = dirty ? "Unsaved in this browser" : state.editing ? "Editing" : row._settingsScopeCleanStatus || "";
         if (dirty) {
             renderBrowserPendingSummary(row, state);
         } else {
             const clean = row._settingsCleanPresentation;
             const summary = controls(row, ".summary-value");
             const status = controls(row, ".setting-status > span") || controls(row, ".setting-status");
-            const batchStatus = controls(row, ".batch-browser-status");
             if (summary && clean) {
                 summary.textContent = clean.summary;
                 if (clean.title === null || clean.title === undefined) summary.removeAttribute?.("title");
                 else summary.setAttribute?.("title", clean.title);
             }
             if (status && clean) status.textContent = clean.status;
-            if (batchStatus) batchStatus.textContent = "";
         }
         if (options.updateActions !== false) updatePendingActions(settingsForm);
         return dirty;
@@ -368,6 +496,7 @@
         row._settingsScopeCleanStatus = scopeStatus?.textContent || row._settingsCleanPresentation.status;
         row._settingsInitialEditorValue = initialEditorValue;
         row._settingsInitialIpPrefixValues = controlsAll(row, ".ip-prefix-input").map((input) => String(input.value ?? ""));
+        row._settingsInitialHtmlValue = controls(row, "[data-idle-html]")?.srcdoc || "";
         ensureEditorState(row);
 
         const change = controls(row, ".setting-change");
@@ -387,7 +516,7 @@
             updateStandardRow(row, settingsForm);
             (valueControls(row)[0] || controls(row, ".ip-prefix-input"))?.focus?.();
         });
-        revert?.addEventListener("click", () => {
+        row._applyRevert = () => {
             const state = ensureEditorState(row);
             state.mode = "inherit";
             state.value = row.dataset?.sensitive === "true" ? "" : row.dataset?.inheritedValue || "";
@@ -395,11 +524,11 @@
             setEditorValue(row, state.value);
             if (row.dataset?.sensitive === "true") resetSensitiveEditor(row);
             updateStandardRow(row, settingsForm);
-            change?.focus?.();
-        });
+        };
+        revert?.addEventListener("click", (event) => openRevertDialog(row, event.currentTarget));
 
         initialValues.forEach((value) => {
-            const update = () => { syncEditorPreview(value); updateStandardRow(row, settingsForm); };
+            const update = () => updateStandardRow(row, settingsForm);
             value.addEventListener("input", update);
             value.addEventListener("change", update);
         });
@@ -484,6 +613,8 @@
         const summary = controls(row, ".summary-value");
         const rowStatus = controls(row, ".setting-status > span") || controls(row, ".setting-status");
         const scopeStatus = controls(row, ".setting-scope-status");
+        const idleSurface = controls(row, "[data-idle-surface]");
+        const editorSurface = controls(row, "[data-editor-surface]");
         const baseline = baselineState(row);
         const clean = { summary: summary?.textContent || "", title: summary?.getAttribute?.("title"), status: rowStatus?.textContent || "" };
         const imageState = {
@@ -520,6 +651,32 @@
 
         row._settingsProposedState = currentImageState;
 
+        function renderImageIdle() {
+            const card = controls(idleSurface, "[data-idle-image-card]");
+            if (!card) return;
+            const preview = controls(card, "[data-idle-image-preview]");
+            const file = controls(card, "[data-idle-image-file]");
+            const message = controls(card, "[data-idle-image-message]");
+            const inherited = imageState.mode === "inherit";
+            const hasInherited = row.dataset.hasInherited === "true";
+            const previewUrl = inherited ? row.dataset.imageInheritedPreviewUrl : row.dataset.imageIdlePreviewUrl;
+            const fileName = inherited ? row.dataset.imageInheritedFileName : row.dataset.imageIdleFileName;
+            const missing = inherited ? row.dataset.imageInheritedMissing === "true" : row.dataset.imageIdleMissing === "true";
+            if (preview) {
+                preview.hidden = !previewUrl;
+                if (previewUrl) preview.src = previewUrl;
+                else preview.removeAttribute?.("src");
+            }
+            if (file) {
+                file.hidden = !fileName;
+                file.textContent = fileName || "";
+            }
+            if (message) {
+                message.hidden = Boolean(previewUrl || fileName) && !missing;
+                message.textContent = missing ? "The configured uploaded image is missing." : inherited ? hasInherited ? "Use inherited image." : "Not configured" : hasInherited ? "No image configured." : "Not configured";
+            }
+        }
+
         function renderImage(options = {}) {
             const state = currentImageState();
             const semanticDirty = (state.mode !== baseline.mode || (state.mode === "customize" && normalizeValue(row, state.value) !== normalizeValue(row, baseline.value))) &&
@@ -527,6 +684,9 @@
             const dirty = semanticDirty || Boolean(row.dataset.imageNeedsUpload === "true") || Boolean(row.dataset.imageUploading === "true");
             row.dataset.dirty = dirty.toString();
             row.dataset.editing = imageState.editing ? "true" : "false";
+            if (idleSurface) idleSurface.hidden = imageState.editing;
+            if (editorSurface) editorSurface.hidden = !imageState.editing;
+            renderImageIdle();
             if (imageFile) imageFile.disabled = !imageState.editing;
             if (operation) operation.value = state.operation;
             setBindingEnabled(row, dirty, state);
@@ -642,7 +802,6 @@
             imageState.error = false;
             renderPending();
             renderImage();
-            change?.focus?.();
         }
 
         function setUploadPending(assetId, fileName, previewUrl) {
@@ -737,7 +896,8 @@
 
         chooseAnother?.addEventListener("click", () => { imageFile?.click?.(); });
         change?.addEventListener("click", changeImage);
-        revert?.addEventListener("click", revertImage);
+        row._applyRevert = revertImage;
+        revert?.addEventListener("click", (event) => openRevertDialog(row, event.currentTarget));
         imageFile?.addEventListener("change", () => {
             const selected = imageFile.files?.[0];
             imageFile.value = "";
@@ -945,7 +1105,7 @@
 
     function rowMatchesStatus(row, status) {
         switch (status) {
-            case "customized": return row.dataset.customizedHere === "true";
+            case "customized": return row.dataset.liveState === "customized";
             case "inherited": return row.dataset.presentationState === "inherited" || row.dataset.liveState === "inherited";
             case "notset": return row.dataset.presentationState === "notset" || row.dataset.liveState === "notset";
             case "draft": return row.dataset.draftChange === "true";
@@ -1012,21 +1172,6 @@
     }
     document.querySelector("[data-review-draft]")?.addEventListener("click", reviewDraftChanges);
     restoreUiState();
-
-    document.querySelectorAll(".html-preview").forEach((frame) => {
-        const source = frame.previousElementSibling;
-        if (!source) return;
-        const render = () => { frame.srcdoc = source.value; };
-        source.addEventListener("input", render);
-        render();
-    });
-    document.querySelectorAll(".plain-text-preview").forEach((preview) => {
-        const source = preview.previousElementSibling;
-        if (!source) return;
-        const render = () => { preview.textContent = source.value; };
-        source.addEventListener("input", render);
-        render();
-    });
 
     const dirtyCount = () => form?.querySelectorAll?.('.setting-row[data-dirty="true"]')?.length || 0;
     function restoreContextControl(trigger) {
@@ -1242,10 +1387,16 @@
         }
     }
     function bindDialogCancellation(owner) {
-        owner.addEventListener("cancel", (event) => { event.preventDefault(); cancelWorkflowDialog(owner); });
+        owner.addEventListener("cancel", (event) => {
+            event.preventDefault();
+            if (owner === revertDialog) closeRevertDialog(false);
+            else cancelWorkflowDialog(owner);
+        });
     }
     document.querySelectorAll("dialog").forEach(bindDialogCancellation);
     document.querySelectorAll("[data-dialog-cancel]").forEach((button) => button.addEventListener("click", () => cancelWorkflowDialog(button.closest("dialog"))));
+    document.querySelector("[data-revert-keep]")?.addEventListener("click", () => closeRevertDialog(false));
+    document.querySelector("[data-revert-affirm]")?.addEventListener("click", () => closeRevertDialog(true));
     document.querySelector("[data-guard-discard]")?.addEventListener("click", () => {
         unsavedDialog.close();
         const action = pendingAction;

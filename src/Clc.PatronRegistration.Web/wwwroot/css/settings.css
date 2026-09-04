@@ -109,25 +109,20 @@ body.settings-administration-page #regFormContainer {
 .setting-row[data-value-type="longstring"] { --setting-long-form-height: 8rem }
 .setting-row[data-value-type="html"] { --setting-long-form-height: 9rem }
 .setting-row[data-value-type="emailtemplate"] { --setting-long-form-height: 11.5rem }
-.setting-comparison { align-items: start; display: grid; gap: .55rem 1rem; grid-template-columns: minmax(15rem, .85fr) minmax(20rem, 1.15fr); min-width: 0 }
-.setting-comparison-column { align-content: start; display: grid; gap: .55rem; grid-row: span 2; grid-template-rows: subgrid; min-width: 0 }
-.setting-comparison-header { align-items: start; display: flex; flex-wrap: wrap; gap: .4rem .8rem; justify-content: space-between; min-width: 0 }
-.setting-comparison-heading { display: grid; gap: .12rem; min-width: 8rem }
-.setting-baseline-values { align-content: start; display: grid; gap: .7rem; min-width: 0 }
-.setting-value-source, .setting-status-source, .batch-effective small { color: #555; font-size: .86rem }
-.setting-effective-value { background: #fff; border: 1px solid #777; border-radius: .15rem; box-sizing: border-box; padding: .5rem .55rem }
-.setting-current-value { overflow-wrap: anywhere; white-space: pre-wrap }
-.setting-current-value-full { box-sizing: border-box; margin: 0; max-height: 18rem; min-height: var(--setting-long-form-height, 8rem); overflow: auto; white-space: pre-wrap }
 .setting-html-value-preview { background: #fff; border: 1px solid #777; box-sizing: border-box; display: block; min-height: var(--setting-long-form-height, 8rem); width: 100% }
-.setting-draft-value-panel { background: #f4f8fc; border: 1px solid #9bb8d1; border-radius: .3rem; min-width: 0; overflow: hidden }
-.setting-draft-value-heading { border-bottom: 1px solid #bfd0df; padding: .35rem .55rem }
-.setting-draft-value-panel .setting-current-value { background: #fff; padding: .5rem .55rem }
-.setting-draft-value-panel .setting-html-value-preview { border: 0 }
-.setting-scope-panel { min-width: 0 }
+.setting-value-header { align-items: center; display: flex; flex-wrap: wrap; gap: .4rem .8rem; min-width: 0 }
+.setting-value-header > strong { flex: 0 0 auto }
 .setting-scope-status { color: #555; font-size: .86rem }
 .setting-scope-actions { align-items: center; display: flex; flex-wrap: wrap; gap: .4rem }
+.setting-value-header .setting-scope-actions { margin-left: auto }
 .setting-change { font-weight: 700 }
 .setting-revert { background: #fff; border-color: #555; color: #222 }
+.setting-value-surface { min-width: 0 }
+.setting-idle-value { background: #fff; border: 1px solid #777; border-radius: .15rem; box-sizing: border-box; min-height: 2.3rem; overflow-wrap: anywhere; padding: .5rem .55rem; white-space: pre-wrap }
+.setting-idle-value-full { max-height: 18rem; min-height: var(--setting-long-form-height, 8rem); overflow: auto }
+.revert-target { display: grid; gap: .55rem; min-width: 0 }
+.revert-target > * { margin: 0; max-width: 100% }
+.revert-target .setting-html-value-preview { min-height: 8rem }
 .setting-editor { min-width: 0 }
 .value-editor { display: grid; gap: .3rem; min-width: 0 }
 .value-editor > label { font-weight: 600 }
@@ -140,26 +135,22 @@ body.settings-administration-page #regFormContainer {
 .unit-editor .setting-value { width: min(100%, 16rem) }
 .setting-unit { color: #454545; white-space: nowrap }
 .blank-inheritance-note { color: #454545; display: block }
-.plain-text-preview { background: #fff; border: 1px solid #777; box-sizing: border-box; max-height: 18rem; min-height: 8rem; overflow: auto; padding: .55rem; white-space: pre-wrap; word-break: break-word }
 .setting-value-group { border: 0; display: grid; gap: .3rem; margin: 0; max-width: 100%; min-width: 0; padding: 0; width: auto }
 .setting-value-group legend { font-weight: 600; margin-bottom: .1rem; padding: 0 }
 .setting-value-group label { align-items: baseline; display: flex; gap: .35rem }
 .setting-value-group input[type="radio"] { flex: 0 0 auto; margin: 0 }
 .setting-status { align-items: center; display: inline-flex; flex-direction: column; gap: .08rem; line-height: 1.2 }
-.setting-status-source { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
 
 /* Purpose-built homogeneous groups */
 .batch-settings { border-collapse: collapse; table-layout: fixed; width: 100% }
 .batch-settings caption { text-align: left }
 .batch-settings th, .batch-settings td { border-top: 1px solid #d1d1d1; padding: .55rem .65rem; text-align: left; vertical-align: top }
 .batch-settings thead th { background: #e8eef3; border-top: 0; font-size: .85rem }
-.batch-settings th:first-child, .batch-settings td:first-child { width: 27% }
-.batch-settings th:nth-child(2), .batch-settings td:nth-child(2) { width: 25% }
-.batch-setting-name, .batch-effective { overflow-wrap: anywhere }
-.batch-setting-name small, .batch-effective small { display: block; margin-top: .2rem }
-.batch-browser-status { color: #8a5700; font-weight: 600 }
-.batch-scope { min-width: 0 }
-.batch-scope .setting-scope-header { margin-bottom: .45rem }
+.batch-settings th:first-child, .batch-settings td:first-child { width: 32% }
+.batch-setting-name, .batch-value { overflow-wrap: anywhere }
+.batch-setting-name small { display: block; margin-top: .2rem }
+.batch-value { min-width: 0 }
+.batch-value .setting-value-header { margin-bottom: .45rem }
 .batch-label-input { display: block; margin-top: .3rem }
 .batch-label-input input { box-sizing: border-box; min-height: 2.2rem; max-width: 100%; width: min(100%, 24rem) }
 .batch-remove-draft-change { margin-top: .45rem; max-width: 100%; white-space: normal }
@@ -173,9 +164,6 @@ body.settings-administration-page #regFormContainer {
 .review-table td { overflow-wrap: anywhere }
 #save-confirm[data-review-mode="browser"] .review-baseline-column { display: none }
 
-@media (max-width: 60rem) {
-    .setting-comparison { grid-template-columns: minmax(0, 1fr) }
-}
 @media (max-width: 42rem) {
     .batch-settings { display: block; overflow: visible }
     .batch-settings thead {
@@ -192,8 +180,7 @@ body.settings-administration-page #regFormContainer {
     .batch-settings tr:first-child { border-top: 0 }
     .batch-settings td { border: 0; padding: .3rem .65rem }
     .batch-settings td::before { color: #555; display: block; font-size: .75rem; font-weight: 700; margin-bottom: .15rem; text-transform: uppercase }
-    .batch-settings td:nth-child(2)::before { content: "Effective now" }
-    .batch-settings td:nth-child(3)::before { content: "At this scope" }
+    .batch-settings td:nth-child(2)::before { content: "Value" }
     .review-table { min-width: 0 }
     .review-table thead {
         clip: rect(0 0 0 0);
@@ -439,19 +426,9 @@ body.settings-administration-page #regFormContainer {
     background: #fff
 }
 
-.image-draft {
-    background: #f4f8fc;
-    border-color: #9bb8d1
-}
-
 .image-pending {
     background: #fffbea;
     border-color: #b78b19
-}
-
-.image-source-status {
-    color: #454545;
-    font-size: .9rem
 }
 
 .setting-image-preview {

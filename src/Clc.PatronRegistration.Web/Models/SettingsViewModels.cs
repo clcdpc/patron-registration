@@ -1,6 +1,7 @@
 using Clc.PatronRegistration.Administration;
 using Clc.PatronRegistration.Configuration;
 using Clc.PatronRegistration.Web.Settings;
+using System.Globalization;
 using System.Text.RegularExpressions;
 
 namespace Clc.PatronRegistration.Web.Models;
@@ -38,6 +39,23 @@ public static class SettingValuePresentation
                 "dl_format" when value.Equals("magstripe", StringComparison.OrdinalIgnoreCase) => "Magnetic stripe",
                 _ => value
             };
+        }
+
+        if (definition.Key.Equals("show_dl_ips", StringComparison.OrdinalIgnoreCase))
+        {
+            var prefixes = value.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            return prefixes.Length == 0 ? "Blank" : string.Join(", ", prefixes);
+        }
+
+        if ((definition.ValueType is SettingValueType.Date or SettingValueType.NullableDate) &&
+            DateOnly.TryParseExact(value, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var date))
+        {
+            return date.ToString("MMMM d, yyyy", CultureInfo.InvariantCulture);
+        }
+
+        if (definition.Key.Equals("reset_seconds", StringComparison.OrdinalIgnoreCase))
+        {
+            return $"{value} seconds";
         }
 
         return Format(definition, value, hasValue);
@@ -84,20 +102,27 @@ public static class SettingValuePresentation
         }
         if (row.DraftOperation == DraftOperation.RemoveOverride)
         {
-            return new(SettingPresentationState.DraftChange, "Use inherited value", "Shared draft",
-                FriendlyValue(row.Definition, row.Resolution.EffectiveValue, row.Resolution.SourceOrganizationId.HasValue));
+            return new(SettingPresentationState.DraftChange,
+                FriendlyValue(row.Definition, row.InheritedValue, row.HasInheritedValue),
+                "Shared draft — use inherited value",
+                FriendlyValue(row.Definition, row.InheritedValue, row.HasInheritedValue));
         }
         if (row.Resolution.OwnsOverride)
         {
             var value = FriendlyValue(row.Definition, row.Resolution.EffectiveValue, true);
-            return new(SettingPresentationState.Customized, value, "Customized", value);
+            return new(SettingPresentationState.Customized, value, "Customized here", value);
         }
         if (row.Resolution.SourceOrganizationId.HasValue)
         {
             var value = FriendlyValue(row.Definition, row.Resolution.EffectiveValue, true);
-            return new(SettingPresentationState.Inherited, value, "Inherited", value);
+            var source = string.IsNullOrWhiteSpace(row.InheritedSourceDescription) ? row.SourceDescription : row.InheritedSourceDescription;
+            if (string.IsNullOrWhiteSpace(source) || string.Equals(source, "No value is configured", StringComparison.Ordinal))
+            {
+                source = row.Resolution.SourceOrganizationType;
+            }
+            return new(SettingPresentationState.Inherited, value, $"Inherited from {source}", value);
         }
-        return new(SettingPresentationState.NotSet, "—", "Not set", "Not set");
+        return new(SettingPresentationState.NotSet, "Not configured", "Not configured", "Not configured");
     }
 
     private static string Preview(string value)

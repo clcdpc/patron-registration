@@ -44,16 +44,6 @@
     max-width: 72rem
 }
 
-.setting-value-source {
-    color: #555;
-    font-size: .9rem
-}
-
-.setting-current-value-full {
-    font-family: inherit;
-    max-height: none
-}
-
 .image-setting {
     gap: .4rem;
     max-width: 44rem
@@ -62,13 +52,6 @@
 .image-card {
     max-width: 40rem;
     padding: .4rem .5rem
-}
-
-.image-card-has-preview {
-    align-items: start;
-    display: grid;
-    gap: .45rem;
-    grid-template-columns: 1fr
 }
 
 .image-card-copy {
@@ -81,15 +64,6 @@
 
 .image-card-copy strong {
     flex: 1 1 100%
-}
-
-.image-card-has-preview .setting-image-preview {
-    max-height: 7rem;
-    width: fit-content
-}
-
-.image-source-status {
-    margin-left: auto
 }
 
 .image-actions {
@@ -110,7 +84,4 @@
         gap: .15rem
     }
 
-    .image-source-status {
-        margin-left: 0
-    }
 }

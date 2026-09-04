@@ -20,6 +20,7 @@ async function loadSettingsFixture(page: Page) {
 
 const rowFor = (page: Page, key: string) => page.locator(`[data-setting-key="${key}"]`);
 const dirtyRows = (page: Page) => page.locator('.setting-row[data-dirty="true"]');
+const revertButton = (row: ReturnType<typeof rowFor>) => row.locator('.setting-revert');
 
 async function discardChanges(page: Page, count: number) {
     await page.getByRole('button', { name: 'Discard unsaved changes' }).click();
@@ -35,185 +36,195 @@ test.beforeEach(async ({ page }) => {
     await loadSettingsFixture(page);
 });
 
-test('the loaded editor is locked and contains only explicit actions', async ({ page }) => {
+test('loaded rows use one readable value surface and explicit actions', async ({ page }) => {
     await expect(dirtyRows(page)).toHaveCount(0);
     await expect(page.locator('.settings-actions')).toBeHidden();
-    await expect(page.locator('.setting-mode, .setting-mode-group, .image-mode-group, .batch-mode-group')).toHaveCount(0);
+    await expect(page.locator('.setting-comparison, .setting-baseline-column, .setting-effective-value, .setting-scope-panel, .html-preview, .plain-text-preview')).toHaveCount(0);
     await expect(page.locator('.setting-row .setting-change')).toHaveCount(24);
-    await expect(page.locator('.setting-row .setting-revert')).toHaveCount(24);
-
-    for (const selector of ['#welcome-value', '#custom-heading-value', '#reset-value', '#welcome-email-value', '#registration-uri-value', '#tax-value', '#button-value', '#secret-value', '#label-name-first-value']) {
-        await expect(page.locator(selector)).toHaveAttribute('readonly', '');
-    }
-    for (const selector of ['#expiration-value', '#optional-expiration-value', '#input-type-value', '#show-age-warning-yes', '#show-age-warning-no', '#require-email-yes', '#require-email-no']) {
-        await expect(page.locator(selector)).toBeDisabled();
-    }
-    await expect(rowFor(page, 'drivers_license_button_text').getByRole('button', { name: 'Revert to inherited value' })).toBeHidden();
-    await expect(rowFor(page, 'age_warning_text').getByRole('button', { name: 'Revert to inherited value' })).toBeHidden();
-    await expect(rowFor(page, 'custom_heading').getByRole('button', { name: 'Revert to inherited value' })).toBeVisible();
-    await expect(rowFor(page, 'no_inherited_value').getByRole('button', { name: 'Remove customization' })).toBeVisible();
-    await expect(rowFor(page, 'header_image').getByRole('button', { name: 'Change image' })).toBeVisible();
+    await expect(page.locator('.setting-row .setting-value-surface:visible')).toHaveCount(24);
+    await expect(rowFor(page, 'drivers_license_button_text').locator('.setting-scope-status')).toHaveText('Inherited from Main Library');
+    await expect(revertButton(rowFor(page, 'drivers_license_button_text'))).toBeHidden();
+    await expect(revertButton(rowFor(page, 'custom_heading'))).toBeVisible();
+    await expect(revertButton(rowFor(page, 'no_inherited_value'))).toHaveText('Remove customization…');
+    await expect(rowFor(page, 'show_dl_ips').locator('[data-idle-text]')).toHaveText('10., 192.168.');
 });
 
-test('inherited Change seeds an Upsert, focuses the editor, and Revert returns clean', async ({ page }) => {
+test('idle customized HTML is rendered and Change swaps the same region to source', async ({ page }) => {
+    const row = rowFor(page, 'custom_form_footer_html');
+    const idle = row.locator('[data-idle-surface]');
+    const editor = row.locator('[data-editor-surface]');
+    const frame = row.locator('[data-idle-html]');
+    const source = row.locator('#footer-value');
+
+    await expect(row.locator('.setting-value-surface:visible')).toHaveCount(1);
+    await expect(idle).toBeVisible();
+    await expect(frame).toBeVisible();
+    await expect.poll(async () => frame.evaluate((element) => element.srcdoc.replace(/\r\n/g, '\n'))).toBe('<p>Draft line one</p>\n<p>Draft line two</p>');
+    await expect(source).toBeHidden();
+    await expect(row.locator('.setting-html-value-preview')).toHaveCount(1);
+
+    await row.getByRole('button', { name: 'Change' }).click();
+    await expect(row.locator('.setting-value-surface:visible')).toHaveCount(1);
+    await expect(idle).toBeHidden();
+    await expect(editor).toBeVisible();
+    await expect(source).toBeVisible();
+    await expect(source).toBeFocused();
+    await expect(source).toHaveValue('<p>Draft line one</p>\n<p>Draft line two</p>');
+    await expect(row.locator('[data-editor-surface] .setting-html-value-preview')).toHaveCount(0);
+});
+
+test('plain long text uses a readable surface then the same textarea while editing', async ({ page }) => {
+    const row = rowFor(page, 'registration_text');
+    await expect(row.locator('[data-idle-text]')).toContainText('Line one');
+    await expect(row.locator('textarea.setting-value')).toBeHidden();
+    await row.getByRole('button', { name: 'Change' }).click();
+    await expect(row.locator('[data-idle-surface]')).toBeHidden();
+    await expect(row.locator('[data-editor-surface]')).toBeVisible();
+    await expect(row.locator('textarea.setting-value')).toBeFocused();
+    await expect(row.locator('.setting-value-surface:visible')).toHaveCount(1);
+});
+
+test('date and reset duration values stay friendly in idle and revert previews', async ({ page }) => {
+    const date = rowFor(page, 'expiration_date');
+    const reset = rowFor(page, 'reset_seconds');
+    const dialog = page.locator('#revert-confirm');
+
+    await expect(date.locator('[data-idle-text]')).toHaveText('December 31, 2026');
+    await date.getByRole('button', { name: 'Revert to inherited value…' }).click();
+    await expect(dialog.locator('[data-revert-friendly]')).toHaveText('December 31, 2027');
+    await dialog.getByRole('button', { name: 'Keep current value' }).click();
+
+    await expect(reset.locator('[data-idle-text]')).toHaveText('30 seconds');
+    await reset.getByRole('button', { name: 'Revert to inherited value…' }).click();
+    await expect(dialog.locator('[data-revert-friendly]')).toHaveText('60 seconds');
+    await dialog.getByRole('button', { name: 'Keep current value' }).click();
+});
+
+test('inherited Change seeds an Upsert and reveals the source-specific revert action', async ({ page }) => {
     const row = rowFor(page, 'drivers_license_button_text');
     const value = row.locator('#button-value');
+    await expect(row.locator('[data-idle-text]')).toHaveText('Scan ID');
+    await expect(row.locator('.setting-scope-status')).toHaveText('Inherited from Main Library');
+    await expect(revertButton(row)).toBeHidden();
 
     await row.getByRole('button', { name: 'Change' }).click();
-    await expect(value).toBeEditable();
     await expect(value).toBeFocused();
-    await expect(row).toHaveAttribute('data-dirty', 'true');
-    await expect(row.locator('.operation')).toHaveValue('Upsert');
-    await expect(row.locator('.setting-value-binding')).toHaveValue('Scan ID');
-    await expect(row.getByRole('button', { name: 'Revert to inherited value' })).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Review 1 change' })).toBeVisible();
-
-    await row.getByRole('button', { name: 'Revert to inherited value' }).click();
-    await expect(row.getByRole('button', { name: 'Change' })).toBeFocused();
-    await expect(value).toHaveAttribute('readonly', '');
     await expect(value).toHaveValue('Scan ID');
-    await expect(row).toHaveAttribute('data-dirty', 'false');
-    await expect(row.locator('.operation')).toBeDisabled();
-    await expect(page.locator('.settings-actions')).toBeHidden();
-});
-
-test('customized Change only activates editing, while value changes become dirty Upserts', async ({ page }) => {
-    const row = rowFor(page, 'custom_heading');
-    const value = row.locator('#custom-heading-value');
-
-    await row.getByRole('button', { name: 'Change' }).click();
-    await expect(value).toBeFocused();
-    await expect(value).toBeEditable();
-    await expect(row).toHaveAttribute('data-dirty', 'false');
-    await expect(page.locator('.settings-actions')).toBeHidden();
-
-    await value.fill('Changed heading');
     await expect(row).toHaveAttribute('data-dirty', 'true');
     await expect(row.locator('.operation')).toHaveValue('Upsert');
-    await expect(page.getByRole('button', { name: 'Review 1 change' })).toBeVisible();
-    await value.fill('Welcome');
-    await expect(row).toHaveAttribute('data-dirty', 'false');
-    await expect(page.locator('.settings-actions')).toBeHidden();
+    await expect(revertButton(row)).toBeVisible();
 });
 
-test('Revert independently creates RemoveOverride and review explains inheritance', async ({ page }) => {
+test('customized Revert previews the inherited value and Keep current value does nothing', async ({ page }) => {
     const row = rowFor(page, 'custom_heading');
-    const value = row.locator('#custom-heading-value');
+    const revert = revertButton(row);
+    const dialog = page.locator('#revert-confirm');
+    await expect(row.locator('[data-idle-text]')).toHaveText('Welcome');
+    await expect(row).toHaveAttribute('data-dirty', 'false');
 
-    await row.getByRole('button', { name: 'Revert to inherited value' }).click();
+    await revert.click();
+    await expect(dialog).toBeVisible();
+    await expect(dialog).toHaveAccessibleName('Revert to Main Library value?');
+    await expect(dialog.locator('[data-revert-explanation]')).toContainText('Main Library');
+    await expect(dialog.locator('[data-revert-friendly]')).toBeVisible();
+    await expect(dialog.locator('[data-revert-friendly]')).toHaveText('Inherited heading');
+    await expect(dialog.getByRole('button', { name: 'Keep current value' })).toBeVisible();
+    await expect(dialog.getByRole('button', { name: 'Use inherited value' })).toBeVisible();
+    await expect(row.locator('[data-idle-text]')).toHaveText('Welcome');
+    await expect(row).toHaveAttribute('data-dirty', 'false');
+
+    await dialog.getByRole('button', { name: 'Keep current value' }).click();
+    await expect(dialog).toBeHidden();
+    await expect(row.locator('[data-idle-text]')).toHaveText('Welcome');
+    await expect(row).toHaveAttribute('data-dirty', 'false');
+    await expect(revert).toBeFocused();
+});
+
+test('affirming Revert creates only a browser RemoveOverride and review describes it', async ({ page }) => {
+    const row = rowFor(page, 'custom_heading');
+    const dialog = page.locator('#revert-confirm');
+    await revertButton(row).click();
+    await dialog.getByRole('button', { name: 'Use inherited value' }).click();
+
+    await expect(dialog).toBeHidden();
     await expect(row).toHaveAttribute('data-dirty', 'true');
     await expect(row.locator('.operation')).toHaveValue('RemoveOverride');
-    await expect(row.locator('.setting-value-binding')).toBeEnabled();
-    await expect(value).toHaveValue('Inherited heading');
-    await expect(value).toHaveAttribute('readonly', '');
+    await expect(row.locator('.operation')).toBeEnabled();
+    await expect(row.locator('[data-idle-surface]')).toBeVisible();
+    await expect(row.locator('[data-editor-surface]')).toBeHidden();
+    await expect(row.locator('[data-idle-text]')).toHaveText('Inherited heading');
+    await expect(row.getByRole('button', { name: 'Change' })).toBeFocused();
 
     await page.getByRole('button', { name: 'Review 1 change' }).click();
-    const dialog = page.locator('#save-confirm');
+    const review = page.locator('#save-confirm');
+    await expect(review).toBeVisible();
+    await expect(review.locator('tbody .review-pending-column')).toContainText('Use Inherited heading from Main Library');
+    await review.getByRole('button', { name: 'Close' }).click();
+});
+
+test('HTML inherited revert target is rendered in the confirmation', async ({ page }) => {
+    const row = rowFor(page, 'custom_form_footer_html');
+    const dialog = page.locator('#revert-confirm');
+    await revertButton(row).click();
     await expect(dialog).toBeVisible();
-    await expect(dialog.locator('tbody')).toContainText('Use Inherited heading from Main Library');
-    await expect(dialog.locator('tbody .review-pending-column')).not.toContainText('Welcome');
-    await dialog.getByRole('button', { name: 'Close' }).click();
-});
-
-test('blank customization remains an Upsert until the user explicitly Reverts', async ({ page }) => {
-    const row = rowFor(page, 'age_warning_text');
-    const value = row.locator('#age-warning-value');
-
-    await expect(value).toHaveValue('');
-    await expect(value).toHaveAttribute('readonly', '');
-    await row.getByRole('button', { name: 'Change' }).click();
-    await value.fill('');
-    await expect(row).toHaveAttribute('data-dirty', 'true');
-    await expect(row.locator('.operation')).toHaveValue('Upsert');
-    await expect(row.locator('.setting-value-binding')).toHaveValue('');
-    await page.getByRole('button', { name: 'Review 1 change' }).click();
-    await expect(page.locator('#save-confirm tbody')).toContainText('Customize here: Blank');
-    await page.getByRole('button', { name: 'Close' }).click();
-
-    await row.getByRole('button', { name: 'Revert to inherited value' }).click();
+    const target = dialog.locator('[data-revert-html]');
+    await expect(target).toBeVisible();
+    await expect(target).toHaveJSProperty('srcdoc', '<p>Inherited footer</p>');
+    await expect(dialog.locator('[data-revert-text]')).toBeHidden();
+    await expect(dialog.locator('[data-revert-friendly]')).toBeHidden();
+    await dialog.getByRole('button', { name: 'Keep current value' }).click();
     await expect(row).toHaveAttribute('data-dirty', 'false');
-    await expect(value).toHaveValue('');
-    await expect(value).toHaveAttribute('readonly', '');
 });
 
-test('Boolean and batch required controls are value radios, enabled only by Change', async ({ page }) => {
-    const boolean = rowFor(page, 'show_age_warning');
-    const required = rowFor(page, 'require.EmailAddress');
-
-    await expect(boolean.locator('.boolean-value')).toHaveCount(2);
-    await expect(boolean.locator('.boolean-value').first()).toBeDisabled();
-    await expect(boolean.locator('.boolean-value').nth(1)).toBeDisabled();
-    await expect(required.locator('.batch-value-choice')).toHaveCount(2);
-    await expect(required.locator('.batch-value-choice').first()).toBeDisabled();
-    await expect(required.locator('.batch-value-choice').nth(1)).toBeDisabled();
-    await expect(boolean.getByRole('radio', { name: 'Yes', exact: true })).toBeVisible();
-    await expect(boolean.getByRole('radio', { name: 'No', exact: true })).toBeVisible();
-    const radioMetrics = await boolean.getByRole('radio', { name: 'Yes', exact: true }).evaluate((input) => {
-        const style = getComputedStyle(input);
-        return { width: Number.parseFloat(style.width), minHeight: Number.parseFloat(style.minHeight) };
-    });
-    expect(radioMetrics.width).toBeLessThan(40);
-    expect(radioMetrics.minHeight).toBeLessThan(40);
-    await expect(required.getByRole('radio', { name: 'Required', exact: true })).toBeVisible();
-    await expect(required.getByRole('radio', { name: 'Optional', exact: true })).toBeVisible();
-
-    await boolean.getByRole('button', { name: 'Change' }).click();
-    await expect(boolean.getByRole('radio', { name: 'Yes', exact: true })).toBeEnabled();
-    await boolean.getByRole('radio', { name: 'Yes', exact: true }).check();
-    await expect(boolean).toHaveAttribute('data-dirty', 'true');
-    await expect(boolean.locator('.operation')).toHaveValue('Upsert');
-
-    await required.getByRole('button', { name: 'Change' }).click();
-    await expect(required.getByRole('radio', { name: 'Required', exact: true })).toBeEnabled();
-    await required.getByRole('radio', { name: 'Required', exact: true }).check();
-    await expect(required).toHaveAttribute('data-dirty', 'true');
-    await expect(required.locator('.operation')).toHaveValue('Upsert');
+test('no inherited value confirms Remove customization and becomes Not configured', async ({ page }) => {
+    const row = rowFor(page, 'no_inherited_value');
+    const dialog = page.locator('#revert-confirm');
+    await revertButton(row).click();
+    await expect(dialog).toBeVisible();
+    await expect(dialog).toHaveAccessibleName('Remove customization?');
+    await expect(dialog.locator('[data-revert-explanation]')).toContainText('No inherited value is configured');
+    await expect(dialog.locator('[data-revert-none]')).toBeVisible();
+    await expect(dialog.getByRole('button', { name: 'Keep current value' })).toBeVisible();
+    await expect(dialog.getByRole('button', { name: 'Remove customization' })).toBeVisible();
+    await dialog.getByRole('button', { name: 'Remove customization' }).click();
+    await expect(row).toHaveAttribute('data-dirty', 'true');
+    await expect(row.locator('.operation')).toHaveValue('RemoveOverride');
+    await expect(row.locator('[data-idle-text]')).toHaveText('Not configured');
 });
 
-test('special editor Revert uses inherited values and relocks controls', async ({ page }) => {
-    const boolean = rowFor(page, 'show_age_warning');
-    const label = rowFor(page, 'label.NameFirst');
-    const required = rowFor(page, 'require.EmailAddress');
+test('sensitive revert confirmation never exposes the inherited secret', async ({ page }) => {
+    const row = rowFor(page, 'api_password');
+    const dialog = page.locator('#revert-confirm');
+    await expect(page.locator('body')).not.toContainText('super-secret');
+    await revertButton(row).click();
+    await expect(dialog).toBeVisible();
+    await expect(dialog.locator('[data-revert-sensitive]')).toBeVisible();
+    await expect(dialog).toContainText('inherited value is configured');
+    await expect(dialog).not.toContainText('super-secret');
+    await dialog.getByRole('button', { name: 'Keep current value' }).click();
+    await expect(row).toHaveAttribute('data-dirty', 'false');
 
-    await boolean.getByRole('button', { name: 'Revert to inherited value' }).click();
-    await expect(boolean).toHaveAttribute('data-dirty', 'true');
-    await expect(boolean.locator('.operation')).toHaveValue('RemoveOverride');
-    await expect(boolean.getByRole('radio', { name: 'Yes', exact: true })).toBeChecked();
-    await expect(boolean.getByRole('radio', { name: 'Yes', exact: true })).toBeDisabled();
-    await expect(boolean.getByRole('radio', { name: 'No', exact: true })).toBeDisabled();
-
-    await label.getByRole('button', { name: 'Revert to inherited value' }).click();
-    await expect(label).toHaveAttribute('data-dirty', 'true');
-    await expect(label.locator('.operation')).toHaveValue('RemoveOverride');
-    await expect(label.locator('.setting-value')).toHaveValue('Given name');
-    await expect(label.locator('.setting-value')).toHaveAttribute('readonly', '');
-
-    await required.getByRole('button', { name: 'Change' }).click();
-    await expect(required.getByRole('radio', { name: 'Required', exact: true })).toBeEnabled();
-    await required.getByRole('radio', { name: 'Required', exact: true }).check();
-    await expect(required).toHaveAttribute('data-dirty', 'true');
-    await required.getByRole('button', { name: 'Revert to inherited value' }).click();
-    await expect(required).toHaveAttribute('data-dirty', 'false');
-    await expect(required.locator('.operation')).toHaveValue('RemoveOverride');
-    await expect(required.getByRole('radio', { name: 'Required', exact: true })).toBeDisabled();
-    await expect(required.getByRole('radio', { name: 'Optional', exact: true })).toBeDisabled();
-    await expect(required.getByRole('radio', { name: 'Optional', exact: true })).toBeChecked();
-    await expect(required.locator('.setting-scope-status')).toHaveText('Inherited');
-    await expect(page.locator('.settings-actions')).toBeVisible();
-
-    await discardChanges(page, 2);
-    await expect(page.locator('.settings-actions')).toBeHidden();
+    await revertButton(row).click();
+    await dialog.getByRole('button', { name: 'Use inherited value' }).click();
+    await expect(row.locator('.operation')).toHaveValue('RemoveOverride');
+    await expect(row).toHaveAttribute('data-dirty', 'true');
+    await page.getByRole('button', { name: 'Review 1 change' }).click();
+    await expect(page.locator('#save-confirm')).not.toContainText('super-secret');
 });
 
-test('shared-draft rows use the draft as browser baseline and discard restores it', async ({ page }) => {
+test('shared-draft Upsert and RemoveOverride rows use one surface and preserve discard behavior', async ({ page }) => {
     const upsert = rowFor(page, 'custom_form_footer_html');
     const remove = rowFor(page, 'shared_draft_remove_override');
 
+    await expect(upsert.locator('[data-idle-surface]')).toBeVisible();
+    await expect(upsert.locator('.setting-scope-status')).toHaveText('Shared draft');
     await upsert.getByRole('button', { name: 'Change' }).click();
     await expect(upsert).toHaveAttribute('data-dirty', 'false');
     await upsert.locator('#footer-value').fill('<p>Browser draft</p>');
     await expect(upsert).toHaveAttribute('data-dirty', 'true');
 
+    await expect(remove.locator('[data-idle-text]')).toHaveText('Inherited heading');
+    await expect(remove.locator('.setting-scope-status')).toHaveText('Shared draft — use inherited value');
     await remove.getByRole('button', { name: 'Change' }).click();
     await expect(remove).toHaveAttribute('data-dirty', 'true');
     await expect(remove.locator('.operation')).toHaveValue('Upsert');
@@ -222,268 +233,109 @@ test('shared-draft rows use the draft as browser baseline and discard restores i
 
     await discardChanges(page, 2);
     await expect(dirtyRows(page)).toHaveCount(0);
-    await expect(upsert.locator('#footer-value')).toHaveValue('<p>Draft line one</p>\n<p>Draft line two</p>');
-    await expect(remove.locator('#shared-draft-remove-value')).toHaveValue('Inherited heading');
-    await expect(upsert.locator('.setting-status')).toHaveText('Shared draft');
-    await expect(remove.locator('.setting-status')).toHaveText('Shared draft');
+    await expect(upsert.locator('[data-idle-surface]')).toBeVisible();
+    await expect(upsert.locator('#footer-value')).toBeHidden();
+    await expect(remove.locator('[data-idle-text]')).toHaveText('Inherited heading');
+    await expect(remove.locator('.setting-scope-status')).toHaveText('Shared draft — use inherited value');
 });
 
-test('shared-draft baselines preserve Revert and Change transitions', async ({ page }) => {
-    const upsert = rowFor(page, 'custom_form_footer_html');
-    const remove = rowFor(page, 'shared_draft_remove_override');
+test('batch labels and required values swap controls in place', async ({ page }) => {
+    const label = rowFor(page, 'label.NameFirst');
+    const required = rowFor(page, 'require.EmailAddress');
+    await expect(label.locator('[data-idle-text]')).toHaveText('First name');
+    await expect(label.locator('.batch-settings')).toHaveCount(0);
+    await label.getByRole('button', { name: 'Change' }).click();
+    await expect(label.locator('[data-idle-surface]')).toBeHidden();
+    await expect(label.locator('.batch-label-input input')).toBeFocused();
+    await label.locator('.batch-label-input input').fill('Given name');
+    await expect(label).toHaveAttribute('data-dirty', 'true');
 
-    await upsert.getByRole('button', { name: 'Revert to inherited value' }).click();
-    await expect(upsert).toHaveAttribute('data-dirty', 'true');
-    await expect(upsert.locator('.operation')).toHaveValue('RemoveOverride');
-    await expect(upsert.locator('.setting-value-binding')).toBeEnabled();
-
-    await discardChanges(page, 1);
-    await expect(upsert).toHaveAttribute('data-dirty', 'false');
-
-    await remove.getByRole('button', { name: 'Change' }).click();
-    await expect(remove).toHaveAttribute('data-dirty', 'true');
-    await expect(remove.locator('.operation')).toHaveValue('Upsert');
-    await remove.getByRole('button', { name: 'Revert to inherited value' }).click();
-    await expect(remove).toHaveAttribute('data-dirty', 'false');
-    await expect(remove.locator('.operation')).toHaveValue('RemoveOverride');
-    await expect(remove.locator('.setting-value-binding')).toBeDisabled();
-    await expect(remove.locator('.setting-scope-status')).toHaveText('Shared draft');
-    await expect(page.locator('.settings-actions')).toBeHidden();
-});
-
-test('sensitive Change exposes only an empty replacement and review never exposes it', async ({ page }) => {
-    const row = rowFor(page, 'api_password');
-    const value = row.locator('#secret-value');
-
-    await expect(value).toHaveValue('');
-    await expect(value).toHaveAttribute('readonly', '');
-    await row.getByRole('button', { name: 'Change' }).click();
-    await expect(value).toBeFocused();
-    await expect(value).toBeEditable();
-    await expect(value).toHaveValue('');
-    await expect(row).toHaveAttribute('data-dirty', 'false');
-
-    await value.fill('browser-only-secret');
-    await expect(row).toHaveAttribute('data-dirty', 'true');
-    await page.getByRole('button', { name: 'Review 1 change' }).click();
-    const review = page.locator('#save-confirm');
-    await expect(review).toContainText('Replacement entered');
-    await expect(review).not.toContainText('browser-only-secret');
-    await review.getByRole('button', { name: 'Close' }).click();
-
-    await discardChanges(page, 1);
-    await expect(value).toHaveValue('');
-    await expect(value).toHaveAttribute('readonly', '');
-    await expect(value).toHaveAttribute('type', 'password');
-    await expect(row).toHaveAttribute('data-dirty', 'false');
-});
-
-test('IP prefixes remain readable while locked and discard restores every row', async ({ page }) => {
-    const row = rowFor(page, 'show_dl_ips');
-    const prefixes = row.locator('.ip-prefix-input');
-    const loaded = await prefixes.evaluateAll((inputs) => inputs.map((input) => (input as HTMLInputElement).value));
-
-    await expect(prefixes).toHaveCount(2);
-    await expect(prefixes.first()).toHaveAttribute('readonly', '');
-    await expect(prefixes.nth(1)).toHaveAttribute('readonly', '');
-    await expect(row.locator('.ip-prefix-add')).toBeDisabled();
-    await row.getByRole('button', { name: 'Change' }).click();
-    await expect(prefixes.first()).toBeFocused();
-    await expect(prefixes.first()).not.toHaveAttribute('readonly', '');
-    await expect(prefixes.nth(1)).not.toHaveAttribute('readonly', '');
-    await row.locator('.ip-prefix-add').click();
-    await expect(prefixes).toHaveCount(3);
-    await prefixes.last().fill('172.16.');
-    await expect(row.locator('.setting-value-binding')).toHaveValue('10.;192.168.;172.16.');
-    await expect(row).toHaveAttribute('data-dirty', 'true');
-
-    await discardChanges(page, 1);
-    await expect(row.locator('.ip-prefix-input')).toHaveCount(loaded.length);
-    const restored = await row.locator('.ip-prefix-input').evaluateAll((inputs) => inputs.map((input) => (input as HTMLInputElement).value));
-    expect(restored).toEqual(loaded);
-    await expect(row).toHaveAttribute('data-dirty', 'false');
-    await expect(row.locator('.ip-prefix-add')).toBeDisabled();
-});
-
-test('HTML and plain-text previews follow editor changes and discard', async ({ page }) => {
-    const html = rowFor(page, 'custom_form_footer_html');
-    const plain = rowFor(page, 'welcome_email_template_text');
-    const htmlValue = html.locator('#footer-value');
-    const plainValue = plain.locator('#welcome-value');
-    const htmlPreview = html.locator('.html-preview');
-    const plainPreview = plain.locator('.plain-text-preview');
-    const loadedHtml = await htmlValue.inputValue();
-    const loadedPlain = await plainValue.inputValue();
-
-    await html.getByRole('button', { name: 'Change' }).click();
-    await plain.getByRole('button', { name: 'Change' }).click();
-    await htmlValue.fill('<p>Temporary HTML</p>');
-    await plainValue.fill('Temporary plain text');
-    await expect(htmlPreview).toHaveJSProperty('srcdoc', '<p>Temporary HTML</p>');
-    await expect(plainPreview).toHaveText('Temporary plain text');
-
+    await expect(required.locator('[data-idle-text]')).toHaveText('Optional');
+    await required.getByRole('button', { name: 'Change' }).click();
+    await expect(required.locator('[data-editor-surface]')).toBeVisible();
+    await expect(required.getByRole('radio', { name: 'Required', exact: true })).toBeEnabled();
+    await required.getByRole('radio', { name: 'Required', exact: true }).check();
+    await expect(required).toHaveAttribute('data-dirty', 'true');
+    await expect(required.locator('.operation')).toHaveValue('Upsert');
     await discardChanges(page, 2);
-    await expect(htmlValue).toHaveValue(loadedHtml);
-    await expect(plainValue).toHaveValue(loadedPlain);
-    await expect(htmlPreview).toHaveJSProperty('srcdoc', loadedHtml);
-    await expect(plainPreview).toHaveText(loadedPlain);
 });
 
-test('image Change uploads through the existing async path and Revert cancels the pending image', async ({ page }) => {
+test('image Change and Revert retain upload validation while previewing the inherited thumbnail', async ({ page }) => {
     await page.route('**/settings/assets/upload', async (route) => {
         await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ assetId: 77, fileName: 'replacement.png', previewUrl: '/settings/assets/77' }) });
     });
     const row = rowFor(page, 'header_image');
-    const file = row.locator('.image-file');
-
     await row.getByRole('button', { name: 'Change image' }).click();
-    await expect(row).toHaveAttribute('data-editing', 'true');
-    await expect(row).toHaveAttribute('data-dirty', 'true');
     await expect(row).toHaveAttribute('data-image-needs-upload', 'true');
-    await file.setInputFiles({ name: 'replacement.png', mimeType: 'image/png', buffer: Buffer.from('png') });
+    await row.locator('.image-file').setInputFiles({ name: 'replacement.png', mimeType: 'image/png', buffer: Buffer.from('png') });
     await expect(row.locator('.image-upload-status')).toHaveText('replacement.png is ready to save.');
-    await expect(row.locator('.image-pending')).toBeVisible();
     await expect(row).toHaveAttribute('data-dirty', 'true');
-    await expect(row.locator('.operation')).toHaveValue('Upsert');
-    await expect(row.locator('.setting-value-binding')).toHaveValue('77');
-    await expect(row.getByRole('button', { name: 'Revert to inherited image' })).toBeVisible();
+    await expect(revertButton(row)).toBeVisible();
 
-    await page.getByRole('button', { name: 'Review 1 change' }).click();
-    const review = page.locator('#save-confirm');
-    await expect(review.locator('tbody .review-pending-column')).toContainText('replacement.png');
-    await expect(review.locator('tbody .review-pending-column')).not.toContainText('Use inherited image');
-    await review.getByRole('button', { name: 'Close' }).click();
-
-    await row.getByRole('button', { name: 'Revert to inherited image' }).click();
-    await expect(row.getByRole('button', { name: 'Change image' })).toBeFocused();
+    const dialog = page.locator('#revert-confirm');
+    await revertButton(row).click();
+    await expect(dialog).toBeVisible();
+    await expect(dialog).toHaveAccessibleName('Revert to Main Library image?');
+    await expect(dialog.locator('[data-revert-image]')).toBeVisible();
+    await expect(dialog.locator('[data-revert-image-file]')).toHaveText('library-header.png');
+    await expect(dialog.getByRole('button', { name: 'Keep current image' })).toBeVisible();
+    await expect(dialog.getByRole('button', { name: 'Use inherited image' })).toBeVisible();
+    await dialog.getByRole('button', { name: 'Use inherited image' }).click();
     await expect(row).toHaveAttribute('data-dirty', 'false');
-    await expect(row.locator('.setting-value-binding')).toHaveValue('');
-    await expect(row.locator('.image-pending')).toBeHidden();
-    await expect(row.locator('.image-choose-another')).toBeHidden();
+    await expect(row.locator('[data-idle-image-file]')).toHaveText('library-header.png');
 });
 
-test('cancelling a customized image picker keeps a clean Change image retry', async ({ page }) => {
-    const row = rowFor(page, 'custom_header_image');
-    const change = row.getByRole('button', { name: 'Change image' });
+test('page-level Discard restores idle rendered output after edits and a confirmed revert', async ({ page }) => {
+    const html = rowFor(page, 'custom_form_footer_html');
+    const custom = rowFor(page, 'custom_heading');
+    await html.getByRole('button', { name: 'Change' }).click();
+    await html.locator('#footer-value').fill('<p>Temporary HTML</p>');
+    await custom.getByRole('button', { name: 'Revert to inherited value…' }).click();
+    await page.locator('#revert-confirm').getByRole('button', { name: 'Use inherited value' }).click();
+    await expect(dirtyRows(page)).toHaveCount(2);
 
-    await expect(row).toHaveAttribute('data-dirty', 'false');
-    await expect(row.locator('.image-pending')).toBeHidden();
-
-    // Dispatching the button event invokes the native picker without selecting a file,
-    // which is the browser-visible equivalent of cancelling that picker.
-    await change.dispatchEvent('click');
-    await expect(row).toHaveAttribute('data-dirty', 'false');
-    await expect(row.locator('.image-pending')).toBeHidden();
-    await expect(change).toBeVisible();
-
-    await change.dispatchEvent('click');
-    await expect(row).toHaveAttribute('data-dirty', 'false');
-    await expect(change).toBeVisible();
-});
-
-test('discard locks several edited controls and restores the loaded values', async ({ page }) => {
-    const number = rowFor(page, 'reset_seconds');
-    const date = rowFor(page, 'expiration_date');
-    const batch = rowFor(page, 'label.NameFirst');
-    const loaded = {
-        number: await number.locator('#reset-value').inputValue(),
-        date: await date.locator('#expiration-value').inputValue(),
-        batch: await batch.locator('.setting-value').inputValue(),
-    };
-
-    await number.getByRole('button', { name: 'Change' }).click();
-    await number.locator('#reset-value').fill('31');
-    await date.getByRole('button', { name: 'Change' }).click();
-    await date.locator('#expiration-value').fill('2027-01-01');
-    await batch.getByRole('button', { name: 'Change' }).click();
-    await batch.locator('.setting-value').fill('Given name');
-    await expect(dirtyRows(page)).toHaveCount(3);
-
-    await discardChanges(page, 3);
-    await expect(number.locator('#reset-value')).toHaveValue(loaded.number);
-    await expect(date.locator('#expiration-value')).toHaveValue(loaded.date);
-    await expect(batch.locator('.setting-value')).toHaveValue(loaded.batch);
-    await expect(number.locator('#reset-value')).toHaveAttribute('readonly', '');
-    await expect(date.locator('#expiration-value')).toBeDisabled();
-    await expect(batch.locator('.setting-value')).toHaveAttribute('readonly', '');
+    await discardChanges(page, 2);
     await expect(dirtyRows(page)).toHaveCount(0);
+    await expect(html.locator('[data-idle-surface]')).toBeVisible();
+    await expect(html.locator('[data-idle-html]')).toBeVisible();
+    await expect(html.locator('#footer-value')).toBeHidden();
+    await expect(custom.locator('[data-idle-text]')).toHaveText('Welcome');
+    await expect(custom.locator('[data-editor-surface]')).toBeHidden();
     await expect(page.locator('.settings-actions')).toBeHidden();
 });
 
-test('desktop and narrow layouts keep peer headers and value surfaces aligned', async ({ page }) => {
-    const row = rowFor(page, 'registration_text');
-    const measureLongFormValues = async () => Promise.all(['registration_text', 'age_warning_text', 'custom_form_footer_html', 'welcome_email_template_text', 'welcome_email_template_html'].map((key) => rowFor(page, key).evaluate((element) => {
-        const effective = element.querySelector('.setting-effective-value')!.getBoundingClientRect();
-        const editor = element.querySelector('textarea.setting-value')!.getBoundingClientRect();
-        const header = element.querySelector('[aria-label="At this scope"] .setting-comparison-header')!.getBoundingClientRect();
-        const actions = element.querySelector('.setting-scope-actions')!.getBoundingClientRect();
-        const preview = element.querySelector('.html-preview, .plain-text-preview')?.getBoundingClientRect();
-        const labelVisuallyHidden = [...element.querySelectorAll('.value-editor > label')].every((label) => label.classList.contains('visually-hidden'));
-        return {
-            actionInsideHeader: actions.top >= header.top - 1 && actions.right <= header.right + 1 && actions.bottom <= header.bottom + 1,
-            effectiveHeight: effective.height,
-            editorHeight: editor.height,
-            valueTopDifference: Math.abs(effective.top - editor.top),
-            previewFollowsEditor: !preview || preview.top >= editor.bottom,
-            labelVisuallyHidden,
-        };
-    })));
-    const desktop = await row.locator('.setting-comparison').evaluate((element) => {
-        const effective = element.querySelector('[aria-label="Effective now"]')!.getBoundingClientRect();
-        const scope = element.querySelector('[aria-label="At this scope"]')!.getBoundingClientRect();
-        return {
-            effectiveRight: effective.right,
-            scopeLeft: scope.left,
-            effectiveTop: effective.top,
-            scopeTop: scope.top,
-            noOverflow: element.scrollWidth <= element.clientWidth + 1,
-        };
-    });
-    expect(desktop.effectiveRight).toBeLessThanOrEqual(desktop.scopeLeft + 1);
-    expect(Math.abs(desktop.effectiveTop - desktop.scopeTop)).toBeLessThan(4);
-    expect(desktop.noOverflow).toBe(true);
-    for (const metrics of await measureLongFormValues()) {
-        expect(metrics.effectiveHeight).toBeGreaterThanOrEqual(128);
-        expect(Math.abs(metrics.effectiveHeight - metrics.editorHeight)).toBeLessThanOrEqual(5);
-        expect(metrics.valueTopDifference).toBeLessThanOrEqual(2);
-        expect(metrics.labelVisuallyHidden).toBe(true);
-        expect(metrics.actionInsideHeader).toBe(true);
-        expect(metrics.previewFollowsEditor).toBe(true);
-    }
-    await expect(row.getByLabel('Value for Default success message at this scope')).toBeVisible();
-    for (const key of ['custom_heading', 'show_age_warning', 'reset_seconds', 'expiration_date', 'drivers_license_input_type']) {
-        const scalar = await rowFor(page, key).evaluate((element) => {
-            const effective = element.querySelector('.setting-effective-value')!.getBoundingClientRect();
-            const editor = element.querySelector('.value-editor')!.getBoundingClientRect();
-            return { compact: effective.height < 80, startDifference: Math.abs(effective.top - editor.top) };
-        });
-        expect(scalar.compact).toBe(true);
-        expect(scalar.startDifference).toBeLessThanOrEqual(2);
-    }
-    const batchHeader = await rowFor(page, 'label.NameFirst').locator('.setting-scope-header').evaluate((element) => {
-        const header = element.getBoundingClientRect();
-        const actions = element.querySelector('.setting-scope-actions')!.getBoundingClientRect();
-        return { compact: header.height < 60, actionsInside: actions.top >= header.top - 1 && actions.right <= header.right + 1 && actions.bottom <= header.bottom + 1 };
-    });
-    expect(batchHeader.compact).toBe(true);
-    expect(batchHeader.actionsInside).toBe(true);
+test('review keeps semantic pending changes as the before/after comparison surface', async ({ page }) => {
+    const customized = rowFor(page, 'custom_heading');
+    const inherited = rowFor(page, 'drivers_license_button_text');
+    await customized.getByRole('button', { name: 'Change' }).click();
+    await customized.locator('#custom-heading-value').fill('Browser heading');
+    await inherited.getByRole('button', { name: 'Change' }).click();
+    await expect(dirtyRows(page)).toHaveCount(2);
+    await page.getByRole('button', { name: 'Review 2 changes' }).click();
+    const dialog = page.locator('#save-confirm');
+    await expect(dialog).toBeVisible();
+    await expect(dialog.locator('tbody')).toContainText('Browser heading');
+    await expect(dialog.locator('tbody')).toContainText('Customize here: Scan ID');
+    await dialog.getByRole('button', { name: 'Close' }).click();
+});
 
-    await page.setViewportSize({ width: 420, height: 900 });
-    const narrow = await row.locator('.setting-comparison').evaluate((element) => {
-        const effective = element.querySelector('[aria-label="Effective now"]')!.getBoundingClientRect();
-        const scope = element.querySelector('[aria-label="At this scope"]')!.getBoundingClientRect();
-        return {
-            effectiveBottom: effective.bottom,
-            scopeTop: scope.top,
-            effectiveLeft: effective.left,
-            scopeLeft: scope.left,
-            noOverflow: element.scrollWidth <= element.clientWidth + 1,
-        };
-    });
-    expect(narrow.effectiveBottom).toBeLessThanOrEqual(narrow.scopeTop + 1);
-    expect(Math.abs(narrow.effectiveLeft - narrow.scopeLeft)).toBeLessThan(4);
-    expect(narrow.noOverflow).toBe(true);
-    const boolean = rowFor(page, 'show_age_warning');
-    const narrowGroup = await boolean.locator('.setting-value-group').evaluate((element) => ({ width: element.getBoundingClientRect().width, parentWidth: element.parentElement!.getBoundingClientRect().width }));
-    expect(narrowGroup.width).toBeLessThanOrEqual(narrowGroup.parentWidth + 1);
+test('Escape on the revert dialog is the safe Keep current value action', async ({ page }) => {
+    const row = rowFor(page, 'custom_heading');
+    const revert = revertButton(row);
+    await revert.click();
+    await expect(page.locator('#revert-confirm')).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(page.locator('#revert-confirm')).toBeHidden();
+    await expect(row).toHaveAttribute('data-dirty', 'false');
+    await expect(revert).toBeFocused();
+});
+
+test('narrow settings layouts keep the single surface inside the viewport', async ({ page }) => {
+    for (const width of [720, 420, 320]) {
+        await page.setViewportSize({ width, height: 900 });
+        const dimensions = await page.evaluate(() => ({ body: document.body.scrollWidth, viewport: document.documentElement.clientWidth }));
+        expect(dimensions.body).toBeLessThanOrEqual(dimensions.viewport + 1);
+        await expect(rowFor(page, 'registration_text').locator('.setting-value-surface:visible')).toHaveCount(1);
+        await expect(rowFor(page, 'label.NameFirst').locator('.setting-scope-actions')).toBeVisible();
+    }
 });

@@ -432,12 +432,11 @@ public sealed class RegistrationFormAssetTests
         var root = FindRepositoryRoot();
         var row = File.ReadAllText(Path.Combine(root, "src/Clc.PatronRegistration.Web/Views/Settings/_SettingRow.cshtml"));
 
+        StringAssert.Contains(row, "else if (idleAssetMissing)");
         StringAssert.Contains(row, "The configured uploaded image is missing.");
-        StringAssert.Contains(row, "The staged uploaded image is missing.");
         StringAssert.Contains(row, "class=\"image-setting\"");
-        StringAssert.Contains(row, "class=\"setting-change image-upload-trigger\"");
+        StringAssert.Contains(row, "class=\"setting-change @(isImage ? \"image-upload-trigger\" : null)\"");
         StringAssert.Contains(row, "class=\"image-choose-another\"");
-        StringAssert.Contains(row, "class=\"setting-change\"");
         StringAssert.Contains(row, "class=\"setting-revert\"");
         Assert.IsFalse(row.Contains("image-undo-pending", StringComparison.Ordinal));
         StringAssert.Contains(row, "data-image-inherited-missing=");
@@ -452,13 +451,16 @@ public sealed class RegistrationFormAssetTests
     {
         var root = FindRepositoryRoot();
         var row = File.ReadAllText(Path.Combine(root, "src/Clc.PatronRegistration.Web/Views/Settings/_SettingRow.cshtml"));
+        var script = File.ReadAllText(Path.Combine(root, "src/Clc.PatronRegistration.Web/wwwroot/js/settings.js"));
 
-        StringAssert.Contains(row, "Model.HasInheritedValue && Model.InheritedAssetMissing");
-        StringAssert.Contains(row, "The inherited uploaded image is missing.");
-        StringAssert.Contains(row, "Use the inherited image setting.");
-        StringAssert.Contains(row, "No image will be configured.");
-        Assert.IsTrue(row.IndexOf("The inherited uploaded image is missing.", StringComparison.Ordinal)
-            < row.IndexOf("No image will be configured.", StringComparison.Ordinal));
+        StringAssert.Contains(row, "data-image-inherited-missing=");
+        StringAssert.Contains(row, "data-image-idle-missing=");
+        StringAssert.Contains(script, "row.dataset.imageInheritedMissing === \"true\"");
+        StringAssert.Contains(script, "The inherited uploaded image is missing.");
+        StringAssert.Contains(script, "Use inherited image.");
+        StringAssert.Contains(script, "No image will be configured.");
+        Assert.IsTrue(script.IndexOf("The inherited uploaded image is missing.", StringComparison.Ordinal)
+            < script.IndexOf("No image will be configured.", StringComparison.Ordinal));
     }
 
     [TestMethod]

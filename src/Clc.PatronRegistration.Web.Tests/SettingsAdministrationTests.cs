@@ -603,6 +603,9 @@ public class SettingsAdministrationTests
         var longText = new SettingDefinition("long", "Long", "Long", SettingValueType.LongString);
         var html = new SettingDefinition("html", "HTML", "HTML", SettingValueType.Html);
         var template = new SettingDefinition("template", "Template", "Template", SettingValueType.EmailTemplate);
+        var prefixes = new SettingDefinition("show_dl_ips", "IP prefixes", "IP prefixes", SettingValueType.ShortString);
+        var date = new SettingDefinition("expiration_date", "Expiration date", "Expiration date", SettingValueType.Date);
+        var resetSeconds = new SettingDefinition("reset_seconds", "Reset seconds", "Reset seconds", SettingValueType.Integer);
         var sensitive = new SettingDefinition("secret", "Secret", "Secret", SettingValueType.ShortString, IsSensitive: true);
 
         Assert.AreEqual("Several words on one line", SettingValuePresentation.Format(longText, " Several\n words   on\tone line ", true));
@@ -610,6 +613,9 @@ public class SettingsAdministrationTests
         Assert.AreEqual("Email template configured", SettingValuePresentation.Format(template, "Hello {{name}}", true));
         Assert.AreEqual("Hidden", SettingValuePresentation.Format(sensitive, "recognizable-secret", true));
         Assert.AreEqual("Not configured", SettingValuePresentation.Format(sensitive, null, false));
+        Assert.AreEqual("10., 192.168.", SettingValuePresentation.FriendlyValue(prefixes, "10.; 192.168."));
+        Assert.AreEqual("December 31, 2027", SettingValuePresentation.FriendlyValue(date, "2027-12-31"));
+        Assert.AreEqual("60 seconds", SettingValuePresentation.FriendlyValue(resetSeconds, "60"));
     }
 
     [TestMethod]
@@ -636,14 +642,14 @@ public class SettingsAdministrationTests
         var notSet = SettingValuePresentation.ForRow(Row(text,
             new("text", null, null, "Unconfigured", string.Empty, false, null, true)));
         Assert.AreEqual(SettingPresentationState.NotSet, notSet.State);
-        Assert.AreEqual("—", notSet.Value);
-        Assert.AreEqual("Not set", notSet.Status);
+        Assert.AreEqual("Not configured", notSet.Value);
+        Assert.AreEqual("Not configured", notSet.Status);
         Assert.AreNotEqual(SettingPresentationState.Inherited, notSet.State);
 
         var inherited = SettingValuePresentation.ForRow(Row(text,
             new("text", "Parent value", 1, "System", string.Empty, false, null, true)));
         Assert.AreEqual(SettingPresentationState.Inherited, inherited.State);
-        Assert.AreEqual("Inherited", inherited.Status);
+        Assert.AreEqual("Inherited from System", inherited.Status);
 
         var blank = SettingValuePresentation.ForRow(Row(text,
             new("text", string.Empty, 2, "Library", string.Empty, true, string.Empty, false)));
@@ -733,7 +739,8 @@ public class SettingsAdministrationTests
         Assert.IsFalse(index.Contains("No shared draft", StringComparison.Ordinal));
         StringAssert.Contains(css, ".settings-search input[type=\"search\"]");
         Assert.IsFalse(css.Contains(".settings-search input {", StringComparison.Ordinal));
-        StringAssert.Contains(row, "$\"Shared draft: {imageSummary}\"");
+        StringAssert.Contains(row, "Shared draft — use inherited value");
+        StringAssert.Contains(row, "data-image-idle-preview-url=");
         StringAssert.Contains(row, "definition.IsSensitive ? string.Empty");
         Assert.IsFalse(row.Contains("<details class=\"setting-row\" open=", StringComparison.Ordinal));
         Assert.IsFalse(row.Contains("tabindex=\"-1\"", StringComparison.Ordinal));
@@ -798,11 +805,12 @@ public class SettingsAdministrationTests
         Assert.IsFalse(index.Contains("data-review-title=\"Add changes to shared draft\"", StringComparison.Ordinal));
         StringAssert.Contains(index, "data-review-title=\"Save changes live\"");
         StringAssert.Contains(index, "MMM d, yyyy, h:mm tt 'UTC'");
-        StringAssert.Contains(row, "data-customized-here=\"@resolution.OwnsOverride.ToString().ToLowerInvariant()\"");
-        StringAssert.Contains(row, "data-live-summary=\"@liveSummary\"");
+        StringAssert.Contains(row, "data-live-state=\"@(resolution.OwnsOverride ? \"customized\" : resolution.SourceOrganizationId.HasValue ? \"inherited\" : \"notset\")\"");
+        StringAssert.Contains(row, "data-live-summary=\"@Clc.PatronRegistration.Web.Models.SettingReviewPresentation.Live(Model)\"");
         Assert.IsFalse(row.Contains(">Apply</button>", StringComparison.Ordinal));
         StringAssert.Contains(script, "Unsaved in this browser");
-        StringAssert.Contains(script, "row.dataset.customizedHere === \"true\"");
+        StringAssert.Contains(script, "case \"customized\":");
+        StringAssert.Contains(script, "row.dataset.liveState === \"customized\"");
     }
 
     [TestMethod]
@@ -1824,15 +1832,16 @@ public class SettingsAdministrationTests
         Assert.IsFalse(partial.Contains("<select id=\"@operationId\"", StringComparison.Ordinal));
         StringAssert.Contains(partial, "class=\"operation\" type=\"hidden\"");
         StringAssert.Contains(partial, "class=\"image-setting\"");
-        StringAssert.Contains(partial, "class=\"setting-change image-upload-trigger\"");
+        StringAssert.Contains(partial, "class=\"setting-change @(isImage ? \"image-upload-trigger\" : null)\"");
         StringAssert.Contains(partial, "class=\"image-choose-another\"");
-        StringAssert.Contains(partial, "class=\"setting-comparison\"");
-        StringAssert.Contains(partial, "class=\"setting-comparison-column setting-baseline-column\"");
-        StringAssert.Contains(partial, "class=\"setting-comparison-column setting-scope-panel\"");
-        StringAssert.Contains(partial, "class=\"setting-comparison-header setting-scope-header\"");
+        Assert.IsFalse(partial.Contains("setting-comparison", StringComparison.Ordinal));
+        Assert.IsFalse(partial.Contains("setting-baseline", StringComparison.Ordinal));
+        Assert.IsFalse(partial.Contains("setting-effective", StringComparison.Ordinal));
+        Assert.IsFalse(partial.Contains("setting-scope-panel", StringComparison.Ordinal));
+        StringAssert.Contains(partial, "data-idle-surface");
+        StringAssert.Contains(partial, "data-editor-surface");
         StringAssert.Contains(partial, "<label class=\"visually-hidden\" for=\"@inputId\"");
         Assert.IsFalse(partial.Contains("setting-value-panel", StringComparison.Ordinal));
-        StringAssert.Contains(partial, "class=\"setting-change\"");
         StringAssert.Contains(partial, "class=\"setting-revert\"");
         StringAssert.Contains(partial, "data-image-local-value=");
         StringAssert.Contains(partial, "data-image-local-missing=");
@@ -1842,14 +1851,13 @@ public class SettingsAdministrationTests
         Assert.IsFalse(partial.Contains("image-mode", StringComparison.Ordinal));
         Assert.IsFalse(partial.Contains("batch-mode", StringComparison.Ordinal));
         StringAssert.Contains(partial, "boolean-value-group");
-        StringAssert.Contains(partial, "class=\"plain-text-preview\"");
+        Assert.IsFalse(partial.Contains("plain-text-preview", StringComparison.Ordinal));
         StringAssert.Contains(index, "class=\"batch-settings");
         StringAssert.Contains(index, "id=\"batch-@batchHeadingPrefix-field\"");
-        StringAssert.Contains(batch, "class=\"batch-browser-status\"");
-        Assert.IsFalse(batch.Contains("class=\"batch-browser-status\" role=\"status\"", StringComparison.Ordinal));
-        Assert.IsFalse(batch.Contains("class=\"batch-browser-status\" aria-live=", StringComparison.Ordinal));
+        Assert.IsFalse(batch.Contains("batch-effective", StringComparison.Ordinal));
+        Assert.IsFalse(batch.Contains("batch-scope", StringComparison.Ordinal));
         StringAssert.Contains(index, "class=\"pending-changes-status\" role=\"status\" aria-live=\"polite\"");
-        StringAssert.Contains(batch, "headers=\"batch-@columnHeadingPrefix-effective\"");
+        StringAssert.Contains(batch, "headers=\"batch-@((isRequired ? \"required-fields\" : \"field-labels\"))-value\"");
         StringAssert.Contains(index, "settingsErrorKey");
         StringAssert.Contains(index, "row.Definition.Key, settingsErrorKey");
         StringAssert.Contains(partial, "setting-validation-error");

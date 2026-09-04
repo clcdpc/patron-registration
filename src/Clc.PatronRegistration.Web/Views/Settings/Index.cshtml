@@ -246,10 +246,10 @@
             @if (group.Item1 == SettingGroup.Label || group.Item1 == SettingGroup.Require)
             {
                 var batchHeadingPrefix = group.Item1 == SettingGroup.Label ? "field-labels" : "required-fields";
-                <p class="group-introduction">Compare these related fields together. Each choice still uses the normal settings save and validation path. @if (group.Item1 == SettingGroup.Label) { <span>Blank labels override inherited labels; click Revert to inherited value to remove a customization.</span> }</p>
+                <p class="group-introduction">These related fields share one value surface per row. Each choice still uses the normal settings save and validation path. @if (group.Item1 == SettingGroup.Label) { <span>Blank labels override inherited labels; click Revert to inherited value… to remove a customization.</span> }</p>
                 <table class="batch-settings @(group.Item1 == SettingGroup.Label ? "field-labels-editor" : "required-fields-editor")">
                     <caption class="visually-hidden">@group.Item2</caption>
-                    <thead><tr><th id="batch-@batchHeadingPrefix-field" scope="col">Field</th><th id="batch-@batchHeadingPrefix-effective" scope="col">Effective now</th><th id="batch-@batchHeadingPrefix-scope" scope="col">At this scope</th></tr></thead>
+                    <thead><tr><th id="batch-@batchHeadingPrefix-field" scope="col">Field</th><th id="batch-@batchHeadingPrefix-value" scope="col">Value</th></tr></thead>
                     <tbody>
                     @foreach (var row in rows)
                     {
@@ -310,6 +310,23 @@
     <div class="button-row">
         <button id="confirm-save" type="button">Save changes</button>
         <button id="cancel-save" type="button">Cancel</button>
+    </div>
+</dialog>
+
+<dialog id="revert-confirm" aria-labelledby="revert-confirm-title">
+    <h2 id="revert-confirm-title">Revert to inherited value?</h2>
+    <p data-revert-explanation></p>
+    <div class="revert-target" data-revert-target aria-live="polite">
+        <iframe sandbox="" class="setting-html-value-preview" data-revert-html title="Inherited rendered value" hidden></iframe>
+        <pre class="setting-idle-value setting-idle-value-full" data-revert-text hidden></pre>
+        <div class="setting-idle-value" data-revert-friendly hidden></div>
+        <div class="image-card" data-revert-image hidden><img class="setting-image-preview" data-revert-image-preview alt="Inherited image" hidden /><strong data-revert-image-file></strong></div>
+        <p data-revert-none hidden>No inherited value is configured for this setting. Removing this customization will leave the setting not configured.</p>
+        <p data-revert-sensitive hidden>An inherited value is configured, but the inherited secret cannot be displayed.</p>
+    </div>
+    <div class="button-row">
+        <button type="button" data-revert-keep>Keep current value</button>
+        <button type="button" data-revert-affirm>Use inherited value</button>
     </div>
 </dialog>
 
