@@ -2,9 +2,11 @@ using System.Text;
 using System.Reflection;
 using System.Diagnostics;
 using Clc.Melissa;
+using Clc.PatronRegistration.Administration;
 using Clc.PatronRegistration.Configuration;
 using Clc.PatronRegistration.Data;
 using Clc.PatronRegistration.Web.Controllers;
+using Clc.PatronRegistration.Web.Models;
 using Clc.PatronRegistration.Web.Settings;
 using Clc.Polaris.Api;
 using Clc.Polaris.Api.Models;
@@ -111,6 +113,43 @@ public sealed class RegistrationBranchFragmentRenderingTests
         StringAssert.Contains(markup, "id=\"User1\" name=\"User1\" type=\"hidden\" value=\"Barrington Elementary School\"");
         StringAssert.Contains(markup, "id=\"IsTeacher\" name=\"IsTeacher\"");
         StringAssert.Contains(markup, "checked=\"checked\"");
+    }
+
+    [TestMethod]
+    public async Task SettingRow_SensitiveSharedDraftRemoveOverrideUsesInheritedPresenceWithoutRenderingSecrets()
+    {
+        using var fixture = BranchFixture.Create(headerImageAssetId: null, cssFile: string.Empty);
+        var definition = new SettingCatalog().All.Single(setting => setting.Key == "postmark_api_key");
+        const string liveSecret = "live-local-secret";
+        const string inheritedSecret = "inherited-secret";
+        SettingRowViewModel Row(bool hasInherited) => new(
+            "setting-sensitive-draft",
+            definition,
+            new ResolvedSetting(definition.Key, liveSecret, 3, "Branch", string.Empty, true, liveSecret, false),
+            null,
+            DraftOperation.RemoveOverride,
+            99,
+            SourceDescription: "Branch",
+            InheritedValue: hasInherited ? inheritedSecret : null,
+            HasInheritedValue: hasInherited,
+            InheritedSourceDescription: hasInherited ? "Main Library" : null);
+
+        var noInheritedMarkup = await fixture.RenderSettingRowAsync(Row(hasInherited: false));
+        var inheritedMarkup = await fixture.RenderSettingRowAsync(Row(hasInherited: true));
+        var noInheritedText = System.Net.WebUtility.HtmlDecode(noInheritedMarkup);
+        var inheritedText = System.Net.WebUtility.HtmlDecode(inheritedMarkup);
+
+        StringAssert.Contains(noInheritedMarkup, "<span class=\"summary-value\" title=\"Not configured\">Not configured</span>");
+        StringAssert.Contains(inheritedMarkup, "<span class=\"summary-value\" title=\"Configured\">Configured</span>");
+        foreach (var text in new[] { noInheritedText, inheritedText })
+        {
+            StringAssert.Contains(text, "Shared draft — use inherited value");
+        }
+        foreach (var markup in new[] { noInheritedMarkup, inheritedMarkup })
+        {
+            Assert.IsFalse(markup.Contains(liveSecret, StringComparison.Ordinal));
+            Assert.IsFalse(markup.Contains(inheritedSecret, StringComparison.Ordinal));
+        }
     }
 
     private static void AssertLayoutFree(string markup)
@@ -260,6 +299,32 @@ public sealed class RegistrationBranchFragmentRenderingTests
                 provider.GetRequiredService<IModelMetadataProvider>(), actionContext.ModelState)
             {
                 Model = (Registration)result.Model!
+            };
+            var tempData = new TempDataDictionary(
+                actionContext.HttpContext,
+                provider.GetRequiredService<ITempDataProvider>());
+            await using var output = new MemoryStream();
+            await using var writer = new StreamWriter(output, Encoding.UTF8, leaveOpen: true);
+            var viewContext = new ViewContext(
+                actionContext, viewLookup.View!, viewData, tempData, writer, new HtmlHelperOptions());
+
+            await viewLookup.View!.RenderAsync(viewContext);
+            await writer.FlushAsync();
+            return Encoding.UTF8.GetString(output.ToArray());
+        }
+
+        public async Task<string> RenderSettingRowAsync(SettingRowViewModel model)
+        {
+            var actionContext = Controller.ControllerContext;
+            var viewEngine = provider.GetRequiredService<IRazorViewEngine>();
+            var viewLookup = viewEngine.GetView(null, "~/Views/Settings/_SettingRow.cshtml", isMainPage: false);
+            Assert.IsTrue(viewLookup.Success,
+                $"Could not find view: {string.Join(" | ", viewLookup.SearchedLocations ?? [])}");
+
+            var viewData = new ViewDataDictionary<SettingRowViewModel>(
+                provider.GetRequiredService<IModelMetadataProvider>(), actionContext.ModelState)
+            {
+                Model = model
             };
             var tempData = new TempDataDictionary(
                 actionContext.HttpContext,

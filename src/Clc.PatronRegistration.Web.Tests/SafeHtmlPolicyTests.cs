@@ -8,6 +8,15 @@ namespace Clc.PatronRegistration.Tests;
 public sealed class SafeHtmlPolicyTests
 {
     [TestMethod]
+    public void AdministratorHtmlPolicyExposesTheAllowlistForClientPreviews()
+    {
+        Assert.IsTrue(SafeHtmlPolicy.AllowedTags.Contains("p"));
+        Assert.IsFalse(SafeHtmlPolicy.AllowedTags.Contains("script"));
+        Assert.IsTrue(SafeHtmlPolicy.AllowedAttributes.Contains("href"));
+        CollectionAssert.AreEquivalent(new[] { "http", "https", "mailto" }, SafeHtmlPolicy.AllowedSchemes.ToArray());
+    }
+
+    [TestMethod]
     public void AdministratorHtmlPolicyRetainsFormattingButRemovesActiveContent()
     {
         var definition = new SettingDefinition(

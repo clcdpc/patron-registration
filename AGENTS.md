@@ -53,6 +53,79 @@ If a sequence of individually reasonable fixes causes the implementation to
 become substantially more complex, stop extending the design and reconsider
 the underlying approach.
 
+## C# formatting
+
+Favor compact horizontal formatting when a statement is straightforward and
+remains easy to scan.
+
+Do not vertically expand code merely because a declaration, invocation,
+condition, constructor call, or logging call has several parameters.
+
+Prefer method and constructor declarations on one line when they remain easy to
+read:
+
+```csharp
+public PatronRegistrationService(IPapiClient papiClient, ILogger<PatronRegistrationService> logger, IRegistrationRepository repository)
+{
+    _papiClient = papiClient;
+    _logger = logger;
+    _repository = repository;
+}
+```
+
+Prefer straightforward method calls on one line, including named arguments and
+`ConfigureAwait(false)`:
+
+```csharp
+response = await _papiClient.PatronBasicDataGetAsync(barcode, password, addresses: false, notes: false, cancellationToken).ConfigureAwait(false);
+```
+
+Prefer straightforward compound conditions on one line:
+
+```csharp
+if (request.OrganizationId <= 0 || string.IsNullOrWhiteSpace(request.Barcode) || string.IsNullOrWhiteSpace(request.LastName))
+{
+    return RegistrationResult.Invalid("Organization, barcode, and last name are required.");
+}
+```
+
+Prefer simple constructor and factory calls on one line:
+
+```csharp
+return new RegistrationResult(papiResponse.PatronId, papiResponse.Barcode, successfulItems, papiResponse.Warnings);
+```
+
+Do not enforce a small hard line-length limit. Lines around 180 characters, and
+occasionally longer, are acceptable when the expression remains simple and easy
+to scan. Wrap because doing so improves comprehension, not merely because a line
+is long.
+
+Keep structures vertical when their structure is useful to the reader,
+including:
+
+- object and collection initializers with multiple entries;
+- LINQ pipelines with multiple operations;
+- switch expressions;
+- genuinely complex Boolean expressions;
+- statements whose nested expressions become difficult to scan horizontally.
+
+When a LINQ pipeline is vertical, keep each individual operation compact when
+possible:
+
+```csharp
+var successfulItems = papiResponse.Items
+    .Where(item => item.Status == PatronItemStatus.Success)
+    .OrderBy(item => item.Sequence)
+    .Select(item => new RegistrationItem(item.Id, item.Barcode, item.Description))
+    .ToList();
+```
+
+Use braces for control-flow statements.
+
+Blank lines should separate logical operations, not individual syntactic pieces.
+Avoid line breaks that make a single straightforward statement harder to read as
+a unit.
+
 ## Testing
 
 Tests should primarily verify externally meaningful behavior and important

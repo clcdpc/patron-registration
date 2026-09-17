@@ -44,68 +44,6 @@
     max-width: 72rem
 }
 
-.setting-value-panel {
-    background: #f7f9fb;
-    border: 1px solid #c9d2da;
-    border-radius: .3rem;
-    margin: 0 0 .55rem;
-    max-width: 72rem;
-    overflow: hidden
-}
-
-.setting-value-panel-heading {
-    align-items: baseline;
-    border-bottom: 1px solid #d7dee4;
-    display: flex;
-    flex-wrap: wrap;
-    gap: .2rem .85rem;
-    justify-content: space-between;
-    padding: .35rem .55rem
-}
-
-.setting-value-source {
-    color: #555;
-    font-size: .9rem
-}
-
-.setting-current-value {
-    background: #fff;
-    box-sizing: border-box;
-    overflow-wrap: anywhere;
-    padding: .5rem .6rem
-}
-
-.setting-current-value-full {
-    font-family: inherit;
-    margin: 0;
-    max-height: none;
-    overflow-x: auto;
-    white-space: pre-wrap;
-    word-break: break-word
-}
-
-.setting-html-value-preview {
-    background: #fff;
-    border: 0;
-    box-sizing: border-box;
-    display: block;
-    min-height: 8rem;
-    width: 100%
-}
-
-.setting-draft-value-panel {
-    background: #f4f8fc;
-    border-color: #9bb8d1
-}
-
-.setting-draft-value-panel .setting-value-panel-heading {
-    border-bottom-color: #bfd0df
-}
-
-.setting-editor {
-    gap: .4rem
-}
-
 .image-setting {
     gap: .4rem;
     max-width: 44rem
@@ -114,13 +52,6 @@
 .image-card {
     max-width: 40rem;
     padding: .4rem .5rem
-}
-
-.image-card-has-preview {
-    align-items: start;
-    display: grid;
-    gap: .45rem;
-    grid-template-columns: 1fr
 }
 
 .image-card-copy {
@@ -133,15 +64,6 @@
 
 .image-card-copy strong {
     flex: 1 1 100%
-}
-
-.image-card-has-preview .setting-image-preview {
-    max-height: 7rem;
-    width: fit-content
-}
-
-.image-source-status {
-    margin-left: auto
 }
 
 .image-actions {
@@ -157,17 +79,9 @@
 }
 
 @media(max-width:40rem) {
-    .setting-value-panel-heading {
-        display: grid;
-        gap: .15rem
-    }
-
     .image-card-copy {
         display: grid;
         gap: .15rem
     }
 
-    .image-source-status {
-        margin-left: 0
-    }
 }

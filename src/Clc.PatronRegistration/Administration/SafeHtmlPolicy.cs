@@ -11,20 +11,22 @@ namespace Clc.PatronRegistration.Administration;
 /// </summary>
 public static class SafeHtmlPolicy
 {
-    private static readonly string[] AllowedTags =
-    [
+    public static IReadOnlyList<string> AllowedTags { get; } = Array.AsReadOnly(new[]
+    {
         "a", "abbr", "b", "blockquote", "br", "caption", "cite", "code", "col", "colgroup",
         "dd", "del", "div", "dl", "dt", "em", "h1", "h2", "h3", "h4", "h5", "h6",
         "hr", "i", "img", "ins", "kbd", "li", "mark", "ol", "p", "pre", "q", "s",
         "small", "span", "strong", "sub", "sup", "table", "tbody", "td", "tfoot", "th",
         "thead", "tr", "u", "ul", "var"
-    ];
+    });
 
-    private static readonly string[] AllowedAttributes =
-    [
+    public static IReadOnlyList<string> AllowedAttributes { get; } = Array.AsReadOnly(new[]
+    {
         "alt", "class", "colspan", "datetime", "height", "href", "loading", "rel", "rowspan",
         "scope", "src", "target", "title", "width"
-    ];
+    });
+
+    public static IReadOnlyList<string> AllowedSchemes { get; } = Array.AsReadOnly(new[] { "http", "https", "mailto" });
 
     private static readonly string[] HtmlSettingKeys =
     [
@@ -65,9 +67,10 @@ public static class SafeHtmlPolicy
         }
 
         sanitizer.AllowedSchemes.Clear();
-        sanitizer.AllowedSchemes.Add("http");
-        sanitizer.AllowedSchemes.Add("https");
-        sanitizer.AllowedSchemes.Add("mailto");
+        foreach (var scheme in AllowedSchemes)
+        {
+            sanitizer.AllowedSchemes.Add(scheme);
+        }
         return sanitizer.Sanitize(value);
     }
 
