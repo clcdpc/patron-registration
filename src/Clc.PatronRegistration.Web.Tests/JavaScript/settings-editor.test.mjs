@@ -105,16 +105,32 @@ function makeRevertDialog() {
     return { dialog, title, explanation, keep, affirm, html, text, friendly, image, imagePreview, imageFile, none, sensitive };
 }
 
+function makeEditCancelDialog() {
+    const dialog = new NodeStub();
+    const keep = new NodeStub();
+    const discard = new NodeStub();
+    dialog.querySelector = (selector) => ({
+        "[data-edit-cancel-keep]": keep,
+        "[data-edit-cancel-discard]": discard
+    }[selector] || null);
+    return { dialog, keep, discard };
+}
+
 function createDocument() {
     const revert = makeRevertDialog();
+    const editCancel = makeEditCancelDialog();
     const document = {
         documentElement: { clientHeight: 0 },
         revert,
+        editCancel,
         querySelector(selector) {
             if (selector === "#revert-confirm") return revert.dialog;
+            if (selector === "#edit-cancel-dialog") return editCancel.dialog;
+            if (selector === "[data-edit-cancel-keep]") return editCancel.keep;
+            if (selector === "[data-edit-cancel-discard]") return editCancel.discard;
             return revert.dialog.querySelector(selector);
         },
-        querySelectorAll(selector) { return selector === "dialog" ? [revert.dialog] : []; },
+        querySelectorAll(selector) { return selector === "dialog" ? [revert.dialog, editCancel.dialog] : []; },
         createElement(tagName) { const element = new NodeStub(); element.tagName = tagName.toUpperCase(); return element; }
     };
     return document;
@@ -154,11 +170,37 @@ function makeForm(rows = []) {
         },
         querySelectorAll(selector) {
             if (selector === '.setting-row[data-dirty="true"]') return rows.filter((row) => row.dataset.dirty === "true");
+            if (selector === '.setting-row[data-edit-modified="true"]') return rows.filter((row) => row.dataset.editModified === "true");
             if (selector === '.setting-row[data-editing="true"]') return rows.filter((row) => row.dataset.editing === "true");
             if (selector.includes('data-image-uploading="true"')) return rows.filter((row) => row.dataset.imageUploading === "true");
             return [];
         }
     };
+}
+
+function makeNavigationDocument(form) {
+    const document = createDocument();
+    const organizationScope = new NodeStub("main");
+    const formCodeScope = new NodeStub("registration");
+    const contextForm = new NodeStub();
+    const unsavedDialog = new NodeStub();
+    let submitCount = 0;
+    contextForm.querySelector = (selector) => ({ "#organization-scope": organizationScope, "#form-code-scope": formCodeScope }[selector] || null);
+    contextForm.requestSubmit = () => { submitCount++; };
+    unsavedDialog.querySelector = () => null;
+    const originalQuerySelector = document.querySelector.bind(document);
+    const originalQuerySelectorAll = document.querySelectorAll.bind(document);
+    document.querySelector = (selector) => {
+        if (selector === "#settings-form") return form;
+        if (selector === ".settings-context") return contextForm;
+        if (selector === "#unsaved-changes-dialog") return unsavedDialog;
+        return originalQuerySelector(selector);
+    };
+    document.querySelectorAll = (selector) => {
+        if (selector === "dialog") return [...originalQuerySelectorAll(selector), unsavedDialog];
+        return originalQuerySelectorAll(selector);
+    };
+    return { document, contextForm, organizationScope, formCodeScope, unsavedDialog, get submitCount() { return submitCount; } };
 }
 
 function makeRow({ key = "registration_text", valueType = "shortstring", baselineMode = "customize", baselineValue = "original", value = baselineValue, sensitive = false, inherited = false, inheritedValue = inherited ? (valueType === "boolean" ? "false" : "Inherited value") : "", batch = false, draftChange = false } = {}) {
@@ -184,6 +226,8 @@ function makeRow({ key = "registration_text", valueType = "shortstring", baselin
     };
 
     const change = new NodeStub(); change.disabled = false; change.type = "button";
+    const apply = new NodeStub(); apply.disabled = false; apply.type = "button"; apply.hidden = true;
+    const cancel = new NodeStub(); cancel.disabled = false; cancel.type = "button"; cancel.hidden = true;
     const revert = new NodeStub(); revert.disabled = false; revert.type = "button"; revert.hidden = baselineMode !== "customize";
     const scopeStatus = new NodeStub(); scopeStatus.textContent = baselineMode === "inherit" ? "Inherited from Main Library" : draftChange ? "Shared draft" : "Customized here";
     const idleSurface = new NodeStub();
@@ -222,6 +266,8 @@ function makeRow({ key = "registration_text", valueType = "shortstring", baselin
     }
     const selector = {
         ".setting-change": change,
+        ".setting-apply": apply,
+        ".setting-cancel": cancel,
         ".setting-revert": revert,
         ".setting-scope-status": scopeStatus,
         ".setting-value:not(.setting-value-binding)": valueType === "boolean" ? boolYes : visible,
@@ -259,7 +305,7 @@ function makeRow({ key = "registration_text", valueType = "shortstring", baselin
     };
     row.closest = () => category; category.querySelectorAll = () => [row]; category.querySelector = () => null;
     if (addPrefix) addPrefix.parentElement = prefixEditor;
-    return { row, category, change, revert, scopeStatus, idleSurface, editorSurface, idleText, idleHtml, visible, binding, operation, summary, status, batchStatus, reveal, booleanYes: boolYes, booleanNo: boolNo, prefixes, addPrefix, removeButtons, prefixEditor };
+    return { row, category, change, apply, cancel, revert, scopeStatus, idleSurface, editorSurface, idleText, idleHtml, visible, binding, operation, summary, status, batchStatus, reveal, booleanYes: boolYes, booleanNo: boolNo, prefixes, addPrefix, removeButtons, prefixEditor };
 }
 
 function makeImageRow({ baselineMode = "inherit", baselineValue = "", inherited = true, inheritedMissing = false, localAssetValue = "", localAssetMissing = false } = {}) {
@@ -307,7 +353,7 @@ test("Change swaps the idle surface for a focused editor without a permanent dup
     assert.equal(focused, setting.visible);
 });
 
-test("customized Change alone stays clean and an input becomes a browser Upsert", () => {
+test("customized editor input stays temporary until Apply", () => {
     const api = loadSettings();
     const setting = makeRow({ baselineValue: "original", value: "original", inherited: true });
     const form = makeForm([setting.row]);
@@ -315,27 +361,87 @@ test("customized Change alone stays clean and an input becomes a browser Upsert"
     setting.change.click();
     assert.equal(setting.row.dataset.dirty, "false");
     setting.visible.value = "changed"; setting.visible.emit("input");
+    assert.equal(setting.row.dataset.dirty, "false");
+    assert.equal(setting.binding.value, "original");
+    setting.apply.click();
     assert.equal(setting.row.dataset.dirty, "true");
     assert.equal(setting.operation.value, "Upsert");
     assert.equal(setting.binding.value, "changed");
 });
 
-test("inherited Change creates Upsert intent and Revert first opens a non-mutating preview", () => {
+test("customized unchanged Apply remains clean and re-applying the loaded value clears a dirty row", () => {
+    const api = loadSettings();
+    const setting = makeRow({ baselineValue: "original", value: "original", inherited: true });
+    const form = makeForm([setting.row]);
+    api.SettingsEditor.initializeStandardRow(setting.row, form);
+    setting.change.click(); setting.apply.click();
+    assert.equal(setting.row.dataset.dirty, "false");
+    setting.change.click(); setting.visible.value = "changed"; setting.visible.emit("input"); setting.apply.click();
+    assert.equal(setting.row.dataset.dirty, "true"); assert.equal(setting.binding.value, "changed");
+    setting.change.click(); setting.visible.value = "original"; setting.visible.emit("input");
+    assert.equal(setting.row.dataset.dirty, "true"); assert.equal(setting.binding.value, "changed");
+    setting.apply.click();
+    assert.equal(setting.row.dataset.dirty, "false"); assert.equal(setting.binding.disabled, true); assert.equal(setting.binding.value, "original");
+});
+
+test("Cancel Discard edits restores an already-applied browser value", () => {
+    const api = loadSettings();
+    const setting = makeRow({ baselineValue: "original", value: "original", inherited: true });
+    const form = makeForm([setting.row]);
+    api.SettingsEditor.initializeStandardRow(setting.row, form);
+    setting.change.click(); setting.visible.value = "changed"; setting.visible.emit("input"); setting.apply.click();
+    setting.change.click(); setting.visible.value = "temporary"; setting.visible.emit("input");
+    setting.cancel.click(); api.document.editCancel.discard.click();
+    assert.equal(setting.visible.value, "changed"); assert.equal(setting.binding.value, "changed"); assert.equal(setting.row.dataset.dirty, "true");
+});
+
+test("Revert then Change then Cancel keeps a pending RemoveOverride", () => {
+    const api = loadSettings();
+    const setting = makeRow({ key: "revert-cancel", baselineValue: "local", value: "local", inherited: true, inheritedValue: "library" });
+    const form = makeForm([setting.row]);
+    api.SettingsEditor.initializeStandardRow(setting.row, form);
+    setting.revert.click(); api.document.revert.affirm.click();
+    assert.equal(setting.operation.value, "RemoveOverride");
+    assert.equal(setting.row.dataset.dirty, "true");
+    setting.change.click(); setting.cancel.click(); api.document.editCancel.discard.click();
+    assert.equal(setting.row.dataset.editing, "false");
+    assert.equal(setting.operation.value, "RemoveOverride");
+    assert.equal(setting.row.dataset.dirty, "true");
+});
+
+test("Revert then unchanged Apply becomes an explicit Upsert", () => {
+    const api = loadSettings();
+    const setting = makeRow({ key: "revert-apply", baselineValue: "local", value: "local", inherited: true, inheritedValue: "library" });
+    const form = makeForm([setting.row]);
+    api.SettingsEditor.initializeStandardRow(setting.row, form);
+    setting.revert.click(); api.document.revert.affirm.click();
+    setting.change.click(); setting.apply.click();
+    assert.equal(setting.row.dataset.editing, "false");
+    assert.equal(setting.operation.value, "Upsert");
+    assert.equal(setting.binding.value, "library");
+    assert.equal(setting.row.dataset.dirty, "true");
+});
+
+test("inherited unchanged Apply creates explicit Upsert intent while Revert stays display-only", () => {
     const api = loadSettings();
     const setting = makeRow({ key: "inherited", baselineMode: "inherit", baselineValue: "", value: "library value", inherited: true });
     const form = makeForm([setting.row]);
     api.SettingsEditor.initializeStandardRow(setting.row, form);
     setting.change.click();
+    assert.equal(setting.row.dataset.dirty, "false");
+    assert.equal(setting.operation.value, "RemoveOverride");
+    assert.equal(setting.binding.value, "");
+    setting.apply.click();
     assert.equal(setting.row.dataset.dirty, "true");
     assert.equal(setting.operation.value, "Upsert");
     assert.equal(setting.binding.value, "Inherited value");
     setting.revert.click();
     assert.equal(api.document.revert.dialog.open, true);
     assert.equal(setting.row.dataset.dirty, "true");
-    assert.equal(setting.row.dataset.editing, "true");
+    assert.equal(setting.row.dataset.editing, "false");
     api.document.revert.keep.click();
     assert.equal(setting.row.dataset.dirty, "true");
-    assert.equal(setting.row.dataset.editing, "true");
+    assert.equal(setting.row.dataset.editing, "false");
     assert.equal(focused, setting.revert);
     setting.revert.click();
     api.document.revert.affirm.click();
@@ -344,6 +450,17 @@ test("inherited Change creates Upsert intent and Revert first opens a non-mutati
     assert.equal(setting.operation.value, "RemoveOverride");
     assert.equal(setting.idleSurface.hidden, false);
     assert.equal(setting.editorSurface.hidden, true);
+});
+
+test("inherited explicit blank Apply is an Upsert and displays Blank", () => {
+    const api = loadSettings();
+    const setting = makeRow({ key: "blank", baselineMode: "inherit", baselineValue: "", value: "Inherited", inherited: true, inheritedValue: "Inherited" });
+    const form = makeForm([setting.row]); api.SettingsEditor.initializeStandardRow(setting.row, form);
+    setting.change.click(); setting.visible.value = ""; setting.visible.emit("input");
+    assert.equal(setting.row.dataset.dirty, "false");
+    setting.apply.click();
+    assert.equal(setting.row.dataset.dirty, "true"); assert.equal(setting.operation.value, "Upsert"); assert.equal(setting.binding.value, "");
+    assert.equal(setting.idleText.textContent, "Blank");
 });
 
 test("customized Revert does not mutate until affirmed and then creates RemoveOverride", () => {
@@ -365,17 +482,18 @@ test("customized Revert does not mutate until affirmed and then creates RemoveOv
     assert.equal(body.children[0].children[2].textContent, "Use Inherited value from Main Library");
 });
 
-test("Escape and Keep current value leave the proposed state untouched", () => {
+test("Cancel confirmation keeps the temporary buffer on Escape", () => {
     const api = loadSettings();
     const setting = makeRow({ baselineValue: "local", value: "local", inherited: true });
     const form = makeForm([setting.row]);
     api.SettingsEditor.initializeStandardRow(setting.row, form);
     setting.change.click(); setting.visible.value = "browser value"; setting.visible.emit("input");
-    setting.revert.click();
-    api.document.revert.dialog.emit("cancel");
-    assert.equal(setting.row.dataset.dirty, "true");
+    setting.cancel.click();
+    assert.equal(api.document.editCancel.dialog.open, true);
+    api.document.editCancel.dialog.emit("cancel");
+    assert.equal(setting.row.dataset.dirty, "false");
     assert.equal(setting.visible.value, "browser value");
-    assert.equal(focused, setting.revert);
+    assert.equal(focused, setting.visible);
 });
 
 test("no inherited value uses Remove customization and becomes Not configured", () => {
@@ -428,7 +546,7 @@ test("discard closes active editors and returns every value surface to idle", ()
     assert.equal(changed.idleSurface.hidden, false);
 });
 
-test("shared-draft baselines stay clean while draft RemoveOverride Change creates Upsert", () => {
+test("shared-draft baselines stay clean until Apply, including inherited draft rows", () => {
     const api = loadSettings();
     const upsert = makeRow({ key: "draft-upsert", baselineMode: "customize", baselineValue: "draft value", value: "draft value", inherited: true, draftChange: true });
     const remove = makeRow({ key: "draft-remove", baselineMode: "inherit", baselineValue: "", value: "Draft inherited value", inherited: true, inheritedValue: "Draft inherited value", draftChange: true });
@@ -437,6 +555,9 @@ test("shared-draft baselines stay clean while draft RemoveOverride Change create
     assert.equal(upsert.row.dataset.dirty, "false");
     upsert.change.click(); assert.equal(upsert.row.dataset.dirty, "false");
     remove.change.click();
+    assert.equal(remove.row.dataset.dirty, "false");
+    assert.equal(remove.operation.value, "RemoveOverride");
+    remove.apply.click();
     assert.equal(remove.row.dataset.dirty, "true");
     assert.equal(remove.operation.value, "Upsert");
     api.SettingsWorkflow.discardPendingChanges(form);
@@ -446,7 +567,7 @@ test("shared-draft baselines stay clean while draft RemoveOverride Change create
     assert.equal(remove.visible.value, "Draft inherited value");
 });
 
-test("Boolean and batch required controls are value radios only while editing", () => {
+test("Boolean and batch required controls only become semantic on Apply", () => {
     const api = loadSettings();
     const boolean = makeRow({ key: "enabled", valueType: "boolean", baselineMode: "customize", baselineValue: "false", value: "false", inherited: true });
     const required = makeRow({ key: "require.EmailAddress", valueType: "boolean", baselineMode: "inherit", baselineValue: "", value: "false", inherited: true, inheritedValue: "false", batch: true });
@@ -455,11 +576,47 @@ test("Boolean and batch required controls are value radios only while editing", 
     assert.equal(boolean.booleanNo.checked, true); assert.equal(boolean.booleanNo.disabled, true);
     boolean.change.click(); assert.equal(boolean.booleanYes.disabled, false); assert.equal(boolean.booleanNo.disabled, false);
     boolean.booleanYes.checked = true; boolean.booleanNo.checked = false; boolean.booleanYes.emit("change");
+    assert.equal(boolean.row.dataset.dirty, "false"); assert.equal(boolean.binding.value, "false");
+    boolean.apply.click();
     assert.equal(boolean.row.dataset.dirty, "true"); assert.equal(boolean.binding.value, "true");
-    required.change.click(); assert.equal(required.booleanYes.disabled, false); assert.equal(required.row.dataset.dirty, "true"); assert.equal(required.operation.value, "Upsert");
+    required.change.click(); assert.equal(required.booleanYes.disabled, false); assert.equal(required.row.dataset.dirty, "false"); assert.equal(required.operation.value, "RemoveOverride");
+    required.apply.click();
+    assert.equal(required.row.dataset.dirty, "true"); assert.equal(required.operation.value, "Upsert");
 });
 
-test("IP prefixes remain editable only after Change and discard restores the list", () => {
+test("invalid native Apply keeps the editor open and applied state unchanged", () => {
+    const api = loadSettings();
+    const setting = makeRow({ key: "invalid-apply", baselineValue: "original", value: "original", inherited: true });
+    const form = makeForm([setting.row]); api.SettingsEditor.initializeStandardRow(setting.row, form);
+    let reportCount = 0;
+    setting.visible.checkValidity = () => false;
+    setting.visible.reportValidity = () => { reportCount++; };
+    setting.change.click(); setting.visible.value = "invalid"; setting.apply.click();
+    assert.equal(reportCount, 1);
+    assert.equal(setting.row.dataset.editing, "true");
+    assert.equal(setting.editorSurface.hidden, false);
+    assert.equal(setting.binding.value, "original");
+    assert.equal(setting.row.dataset.dirty, "false");
+});
+
+test("navigation guard allows an untouched editor and blocks a modified buffer", () => {
+    const setting = makeRow({ key: "navigation-guard", baselineValue: "original", value: "original", inherited: true });
+    const form = makeForm([setting.row]);
+    form.addEventListener = () => {};
+    const navigation = makeNavigationDocument(form);
+    const api = loadSettings(navigation.document);
+    api.SettingsEditor.initializeStandardRow(setting.row, form);
+    setting.change.click();
+    navigation.organizationScope.emit("change");
+    assert.equal(navigation.submitCount, 1);
+    assert.equal(navigation.unsavedDialog.open, false);
+    setting.visible.value = "modified"; setting.visible.emit("input");
+    navigation.organizationScope.emit("change");
+    assert.equal(navigation.submitCount, 1);
+    assert.equal(navigation.unsavedDialog.open, true);
+});
+
+test("IP prefixes remain temporary until Apply and discard restores the list", () => {
     const api = loadSettings();
     const setting = makeRow({ key: "show_dl_ips", valueType: "ip-prefixes", baselineMode: "customize", baselineValue: "10.;192.168.", value: "10.;192.168.", inherited: true });
     const form = makeForm([setting.row]); api.SettingsEditor.initializeStandardRow(setting.row, form);
@@ -467,19 +624,60 @@ test("IP prefixes remain editable only after Change and discard restores the lis
     assert.equal(setting.prefixes.every((input) => input.readOnly), true);
     setting.change.click(); assert.equal(setting.prefixes.every((input) => input.readOnly), false); setting.addPrefix.click();
     const added = setting.prefixes.at(-1); added.value = "172.16."; added.emit("input");
+    assert.equal(setting.binding.value, "10.;192.168."); assert.equal(setting.row.dataset.dirty, "false");
+    setting.apply.click();
     assert.equal(setting.binding.value, "10.;192.168.;172.16."); assert.equal(setting.row.dataset.dirty, "true");
     api.SettingsWorkflow.discardPendingChanges(form);
     assert.deepEqual(setting.prefixes.map((input) => input.value), ["10.", "192.168."]); assert.equal(setting.row.dataset.dirty, "false");
+});
+
+test("IP prefix add and remove then local Cancel restores the applied list", () => {
+    const api = loadSettings();
+    const setting = makeRow({ key: "show_dl_ips-local-cancel", valueType: "ip-prefixes", baselineMode: "customize", baselineValue: "10.;192.168.", value: "10.;192.168.", inherited: true });
+    const form = makeForm([setting.row]); api.SettingsEditor.initializeStandardRow(setting.row, form);
+    setting.change.click(); setting.removeButtons[0].click(); setting.addPrefix.click();
+    const added = setting.prefixes.at(-1); added.value = "172.16."; added.emit("input");
+    assert.deepEqual(setting.prefixes.map((input) => input.value), ["192.168.", "172.16."]);
+    setting.cancel.click(); api.document.editCancel.discard.click();
+    assert.deepEqual(setting.prefixes.map((input) => input.value), ["10.", "192.168."]);
+    assert.equal(setting.binding.value, "10.;192.168.");
+    assert.equal(setting.row.dataset.dirty, "false");
 });
 
 test("HTML idle output is rendered and has no permanent editor preview", () => {
     const api = loadSettings();
     const html = makeRow({ key: "html", valueType: "html", baselineValue: "<p>Loaded HTML</p>", value: "<p>Loaded HTML</p>", inherited: true });
     const form = makeForm([html.row]); api.SettingsEditor.initializeStandardRow(html.row, form);
-    assert.equal(html.idleHtml.srcdoc, "<p>Loaded HTML</p>");
+    assert.equal(html.idleHtml.srcdoc, api.SettingsEditor.sanitizeHtmlPreview("<p>Loaded HTML</p>"));
     html.change.click();
     assert.equal(html.idleSurface.hidden, true); assert.equal(html.editorSurface.hidden, false); assert.equal(html.visible.value, "<p>Loaded HTML</p>");
+    html.visible.value = "<p>Applied HTML</p>"; html.visible.emit("input");
+    assert.equal(html.idleHtml.srcdoc, api.SettingsEditor.sanitizeHtmlPreview("<p>Loaded HTML</p>"));
+    assert.equal(html.row.dataset.dirty, "false");
+    html.apply.click();
+    assert.equal(html.idleHtml.srcdoc, api.SettingsEditor.sanitizeHtmlPreview("<p>Applied HTML</p>"));
+    assert.equal(html.editorSurface.hidden, true); assert.equal(html.row.dataset.dirty, "true");
     assert.equal(html.row.querySelector(".html-preview"), null); assert.equal(html.row.querySelector(".plain-text-preview"), null);
+});
+
+test("applied HTML preview sanitizes active content and unsafe URLs", () => {
+    const api = loadSettings();
+    const html = makeRow({ key: "hostile-html", valueType: "html", baselineValue: "<p>Loaded HTML</p>", value: "<p>Loaded HTML</p>", inherited: true });
+    const form = makeForm([html.row]); api.SettingsEditor.initializeStandardRow(html.row, form);
+    html.change.click();
+    html.visible.value = '<p>Keep this</p><script>alert(1)</script><img src="javascript:alert(2)" onerror="alert(3)"><a href="data:text/html,bad">Link</a><iframe src="https://bad.example/frame">Frame</iframe><custom-tag data-test="bad">Custom text</custom-tag>';
+    html.visible.emit("input");
+    html.apply.click();
+
+    const preview = html.idleHtml.srcdoc.toLowerCase();
+    assert.match(preview, /custom text/);
+    assert.doesNotMatch(preview, /<\s*(?:script|img|a|iframe|custom-tag)\b/);
+    if (preview.includes("&lt;")) {
+        assert.match(preview, /&lt;script&gt;/);
+    } else {
+        assert.match(preview, /<p>keep this<\/p>/);
+        assert.doesNotMatch(preview, /onerror|javascript:|data:text|data-test=/);
+    }
 });
 
 test("compact source previews normalize whitespace and cap literal markup", () => {
@@ -507,6 +705,8 @@ test("sensitive shared-draft RemoveOverride uses inherited existence for idle pr
     assert.equal(noInherited.visible.value, "");
     noInherited.visible.value = "temporary-secret";
     noInherited.visible.emit("input");
+    assert.equal(noInherited.row.dataset.dirty, "false");
+    noInherited.apply.click();
     assert.equal(noInherited.row.dataset.dirty, "true");
     api.SettingsWorkflow.discardPendingChanges(form);
     assert.equal(noInherited.row.dataset.dirty, "false");
@@ -516,6 +716,11 @@ test("sensitive shared-draft RemoveOverride uses inherited existence for idle pr
     assert.equal(inherited.visible.value, "");
     assert.equal(inherited.row.dataset.dirty, "false");
     assert.equal(inherited.idleText.textContent, "Configured");
+    inherited.visible.value = "another-temporary-secret";
+    inherited.visible.emit("input");
+    assert.equal(inherited.row.dataset.dirty, "false");
+    inherited.apply.click();
+    assert.equal(inherited.row.dataset.dirty, "true");
 });
 
 test("image Revert previews the inherited image before applying it", () => {
@@ -545,8 +750,57 @@ test("image upload keeps the existing async and review behavior", async () => {
     const image = makeImageRow(); const form = makeForm([image.row]); api.SettingsEditor.initializeImageRow(image.row, form);
     image.change.click(); image.imageFile.files = [{ name: "replacement.png" }]; image.imageFile.emit("change"); await flush(); await flush();
     const body = new NodeStub(); api.SettingsEditor.populateReviewTable(form, body);
-    assert.equal(body.children[0].children[2].textContent, "replacement.png");
+    assert.equal(body.children.length, 0);
+    assert.equal(image.binding.value, ""); assert.equal(image.row.dataset.dirty, "false");
+    image.apply.click();
+    const appliedBody = new NodeStub(); api.SettingsEditor.populateReviewTable(form, appliedBody);
+    assert.equal(appliedBody.children[0].children[2].textContent, "replacement.png");
     assert.equal(image.binding.value, "77"); assert.equal(image.row.dataset.dirty, "true");
+});
+
+test("image upload without a response preview URL keeps its object URL through Apply", async () => {
+    const revoked = [];
+    const api = loadSettings(createDocument(), {
+        URL: {
+            createObjectURL: (file) => `blob:${file.name}`,
+            revokeObjectURL: (url) => revoked.push(url)
+        },
+        fetch: async () => ({ ok: true, async json() { return { assetId: 77, fileName: "replacement.png" }; } })
+    });
+    const image = makeImageRow(); const form = makeForm([image.row]); api.SettingsEditor.initializeImageRow(image.row, form);
+    image.change.click(); image.imageFile.files = [{ name: "replacement.png" }]; image.imageFile.emit("change"); await flush(); await flush();
+    image.apply.click();
+    assert.equal(image.idlePreview.src, "blob:replacement.png");
+    assert.deepEqual(revoked, []);
+    api.SettingsWorkflow.discardPendingChanges(form);
+    assert.deepEqual(revoked, ["blob:replacement.png"]);
+});
+
+test("image page discard restores the loaded applied asset after Apply", async () => {
+    const api = loadSettings(createDocument(), { fetch: async () => ({ ok: true, async json() { return { assetId: 77, fileName: "replacement.png", previewUrl: "/settings/assets/77" }; } }) });
+    const image = makeImageRow({ baselineMode: "customize", baselineValue: "12", inherited: true });
+    const form = makeForm([image.row]); api.SettingsEditor.initializeImageRow(image.row, form);
+    image.change.click(); image.imageFile.files = [{ name: "replacement.png" }]; image.imageFile.emit("change"); await flush(); await flush(); image.apply.click();
+    assert.equal(image.row.dataset.dirty, "true"); assert.equal(image.idleFileName.textContent, "replacement.png");
+    api.SettingsWorkflow.discardPendingChanges(form);
+    assert.equal(image.row.dataset.dirty, "false"); assert.equal(image.idleFileName.textContent, "local-header.png"); assert.equal(image.binding.value, "12");
+});
+
+test("a failed replacement upload keeps the previously staged image available", async () => {
+    let uploadCount = 0;
+    const api = loadSettings(createDocument(), { fetch: async () => {
+        uploadCount++;
+        if (uploadCount === 1) return { ok: true, async json() { return { assetId: 77, fileName: "first.png", previewUrl: "/settings/assets/77" }; } };
+        return { ok: false, async json() { return { error: "replacement failed" }; } };
+    } });
+    const image = makeImageRow(); const form = makeForm([image.row]); api.SettingsEditor.initializeImageRow(image.row, form);
+    image.change.click(); image.imageFile.files = [{ name: "first.png" }]; image.imageFile.emit("change"); await flush(); await flush();
+    image.chooseAnother.click(); image.imageFile.files = [{ name: "second.png" }]; image.imageFile.emit("change"); await flush(); await flush();
+    assert.equal(image.pendingFileName.textContent, "first.png");
+    assert.match(image.uploadStatus.textContent, /first\.png remains selected/);
+    assert.equal(image.row.dataset.dirty, "false");
+    image.apply.click();
+    assert.equal(image.row.dataset.dirty, "true"); assert.equal(image.binding.value, "77");
 });
 
 test("late image responses cannot resurrect a discarded change", async () => {
@@ -563,13 +817,14 @@ test("discard attempts every dirty row and leaves unresolved work visible", () =
     const api = loadSettings(); const first = makeRow({ key: "failed-setting", baselineValue: "first", value: "first", inherited: true }); const second = makeRow({ key: "later-setting", baselineValue: "second", value: "second", inherited: true }); const form = makeForm([first.row, second.row]);
     api.SettingsEditor.initializeStandardRow(first.row, form); api.SettingsEditor.initializeStandardRow(second.row, form); first.change.click(); first.visible.value = "changed"; first.visible.emit("input"); second.change.click(); second.visible.value = "changed"; second.visible.emit("input");
     first.row._discardPendingChange = () => { throw new Error("restoration failed"); }; let laterAttempted = false; const secondOriginal = second.row._discardPendingChange; second.row._discardPendingChange = (options) => { laterAttempted = true; secondOriginal(options); };
-    const result = api.SettingsWorkflow.discardPendingChanges(form); assert.equal(laterAttempted, true); assert.equal(result.failures.length, 1); assert.equal(result.remainingDirtyRows.length, 1); assert.equal(first.row.dataset.dirty, "true"); assert.equal(second.row.dataset.dirty, "false");
+    const result = api.SettingsWorkflow.discardPendingChanges(form); assert.equal(laterAttempted, true); assert.equal(result.failures.length, 1); assert.equal(result.remainingDirtyRows.length, 1); assert.equal(first.row.dataset.dirty, "false"); assert.equal(first.row.dataset.editModified, "true"); assert.equal(second.row.dataset.dirty, "false");
 });
 
 test("production markup and CSS use one surface and the reusable revert dialog", () => {
+    assert.doesNotMatch(settingsScript, /ensureEditAction/);
     assert.doesNotMatch(settingRowMarkup, /setting-comparison|setting-baseline|setting-effective|setting-scope-panel|setting-draft-value/);
     assert.doesNotMatch(batchRowMarkup, /setting-comparison|setting-baseline|setting-effective|setting-scope-panel|setting-draft-value/);
-    assert.match(settingRowMarkup, /data-idle-surface/); assert.match(settingRowMarkup, /data-editor-surface/); assert.match(settingRowMarkup, /class="setting-revert"/);
+    assert.match(settingRowMarkup, /data-idle-surface/); assert.match(settingRowMarkup, /data-editor-surface/); assert.match(settingRowMarkup, /class="setting-revert"/); assert.match(settingRowMarkup, /class="setting-apply"/); assert.match(settingRowMarkup, /class="setting-cancel"/);
     assert.match(batchRowMarkup, /data-idle-surface/); assert.match(batchRowMarkup, /data-editor-surface/); assert.match(batchRowMarkup, /batch-value-choice/);
     assert.doesNotMatch(settingsCss, /setting-comparison|setting-baseline|setting-effective|setting-scope-panel|setting-draft-value|plain-text-preview|\.html-preview/);
 });

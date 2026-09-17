@@ -207,7 +207,10 @@
     </details>}
 </section>
 }
-<form asp-action="DirectSave" method="post" id="settings-form">
+<form asp-action="DirectSave" method="post" id="settings-form"
+      data-html-preview-tags="@string.Join(",", SafeHtmlPolicy.AllowedTags)"
+      data-html-preview-attributes="@string.Join(",", SafeHtmlPolicy.AllowedAttributes)"
+      data-html-preview-schemes="@string.Join(",", SafeHtmlPolicy.AllowedSchemes)">
     @Html.AntiForgeryToken()
     <input type="hidden" name="OrganizationId" value="@Model.OrganizationId" />
     <input type="hidden" name="FormCode" value="@Model.FormCode" />
@@ -327,6 +330,15 @@
     <div class="button-row">
         <button type="button" data-revert-keep>Keep current value</button>
         <button type="button" data-revert-affirm>Use inherited value</button>
+    </div>
+</dialog>
+
+<dialog id="edit-cancel-dialog" aria-labelledby="edit-cancel-title">
+    <h2 id="edit-cancel-title">Discard edits?</h2>
+    <p>The changes in this editor have not been applied.</p>
+    <div class="button-row">
+        <button type="button" data-edit-cancel-keep>Keep editing</button>
+        <button type="button" class="danger-button" data-edit-cancel-discard>Discard edits</button>
     </div>
 </dialog>
 

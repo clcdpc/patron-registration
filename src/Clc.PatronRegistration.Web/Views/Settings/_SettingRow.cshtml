@@ -137,6 +137,8 @@
             <span class="setting-scope-status">@rowStatus</span>
             <div class="setting-scope-actions">
                 <button type="button" class="setting-change @(isImage ? "image-upload-trigger" : null)" aria-label="@(isImage ? "Change image" : "Change") @definition.DisplayName" aria-describedby="@validationErrorId">@(isImage ? "Change image" : "Change")</button>
+                <button type="button" class="setting-apply" aria-label="Apply changes to @definition.DisplayName" aria-describedby="@validationErrorId" hidden>Apply</button>
+                <button type="button" class="setting-cancel" aria-label="Cancel editing @definition.DisplayName" aria-describedby="@validationErrorId" hidden>Cancel</button>
                 <button type="button" class="setting-revert" aria-label="@revertLabel for @definition.DisplayName" aria-describedby="@validationErrorId" hidden="@(baselineMode == "customize" ? null : "hidden")">@revertLabel</button>
             </div>
         </div>

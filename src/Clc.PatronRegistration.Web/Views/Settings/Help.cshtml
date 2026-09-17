@@ -90,12 +90,12 @@
         <h2>Change a setting</h2>
         <ol>
             <li>Expand the setting.</li>
-            <li>Click <strong>Change</strong> to replace the readable value surface with its editor. Values are read-only until you explicitly choose this action.</li>
-            <li>Enter or select the value. An inherited setting starts with its effective value, and the row is marked <strong>Unsaved in this browser</strong> when its semantic state differs from the loaded state.</li>
-            <li>Review, save immediately, add the change to the shared draft, or discard browser changes.</li>
+            <li>Click <strong>Change</strong> to replace the readable value surface with a temporary editor. Values are read-only until you explicitly choose this action.</li>
+            <li>Enter or select a value. Typing or selecting a value is not a pending browser change; the editor keeps those edits temporary until you choose <strong>Apply</strong> or <strong>Cancel</strong>.</li>
+            <li>Choose <strong>Apply</strong> to accept the editor contents and recompute the row's browser state. Choose <strong>Cancel</strong> to confirm and discard only temporary edits, then review, save immediately, add the change to the shared draft, or discard browser changes.</li>
         </ol>
         <h3>Change</h3>
-        <p>Enables editing and, for an inherited setting, starts a local customization using the currently effective value. Clearing a setting that supports blank values creates an explicitly blank local value.</p>
+        <p><strong>Change</strong> opens a temporary editor. <strong>Apply</strong> accepts its contents and recomputes browser state; applying an inherited value unchanged creates an explicit local customization. <strong>Cancel</strong> confirms and discards only temporary edits. <strong>Revert to inherited value</strong> remains a separate action for previewing and removing a local override.</p>
         <h3>Revert to inherited value</h3>
         <p>Opens a preview of the inherited result. Choose <strong>Keep current value</strong> to leave the browser state unchanged, or choose <strong>Use inherited value</strong> to create a browser-pending <strong>RemoveOverride</strong>. Nothing saves immediately. When no inherited value exists, the action is labeled <strong>Remove customization</strong> and the confirmation explains that the setting will become not configured.</p>
         <p>Depending on the setting, you may use Yes/No selections, numbers, dates, URLs, email addresses, or longer text boxes. The page validates values before saving.</p>

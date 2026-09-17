@@ -852,7 +852,7 @@ public class SettingsAdministrationTests
         StringAssert.Contains(index, "MMM d, yyyy, h:mm tt 'UTC'");
         StringAssert.Contains(row, "data-live-state=\"@(resolution.OwnsOverride ? \"customized\" : resolution.SourceOrganizationId.HasValue ? \"inherited\" : \"notset\")\"");
         StringAssert.Contains(row, "data-live-summary=\"@Clc.PatronRegistration.Web.Models.SettingReviewPresentation.Live(Model)\"");
-        Assert.IsFalse(row.Contains(">Apply</button>", StringComparison.Ordinal));
+        StringAssert.Contains(row, "class=\"setting-apply\"");
         StringAssert.Contains(script, "Unsaved in this browser");
         StringAssert.Contains(script, "case \"customized\":");
         StringAssert.Contains(script, "row.dataset.liveState === \"customized\"");
@@ -893,6 +893,8 @@ public class SettingsAdministrationTests
             Assert.IsFalse(help.Contains(obsolete, StringComparison.Ordinal), obsolete);
         StringAssert.Contains(help, "It is not visible to other staff");
         StringAssert.Contains(help, "Shared draft changes are visible to other authorized staff");
+        StringAssert.Contains(help, "Typing or selecting a value is not a pending browser change");
+        StringAssert.Contains(help, "<strong>Apply</strong> accepts its contents and recomputes browser state; applying an inherited value unchanged creates an explicit local customization. <strong>Cancel</strong> confirms and discards only temporary edits.");
     }
 
     [DataTestMethod]
@@ -1905,6 +1907,10 @@ public class SettingsAdministrationTests
         Assert.IsFalse(batch.Contains("batch-effective", StringComparison.Ordinal));
         Assert.IsFalse(batch.Contains("batch-scope", StringComparison.Ordinal));
         StringAssert.Contains(index, "class=\"pending-changes-status\" role=\"status\" aria-live=\"polite\"");
+        StringAssert.Contains(index, "data-html-preview-tags=");
+        StringAssert.Contains(index, "SafeHtmlPolicy.AllowedTags");
+        StringAssert.Contains(index, "SafeHtmlPolicy.AllowedAttributes");
+        StringAssert.Contains(index, "SafeHtmlPolicy.AllowedSchemes");
         StringAssert.Contains(batch, "headers=\"batch-@((isRequired ? \"required-fields\" : \"field-labels\"))-value\"");
         StringAssert.Contains(index, "settingsErrorKey");
         StringAssert.Contains(index, "row.Definition.Key, settingsErrorKey");
@@ -1926,19 +1932,21 @@ public class SettingsAdministrationTests
 
         Assert.IsFalse(partial.Contains("data-candidate-operation", StringComparison.Ordinal));
         Assert.IsFalse(partial.Contains("Keep change", StringComparison.Ordinal));
-        Assert.IsFalse(partial.Contains("Cancel edit", StringComparison.Ordinal));
+        StringAssert.Contains(partial, "class=\"setting-cancel\"");
         Assert.IsFalse(index.Contains("choose Inherit", StringComparison.OrdinalIgnoreCase));
         Assert.IsFalse(partial.Contains("class=\"edit-setting\"", StringComparison.Ordinal));
         Assert.IsFalse(script.Contains("data-candidate-operation", StringComparison.Ordinal));
-        Assert.IsFalse(script.Contains("function beginEdit", StringComparison.Ordinal));
-        Assert.IsFalse(script.Contains("function applyEdit", StringComparison.Ordinal));
-        Assert.IsFalse(script.Contains("function cancelEdit", StringComparison.Ordinal));
+        StringAssert.Contains(script, "function beginEdit()");
+        StringAssert.Contains(script, "function applyEdit()");
+        StringAssert.Contains(script, "function discardEdit()");
         StringAssert.Contains(script, "function proposedState(row)");
         StringAssert.Contains(script, "function baselineState(row)");
         StringAssert.Contains(script, "const dirty = !sameState(row, state, baseline)");
         StringAssert.Contains(script, "row.dataset.dirty = dirty.toString()");
         StringAssert.Contains(script, "function initializeImageRow(row, settingsForm)");
         StringAssert.Contains(script, "function initializeStandardRow(row, settingsForm)");
+        StringAssert.Contains(script, "data.htmlPreviewTags");
+        Assert.IsFalse(script.Contains("previewHtmlAllowedTags", StringComparison.Ordinal));
         StringAssert.Contains(script, "function disableDirtyMutations()");
         StringAssert.Contains(script, "submitter?.dataset?.submitKind === \"draft\"");
     }
@@ -1956,11 +1964,11 @@ public class SettingsAdministrationTests
         StringAssert.Contains(script, "image-pending-file-name");
         StringAssert.Contains(script, "Use inherited image");
         StringAssert.Contains(partial, "data-image-inherited-missing=");
-        StringAssert.Contains(script, "operationName = mode === \"inherit\" ? \"RemoveOverride\" : \"Upsert\"");
+        StringAssert.Contains(script, "operationName = imageState.mode === \"inherit\" ? \"RemoveOverride\" : \"Upsert\"");
         StringAssert.Contains(script, "Replacement entered");
         StringAssert.Contains(script, "summary.textContent = text");
         StringAssert.Contains(script, "compactSourcePreview");
-        Assert.IsFalse(script.Contains("innerHTML", StringComparison.Ordinal));
+        StringAssert.Contains(script, "body.innerHTML");
         Assert.IsFalse(script.Contains("image-undo-pending", StringComparison.Ordinal));
     }
 

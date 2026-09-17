@@ -69,6 +69,8 @@
             <span class="setting-scope-status">@rowStatus</span>
             <div class="setting-scope-actions">
                 <button type="button" class="setting-change" aria-label="Change @definition.DisplayName">Change</button>
+                <button type="button" class="setting-apply" aria-label="Apply changes to @definition.DisplayName" hidden>Apply</button>
+                <button type="button" class="setting-cancel" aria-label="Cancel editing @definition.DisplayName" hidden>Cancel</button>
                 <button type="button" class="setting-revert" aria-label="@revertLabel for @definition.DisplayName" hidden="@(baselineMode == "customize" ? null : "hidden")">@revertLabel</button>
             </div>
         </div>

@@ -21,6 +21,8 @@ async function loadSettingsFixture(page: Page) {
 const rowFor = (page: Page, key: string) => page.locator(`[data-setting-key="${key}"]`);
 const dirtyRows = (page: Page) => page.locator('.setting-row[data-dirty="true"]');
 const revertButton = (row: ReturnType<typeof rowFor>) => row.locator('.setting-revert');
+const applyButton = (row: ReturnType<typeof rowFor>) => row.getByRole('button', { name: /^Apply(?: changes)?/ });
+const cancelButton = (row: ReturnType<typeof rowFor>) => row.getByRole('button', { name: /^Cancel editing|^Cancel$/ });
 
 async function discardChanges(page: Page, count: number) {
     await page.getByRole('button', { name: 'Discard unsaved changes' }).click();
@@ -102,6 +104,9 @@ test('dirty HTML summaries show proposed raw source and discard restores the loa
     const custom = rowFor(page, 'welcome_email_template_html');
     await custom.getByRole('button', { name: 'Change' }).click();
     await custom.locator('#welcome-html-value').fill('<p>Updated registration message with <strong>new details</strong>.</p>');
+    await expect(custom).toHaveAttribute('data-dirty', 'false');
+    await expect(custom.locator('.summary-value')).toHaveText('<p>Hello, {{NameFirst}}.</p>');
+    await applyButton(custom).click();
     await expect(custom.locator('.summary-value')).toHaveText('Unsaved: <p>Updated registration message with <strong>new details</strong>.</p>');
     await discardChanges(page, 1);
     await expect(custom.locator('.summary-value')).toHaveText('<p>Hello, {{NameFirst}}.</p>');
@@ -109,6 +114,8 @@ test('dirty HTML summaries show proposed raw source and discard restores the loa
     const draft = rowFor(page, 'custom_form_footer_html');
     await draft.getByRole('button', { name: 'Change' }).click();
     await draft.locator('#footer-value').fill('<p>Updated shared-draft footer</p>');
+    await expect(draft).toHaveAttribute('data-dirty', 'false');
+    await applyButton(draft).click();
     await expect(draft.locator('.summary-value')).toHaveText('Unsaved: <p>Updated shared-draft footer</p>');
     await discardChanges(page, 1);
     await expect(draft.locator('.summary-value')).toHaveText('<p>Draft line one</p> <p>Draft line two</p>');
@@ -141,7 +148,7 @@ test('date and reset duration values stay friendly in idle and revert previews',
     await dialog.getByRole('button', { name: 'Keep current value' }).click();
 });
 
-test('inherited Change seeds an Upsert and reveals the source-specific revert action', async ({ page }) => {
+test('inherited Change stays temporary until Apply, then creates an Upsert', async ({ page }) => {
     const row = rowFor(page, 'drivers_license_button_text');
     const value = row.locator('#button-value');
     await expect(row.locator('[data-idle-text]')).toHaveText('Scan ID');
@@ -151,6 +158,10 @@ test('inherited Change seeds an Upsert and reveals the source-specific revert ac
     await row.getByRole('button', { name: 'Change' }).click();
     await expect(value).toBeFocused();
     await expect(value).toHaveValue('Scan ID');
+    await expect(row).toHaveAttribute('data-dirty', 'false');
+    await expect(row.locator('.operation')).toHaveValue('RemoveOverride');
+    await expect(revertButton(row)).toBeHidden();
+    await applyButton(row).click();
     await expect(row).toHaveAttribute('data-dirty', 'true');
     await expect(row.locator('.operation')).toHaveValue('Upsert');
     await expect(revertButton(row)).toBeVisible();
@@ -179,6 +190,28 @@ test('customized Revert previews the inherited value and Keep current value does
     await expect(row.locator('[data-idle-text]')).toHaveText('Welcome');
     await expect(row).toHaveAttribute('data-dirty', 'false');
     await expect(revert).toBeFocused();
+});
+
+test('Revert then Change preserves RemoveOverride on local Cancel and unchanged Apply becomes Upsert', async ({ page }) => {
+    const row = rowFor(page, 'custom_heading');
+    const revertDialog = page.locator('#revert-confirm');
+    await revertButton(row).click();
+    await revertDialog.getByRole('button', { name: 'Use inherited value' }).click();
+    await expect(row.locator('.operation')).toHaveValue('RemoveOverride');
+    await expect(row).toHaveAttribute('data-dirty', 'true');
+
+    await row.getByRole('button', { name: 'Change' }).click();
+    await cancelButton(row).click();
+    const editCancel = page.locator('#edit-cancel-dialog');
+    await editCancel.getByRole('button', { name: 'Discard edits' }).click();
+    await expect(row.locator('.operation')).toHaveValue('RemoveOverride');
+    await expect(row).toHaveAttribute('data-dirty', 'true');
+
+    await row.getByRole('button', { name: 'Change' }).click();
+    await applyButton(row).click();
+    await expect(row.locator('.operation')).toHaveValue('Upsert');
+    await expect(row.locator('.setting-value-binding')).toHaveValue('Inherited heading');
+    await expect(row).toHaveAttribute('data-dirty', 'true');
 });
 
 test('affirming Revert creates only a browser RemoveOverride and review describes it', async ({ page }) => {
@@ -262,11 +295,17 @@ test('shared-draft Upsert and RemoveOverride rows use one surface and preserve d
     await upsert.getByRole('button', { name: 'Change' }).click();
     await expect(upsert).toHaveAttribute('data-dirty', 'false');
     await upsert.locator('#footer-value').fill('<p>Browser draft</p>');
+    await expect(upsert).toHaveAttribute('data-dirty', 'false');
+    await applyButton(upsert).click();
     await expect(upsert).toHaveAttribute('data-dirty', 'true');
 
     await expect(remove.locator('[data-idle-text]')).toHaveText('Inherited heading');
     await expect(remove.locator('.setting-scope-status')).toHaveText('Shared draft — use inherited value');
     await remove.getByRole('button', { name: 'Change' }).click();
+    await expect(remove).toHaveAttribute('data-dirty', 'false');
+    await expect(remove.locator('.operation')).toHaveValue('RemoveOverride');
+    await expect(remove.locator('.setting-value-binding')).toBeDisabled();
+    await applyButton(remove).click();
     await expect(remove).toHaveAttribute('data-dirty', 'true');
     await expect(remove.locator('.operation')).toHaveValue('Upsert');
     await expect(remove.locator('.setting-value-binding')).toHaveValue('Inherited heading');
@@ -289,6 +328,8 @@ test('batch labels and required values swap controls in place', async ({ page })
     await expect(label.locator('[data-idle-surface]')).toBeHidden();
     await expect(label.locator('.batch-label-input input')).toBeFocused();
     await label.locator('.batch-label-input input').fill('Given name');
+    await expect(label).toHaveAttribute('data-dirty', 'false');
+    await applyButton(label).click();
     await expect(label).toHaveAttribute('data-dirty', 'true');
 
     await expect(required.locator('[data-idle-text]')).toHaveText('Optional');
@@ -296,6 +337,8 @@ test('batch labels and required values swap controls in place', async ({ page })
     await expect(required.locator('[data-editor-surface]')).toBeVisible();
     await expect(required.getByRole('radio', { name: 'Required', exact: true })).toBeEnabled();
     await required.getByRole('radio', { name: 'Required', exact: true }).check();
+    await expect(required).toHaveAttribute('data-dirty', 'false');
+    await applyButton(required).click();
     await expect(required).toHaveAttribute('data-dirty', 'true');
     await expect(required.locator('.operation')).toHaveValue('Upsert');
     await discardChanges(page, 2);
@@ -307,9 +350,11 @@ test('image Change and Revert retain upload validation while previewing the inhe
     });
     const row = rowFor(page, 'header_image');
     await row.getByRole('button', { name: 'Change image' }).click();
-    await expect(row).toHaveAttribute('data-image-needs-upload', 'true');
     await row.locator('.image-file').setInputFiles({ name: 'replacement.png', mimeType: 'image/png', buffer: Buffer.from('png') });
     await expect(row.locator('.image-upload-status')).toHaveText('replacement.png is ready to save.');
+    await expect(row).toHaveAttribute('data-dirty', 'false');
+    await expect(revertButton(row)).toBeHidden();
+    await applyButton(row).click();
     await expect(row).toHaveAttribute('data-dirty', 'true');
     await expect(revertButton(row)).toBeVisible();
 
@@ -331,6 +376,7 @@ test('page-level Discard restores idle rendered output after edits and a confirm
     const custom = rowFor(page, 'custom_heading');
     await html.getByRole('button', { name: 'Change' }).click();
     await html.locator('#footer-value').fill('<p>Temporary HTML</p>');
+    await applyButton(html).click();
     await custom.getByRole('button', { name: 'Revert to inherited value…' }).click();
     await page.locator('#revert-confirm').getByRole('button', { name: 'Use inherited value' }).click();
     await expect(dirtyRows(page)).toHaveCount(2);
@@ -350,7 +396,11 @@ test('review keeps semantic pending changes as the before/after comparison surfa
     const inherited = rowFor(page, 'drivers_license_button_text');
     await customized.getByRole('button', { name: 'Change' }).click();
     await customized.locator('#custom-heading-value').fill('Browser heading');
+    await applyButton(customized).click();
     await inherited.getByRole('button', { name: 'Change' }).click();
+    await expect(dirtyRows(page)).toHaveCount(1);
+    await expect(page.getByRole('button', { name: 'Review 1 change' })).toBeVisible();
+    await applyButton(inherited).click();
     await expect(dirtyRows(page)).toHaveCount(2);
     await page.getByRole('button', { name: 'Review 2 changes' }).click();
     const dialog = page.locator('#save-confirm');
@@ -372,6 +422,7 @@ test('HTML review compares compact raw source instead of generic configured labe
     const row = rowFor(page, 'welcome_email_template_html');
     await row.getByRole('button', { name: 'Change' }).click();
     await row.locator('#welcome-html-value').fill('<p>New registration message</p>');
+    await applyButton(row).click();
     await page.getByRole('button', { name: 'Review 1 change' }).click();
 
     const review = page.locator('#save-confirm');
@@ -386,6 +437,7 @@ test('HTML review compares compact raw source instead of generic configured labe
     const hostileSource = '<p>Review literal <img src=x onerror="alert(1)"><strong>markup</strong></p>';
     await hostile.getByRole('button', { name: 'Change' }).click();
     await hostile.locator('#long-hostile-html-value').fill(hostileSource);
+    await applyButton(hostile).click();
     await page.getByRole('button', { name: 'Review 1 change' }).click();
     const hostileReview = page.locator('#save-confirm');
     await expect(hostileReview.locator('tbody .review-pending-column')).toHaveText(hostileSource);
@@ -414,6 +466,8 @@ test('sensitive shared-draft RemoveOverride follows the draft baseline without e
     await expect(noInherited.locator('[data-editor-surface]')).toBeVisible();
     await expect(noInherited.locator('input.setting-value')).toHaveValue('');
     await noInherited.locator('input.setting-value').fill('temporary-secret');
+    await expect(noInherited).toHaveAttribute('data-dirty', 'false');
+    await applyButton(noInherited).click();
     await expect(noInherited).toHaveAttribute('data-dirty', 'true');
     await page.getByRole('button', { name: 'Review 1 change' }).click();
     const review = page.locator('#save-confirm');
@@ -427,7 +481,12 @@ test('sensitive shared-draft RemoveOverride follows the draft baseline without e
     await expect(inherited.locator('[data-editor-surface]')).toBeVisible();
     await expect(inherited.locator('input.setting-value')).toHaveValue('');
     await inherited.locator('input.setting-value').fill('another-temporary-secret');
-    await discardChanges(page, 1);
+    await expect(inherited).toHaveAttribute('data-dirty', 'false');
+    await cancelButton(inherited).click();
+    const editCancel = page.locator('#edit-cancel-dialog');
+    await expect(editCancel).toHaveAccessibleName('Discard edits?');
+    await expect(editCancel).toContainText('The changes in this editor have not been applied.');
+    await editCancel.getByRole('button', { name: 'Discard edits' }).click();
     await expect(inherited.locator('[data-idle-text]')).toHaveText('Configured');
     await expect(page.locator('body')).not.toContainText('another-temporary-secret');
 });
@@ -459,6 +518,59 @@ test('Escape on the revert dialog is the safe Keep current value action', async 
     await expect(page.locator('#revert-confirm')).toBeHidden();
     await expect(row).toHaveAttribute('data-dirty', 'false');
     await expect(revert).toBeFocused();
+});
+
+test('Cancel uses an outcome-labeled confirmation and preserves an active edit on Escape', async ({ page }) => {
+    const row = rowFor(page, 'custom_heading');
+    await row.getByRole('button', { name: 'Change' }).click();
+    await row.locator('#custom-heading-value').fill('Temporary heading');
+    await expect(row).toHaveAttribute('data-dirty', 'false');
+    await cancelButton(row).click();
+    const dialog = page.locator('#edit-cancel-dialog');
+    await expect(dialog).toBeVisible();
+    await expect(dialog).toHaveAccessibleName('Discard edits?');
+    await expect(dialog).toContainText('The changes in this editor have not been applied.');
+    await expect(dialog.getByRole('button', { name: 'Keep editing' })).toBeFocused();
+    await page.keyboard.press('Escape');
+    await expect(dialog).toBeHidden();
+    await expect(row.locator('#custom-heading-value')).toHaveValue('Temporary heading');
+    await expect(row.locator('#custom-heading-value')).toBeFocused();
+    await cancelButton(row).click();
+    await dialog.getByRole('button', { name: 'Discard edits' }).click();
+    await expect(row.locator('[data-idle-text]')).toHaveText('Welcome');
+    await expect(row).toHaveAttribute('data-dirty', 'false');
+});
+
+test('invalid native Apply keeps the editor open and leaves the applied value untouched', async ({ page }) => {
+    const row = rowFor(page, 'custom_heading');
+    const value = row.locator('#custom-heading-value');
+    await value.evaluate((element) => { element.required = true; });
+    await row.getByRole('button', { name: 'Change' }).click();
+    await value.fill('');
+    await applyButton(row).click();
+    await expect(row.locator('[data-editor-surface]')).toBeVisible();
+    await expect(row.locator('.setting-value-binding')).toHaveValue('Welcome');
+    await expect(row).toHaveAttribute('data-dirty', 'false');
+});
+
+test('context guard allows an untouched editor and prompts for a modified buffer', async ({ page }) => {
+    await page.evaluate(() => {
+        const contextForm = document.querySelector('.settings-context') as HTMLFormElement | null;
+        if (contextForm) contextForm.requestSubmit = () => {};
+    });
+    const row = rowFor(page, 'custom_heading');
+    const scope = page.locator('#organization-scope');
+    const dialog = page.locator('#unsaved-changes-dialog');
+    await row.getByRole('button', { name: 'Change' }).click();
+    await scope.selectOption('branch');
+    await expect(dialog).toBeHidden();
+
+    await row.locator('#custom-heading-value').fill('Modified heading');
+    await scope.selectOption('main');
+    await expect(dialog).toBeVisible();
+    await expect(dialog).toContainText('1 change');
+    await dialog.getByRole('button', { name: 'Keep editing' }).click();
+    await expect(row.locator('[data-editor-surface]')).toBeVisible();
 });
 
 test('narrow settings layouts keep the single surface inside the viewport', async ({ page }) => {
